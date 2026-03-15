@@ -179,6 +179,26 @@ function Card:get_collision_rect()
     return r
 end
 
+function Card:draw_boundingrect()
+    if not G or not G.DEBUG then return end
+    local r = self:get_collision_rect()
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    if self.states.collide.is then
+        love.graphics.setColor(1, 0, 0, 1)
+    else
+        love.graphics.setColor(0, 1, 0, 1)
+    end
+    love.graphics.push()
+    local cx = r.x + r.w / 2
+    local cy = r.y + r.h / 2
+    love.graphics.translate(cx, cy)
+    love.graphics.rotate(self.VT.r)
+    love.graphics.translate(-cx, -cy)
+    love.graphics.rectangle("line", r.x, r.y, r.w, r.h)
+    love.graphics.pop()
+    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+end
+
 function Card:draw()
     if not self.states.visible then return end
 

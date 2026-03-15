@@ -1,0 +1,8 @@
+# LovePotion / 3DS build output
+*.3dsx
+
+# Editor
+.vscode/
+
+# Scripts
+*.bat

@@ -1,1 +1,0 @@
-love.filesystem.createDirectory("sdmc")
