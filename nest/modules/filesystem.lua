@@ -1,0 +1,1 @@
+love.filesystem.createDirectory("sdmc")

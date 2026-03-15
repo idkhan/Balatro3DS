@@ -1,0 +1,16 @@
+{
+    "runtime": {
+        "version": "LuaJIT"
+    },
+    "diagnostics": {
+        "globals": ["love"]
+    },
+    "workspace": {
+        "checkThirdParty": false,
+        "ignoreDir": [
+            "nest"
+        ]
+    },
+    "diagnostics.disable": [
+    ]
+}
