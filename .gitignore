@@ -1,8 +1,10 @@
 # LovePotion / 3DS build output
 *.3dsx
+*.zip
 
 # Editor
 .vscode/
 
 # Scripts
 *.bat
+.luarc.json

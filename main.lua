@@ -11,6 +11,7 @@ require "deck"
 require "hand"
 require "game"
 require "globals"
+require "topUI"
 
 function love.load()
     G = Game()
@@ -21,7 +22,7 @@ function love.load()
     G.hand = Hand(G)
     G.hand:fill_from_deck()
 
-    love.audio.newSource("resources/sounds/music1.ogg", "stream"):play()
+    --love.audio.newSource("resources/sounds/music1.ogg", "stream"):play()
 end
 
 function love.update(dt)
@@ -29,20 +30,13 @@ function love.update(dt)
 end
 
 function love.draw(screen)
-    love.graphics.clear(0.2, 0.2, 0.3)
+    love.graphics.clear(unpack(G.C.BLIND.Big))
     
     if screen == "bottom" then
         love.graphics.setColor(1, 1, 1)
         G:draw()
     else
-        love.graphics.setColor(1, 1, 1)
-        love.graphics.print("Balatro3DS", 10, 10)
-        love.graphics.print("Now with Discarding, proper Draw animation, Music", 10, 25)
-        love.graphics.print("and the ability to select cards", 10, 40)
-        love.graphics.setColor(0, 1, 0)
-        love.graphics.print("I'm literally the goat", 10, 55)
-        love.graphics.setColor(1, 1, 0)
-        love.graphics.print("I have an exam on Monday", 10, 70)
+        TopUI.draw()
     end
 end
 

@@ -25,6 +25,7 @@ function Hand:init(game)
     self.selected = {}
     self._draw_queue = {}
     self._draw_timer = 0
+    self.sort_mode = "rank"
 end
 
 function Hand:add_card(card_data)
@@ -41,6 +42,12 @@ function Hand:add_card(card_data)
     new_node.VT.y = OFFSCREEN_START_Y
     new_node.VT.r = 0
     new_node.VT.scale = new_node.T.scale
+
+    if self.sort_mode == "rank" then
+        self:sort_by_rank()
+    elseif self.sort_mode == "suit" then
+        self:sort_by_suit()
+    end
     return node
 end
 
@@ -193,6 +200,7 @@ local function rank_sort_key(rank)
 end
 
 function Hand:sort_by_rank()
+    self.sort_mode = "rank"
     if #self.cards == 0 then return end
     local pairs = {}
     for i = 1, #self.cards do
@@ -216,6 +224,7 @@ function Hand:sort_by_rank()
 end
 
 function Hand:sort_by_suit()
+    self.sort_mode = "suit"
     if #self.cards == 0 then return end
     local pairs = {}
     for i = 1, #self.cards do

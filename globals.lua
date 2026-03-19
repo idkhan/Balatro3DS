@@ -295,7 +295,9 @@ function Game:set_globals()
     --||||||||||||||||||||||||||||||
     self.C = {
         MULT = HEX('FE5F55'),
+        MULT_DARK = HEX('a42615'),
         CHIPS = HEX("009dff"),
+        CHIPS_DARK = HEX("0f53a6"),
         MONEY = HEX('f3b958'),
         XMULT = HEX('FE5F55'),
         FILTER = HEX('ff9a00'),
@@ -322,6 +324,13 @@ function Game:set_globals()
         ETERNAL = HEX('c75985'),
         PERISHABLE = HEX('4f5da1'),
         RENTAL = HEX('b18f43'),
+
+        PANEL = HEX('2e3a3c'),
+        BLOCK = {
+            BACK = HEX('1b2629'),
+            SHADOW = HEX('0b1415')
+        },
+        
         DYN_UI = {
             MAIN = HEX('374244'),
             DARK = HEX('374244'),
@@ -390,7 +399,16 @@ function Game:set_globals()
         },
         BLIND = {
             Small = HEX("50846e"),
-            Big = HEX("50846e"),
+            Big = HEX("225b49"),
+            Boss = HEX("b44430"),
+            won = HEX("4f6367")
+        },
+        BLIND_COLORS = {
+            Small = HEX("50846e"),
+
+            Big = HEX("a56c00"),
+            BigDark = HEX("6a4200"),
+            BigSign = HEX("54451a"),
             Boss = HEX("b44430"),
             won = HEX("4f6367")
         },
@@ -413,6 +431,17 @@ function Game:set_globals()
     G.C.HAND_LEVELS[0] = G.C.RED
     G.C.UI_CHIPS = copy_table(G.C.BLUE)
     G.C.UI_MULT = copy_table(G.C.RED)
+
+    self.FONTS = {
+        PIXEL = {
+            SMALL_HEIGHT = 11,
+            MEDIUM_HEIGHT = 22,
+            LARGE_HEIGHT = 33,
+            SMALL = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 11),
+            MEDIUM = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 22),
+            LARGE = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 33),
+        }
+    }
     --||||||||||||||||||||||||||||||
     --        ENUMS
     --||||||||||||||||||||||||||||||
