@@ -103,14 +103,22 @@ function TopUI.draw()
 
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
-    handSelected = "Pair"
-    posX, posY = TopUI.center_text(handSelected, ix, iy -2, iw, ih/3)
+    handSelected = ""
+    if G.selectedHand and G.selectedHand ~= -1 then
+        handSelected = G.handlist[G.selectedHand]
+    end
+    if(love.graphics.getFont():getWidth(handSelected) > iw) then
+        love.graphics.setFont(G.FONTS.PIXEL.SMALL)
+    end
+    posX, posY = TopUI.center_text(handSelected, ix, iy -2, iw -20, math.floor(ih/3))
 
     posX = posX + love.graphics.getFont():getWidth(handSelected) + 6
     posY = posY + math.floor(G.FONTS.PIXEL.MEDIUM_HEIGHT/6)
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     handLevel = 1
-    love.graphics.print("lvl." .. handLevel, posX, posY + 4)
+    if(handSelected ~= "") then
+        love.graphics.print("lvl." .. handLevel, posX, posY)
+    end
 
     -- X
     love.graphics.setColor(G.C.RED)
@@ -147,14 +155,14 @@ function TopUI.LabeledField(string, value, x, y, iw, ih, fieldColor)
     
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
-    TopUI.center_text(string, ix, iy, iw, ih/4)
+    TopUI.center_text(string, ix, iy, iw, math.floor(ih/4))
 
     love.graphics.setColor(G.C.PANEL)
-    ix, iy, iw, ih = TopUI.draw_rounded_rect(ix, iy + ih/4 + 4, iw, ih/4 * 3 - 4, 4, 4,"fill")
+    ix, iy, iw, ih = TopUI.draw_rounded_rect(ix, iy + ih/4 + 4, iw, math.floor(ih/4 * 3) - 4, 4, 4,"fill")
 
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
     love.graphics.setColor(fieldColor)
-    TopUI.center_text(value, ix, iy - 2, iw, ih)
+    TopUI.center_text(value, ix, iy - 1, iw, ih)
 
 end
 

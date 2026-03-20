@@ -119,6 +119,7 @@ function Hand:toggle_selection(node)
             node.selected = false
             table.remove(self.selected, i)
             if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
+            self:calculate_play()
             return
         end
     end
@@ -126,6 +127,7 @@ function Hand:toggle_selection(node)
     node.selected = true
     table.insert(self.selected, node)
     if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
+    self:calculate_play()
 end
 
 function Hand:has_selection()
@@ -158,6 +160,7 @@ function Hand:discard_selected()
         self.game:restore_hand_draw_order()
     end
     self:fill_from_deck()
+    self:calculate_play()
 end
 
 function Hand:fill_from_deck()
@@ -245,4 +248,175 @@ function Hand:sort_by_suit()
     if self.game and self.game.restore_hand_draw_order then
         self.game:restore_hand_draw_order()
     end
+end
+
+function Hand:calculate_play()
+    local n = #self.selected
+    if n == 0 then
+        print("No cards selected")
+        G.selectedHand = -1
+        return
+    end
+
+    print("Selected cards:")
+
+    -- Collect ranks and suits
+    local ranks = {}
+    local suits = {}
+    local rank_counts = {}
+    local suit_counts = {}
+
+    for i, node in ipairs(self.selected) do
+        local data = node.card_data or {}
+        local rank = data.rank
+        local suit = data.suit
+
+        table.insert(ranks, rank)
+        table.insert(suits, suit)
+
+        rank_counts[rank] = (rank_counts[rank] or 0) + 1
+        suit_counts[suit] = (suit_counts[suit] or 0) + 1
+    end
+
+    -- Helpers
+    local function is_flush()
+        return next(suit_counts) ~= nil and next(suit_counts, next(suit_counts)) == nil
+    end
+
+    local function is_straight()
+        if n < 5 then return false end
+
+        local uniq = {}
+        for _, r in ipairs(ranks) do
+            if r == nil then return false end
+            uniq[r] = true
+        end
+
+        local uniq_ranks = {}
+        for r in pairs(uniq) do
+            table.insert(uniq_ranks, r)
+        end
+        table.sort(uniq_ranks)
+
+        if #uniq_ranks ~= 5 then return false end
+
+        -- Standard straight (e.g. 5,6,7,8,9 or 10,J,Q,K,A)
+        local is_seq = true
+        for i = 2, #uniq_ranks do
+            if uniq_ranks[i] ~= uniq_ranks[i - 1] + 1 then
+                is_seq = false
+                break
+            end
+        end
+
+        -- Wheel straight A-2-3-4-5 (ranks: 14,2,3,4,5)
+        local is_wheel = false
+        if not is_seq then
+            local hasA = uniq[14] or uniq["A"]
+            if hasA and uniq[2] and uniq[3] and uniq[4] and uniq[5] then
+                is_wheel = true
+            end
+        end
+
+        return is_seq or is_wheel
+    end
+
+    -- Rank pattern info
+    local max_of_a_kind = 0
+    local pairs_count = 0
+    for _, c in pairs(rank_counts) do
+        if c > max_of_a_kind then max_of_a_kind = c end
+        if c == 2 then pairs_count = pairs_count + 1 end
+    end
+
+    local flush = is_flush()
+    local straight = is_straight()
+
+    -- Determine hand according to Balatro order in globals.handlist:
+    -- 1  Flush Five      (five of same rank & same suit)
+    -- 2  Flush House     (full house, all same suit)
+    -- 3  Five of a Kind  (five of same rank, not all same suit)
+    -- 4  Straight Flush
+    -- 5  Four of a Kind
+    -- 6  Full House
+    -- 7  Flush
+    -- 8  Straight
+    -- 9  Three of a Kind
+    -- 10 Two Pair
+    -- 11 Pair
+    -- 12 High Card
+
+    local hand_index
+
+    if n == 5 then
+        -- Secret hands first
+        if max_of_a_kind == 5 and flush then
+            hand_index = 1 -- Flush Five
+        elseif flush then
+            -- Check for Flush House: 3-of-a-kind + 2-of-a-kind, all same suit
+            local has_three, has_two = false, false
+            for _, c in pairs(rank_counts) do
+                if c == 3 then has_three = true end
+                if c == 2 then has_two = true end
+            end
+            if has_three and has_two then
+                hand_index = 2 -- Flush House
+            end
+        end
+
+        if not hand_index then
+            if max_of_a_kind == 5 then
+                hand_index = 3 -- Five of a Kind
+            elseif flush and straight then
+                hand_index = 4 -- Straight Flush
+            elseif max_of_a_kind == 4 then
+                hand_index = 5 -- Four of a Kind
+            else
+                local has_three, has_two = false, false
+                for _, c in pairs(rank_counts) do
+                    if c == 3 then has_three = true end
+                    if c == 2 then has_two = true end
+                end
+                if has_three and has_two then
+                    hand_index = 6 -- Full House
+                elseif flush then
+                    hand_index = 7 -- Flush
+                elseif straight then
+                    hand_index = 8 -- Straight
+                elseif max_of_a_kind == 3 then
+                    hand_index = 9 -- Three of a Kind
+                elseif pairs_count == 2 then
+                    hand_index = 10 -- Two Pair
+                elseif pairs_count == 1 then
+                    hand_index = 11 -- Pair
+                else
+                    hand_index = 12 -- High Card
+                end
+            end
+        end
+    else
+        -- Fewer than 5 cards: fall back to best matching category we can infer
+        if max_of_a_kind >= 4 then
+            hand_index = 5 -- Four of a Kind (partial)
+        elseif max_of_a_kind == 3 then
+            hand_index = 9 -- Three of a Kind
+        elseif pairs_count >= 2 then
+            hand_index = 10 -- Two Pair
+        elseif pairs_count == 1 then
+            hand_index = 11 -- Pair
+        else
+            hand_index = 12 -- High Card
+        end
+    end
+
+    G.selectedHand = hand_index or 12
+
+    if G.selectedHand and G.handlist and G.handlist[G.selectedHand] then
+        print("Detected hand: " .. tostring(G.handlist[G.selectedHand]))
+    else
+        print("Detected hand index: " .. tostring(G.selectedHand))
+    end
+
+    print("Straight: " .. tostring(straight))
+    print("Flush: " .. tostring(flush))
 end

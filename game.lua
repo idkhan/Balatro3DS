@@ -11,6 +11,7 @@ function Game:init(seed)
     self.touch_start_y = 0
     self.pending_discard = {}
     self.discard_timer = 0
+    self.selectedHand = -1
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
