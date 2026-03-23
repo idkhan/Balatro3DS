@@ -8,7 +8,7 @@ local CARD_H = 95
 -- Gradual scaling: scale = min(1, CARDS_AT_FULL_SCALE / n), clamped to MIN_HAND_SCALE
 local CARDS_AT_FULL_SCALE = 6
 local MIN_HAND_SCALE = 1
-local FAN_ANGLE = 0.08
+local FAN_ANGLE = 0 --0.08
 local FAN_DROP = 8
 local OFFSCREEN_START_X = SCREEN_W + 0
 local OFFSCREEN_START_Y = -80
@@ -118,6 +118,7 @@ function Hand:toggle_selection(node)
         if n == node then
             node.selected = false
             table.remove(self.selected, i)
+            if self.game then self.game.active_tooltip_card = nil end
             if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
             self:calculate_play()
             return
@@ -126,6 +127,7 @@ function Hand:toggle_selection(node)
     if #self.selected >= MAX_SELECTED then return end
     node.selected = true
     table.insert(self.selected, node)
+    if self.game then self.game.active_tooltip_card = node end
     if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
     self:calculate_play()
 end
@@ -155,6 +157,7 @@ function Hand:discard_selected()
         table.insert(self.game.pending_discard, { node = node, remove_after = t + DISCARD_ANIM_DURATION })
     end
     self.selected = {}
+    if self.game then self.game.active_tooltip_card = nil end
     self:layout(false)
     if self.game.restore_hand_draw_order then
         self.game:restore_hand_draw_order()
@@ -200,6 +203,91 @@ local SUIT_ORDER = { Hearts = 1, Clubs = 2, Diamonds = 3, Spades = 4 }
 -- Order: A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, 2 (Ace first, then descending)
 local function rank_sort_key(rank)
     return 14 - (rank or 2)
+end
+
+local function base_card_chips(rank)
+    if rank == 14 then return 11 end -- Ace
+    if rank == 11 or rank == 12 or rank == 13 then return 10 end -- J/Q/K
+    if type(rank) == "number" then return rank end
+    return 0
+end
+
+function Hand:get_modifier_bonus(card_data)
+    if type(card_data) ~= "table" then return 0, 0 end
+
+    local chip_bonus = 0
+    local mult_bonus = 0
+
+    -- Common direct fields on card data
+    chip_bonus = chip_bonus + (tonumber(card_data.chip_bonus) or 0)
+    chip_bonus = chip_bonus + (tonumber(card_data.chips_bonus) or 0)
+    mult_bonus = mult_bonus + (tonumber(card_data.mult_bonus) or 0)
+    mult_bonus = mult_bonus + (tonumber(card_data.multiplier_bonus) or 0)
+
+    -- Generic single modifier table shape
+    if type(card_data.modifier) == "table" then
+        chip_bonus = chip_bonus + (tonumber(card_data.modifier.chip_bonus) or tonumber(card_data.modifier.chips) or 0)
+        mult_bonus = mult_bonus + (tonumber(card_data.modifier.mult_bonus) or tonumber(card_data.modifier.mult) or 0)
+    end
+
+    -- Generic list of modifier tables
+    if type(card_data.modifiers) == "table" then
+        for _, mod in ipairs(card_data.modifiers) do
+            if type(mod) == "table" then
+                chip_bonus = chip_bonus + (tonumber(mod.chip_bonus) or tonumber(mod.chips) or 0)
+                mult_bonus = mult_bonus + (tonumber(mod.mult_bonus) or tonumber(mod.mult) or 0)
+            end
+        end
+    end
+
+    return chip_bonus, mult_bonus
+end
+
+function Hand:score_selected_hand()
+    if #self.selected == 0 then return nil end
+
+    local chips = tonumber(G.selectedHandChips) or 0
+    local mult = tonumber(G.selectedHandMult) or 1
+
+    print(string.format("Scoring hand start: chips=%d mult=%d", chips, mult))
+
+    for i, node in ipairs(self.selected) do
+        local data = node.card_data or {}
+        local rank = data.rank
+        local suit = data.suit
+
+        local card_chips = base_card_chips(rank)
+        chips = chips + card_chips
+
+        local mod_chip_bonus, mod_mult_bonus = self:get_modifier_bonus(data)
+        chips = chips + mod_chip_bonus
+        mult = mult + mod_mult_bonus
+
+        print(string.format(
+            "Card %d [%s of %s]: +%d chips, modifier +%d chips / +%d mult -> chips=%d mult=%d",
+            i, tostring(rank), tostring(suit), card_chips, mod_chip_bonus, mod_mult_bonus, chips, mult
+        ))
+    end
+
+    local final_score = math.floor(chips * mult)
+    G.selectedHandChips = chips
+    G.selectedHandMult = mult
+    G.last_hand_score = final_score
+    G.round_score = (G.round_score or 0) + final_score
+
+    print(string.format("Hand result: %d x %d = %d", chips, mult, final_score))
+    print(string.format("Round score: %d", G.round_score))
+
+    return { chips = chips, mult = mult, score = final_score }
+end
+
+function Hand:play_selected()
+    if #self.selected == 0 then return end
+
+    -- Ensure current selected hand/base values are up to date before scoring cards.
+    self:calculate_play()
+    self:score_selected_hand()
+    self:discard_selected()
 end
 
 function Hand:sort_by_rank()
@@ -255,6 +343,9 @@ function Hand:calculate_play()
     if n == 0 then
         print("No cards selected")
         G.selectedHand = -1
+        G.selectedHandLevel = 1
+        G.selectedHandChips = 0
+        G.selectedHandMult = 0
         return
     end
 
@@ -411,12 +502,27 @@ function Hand:calculate_play()
 
     G.selectedHand = hand_index or 12
 
+    local hand_stats = G.hand_stats and G.hand_stats[G.selectedHand] or nil
+    if hand_stats then
+        local level = math.max(1, tonumber(hand_stats.level) or 1)
+        local chips = (hand_stats.base_chips or 0) + ((level - 1) * (hand_stats.chips_per_level or 0))
+        local mult = (hand_stats.base_mult or 0) + ((level - 1) * (hand_stats.mult_per_level or 0))
+        G.selectedHandLevel = level
+        G.selectedHandChips = chips
+        G.selectedHandMult = mult
+    else
+        G.selectedHandLevel = 1
+        G.selectedHandChips = 0
+        G.selectedHandMult = 0
+    end
+
     if G.selectedHand and G.handlist and G.handlist[G.selectedHand] then
         print("Detected hand: " .. tostring(G.handlist[G.selectedHand]))
     else
         print("Detected hand index: " .. tostring(G.selectedHand))
     end
 
-    print("Straight: " .. tostring(straight))
-    print("Flush: " .. tostring(flush))
+    print("Hand level: " .. tostring(G.selectedHandLevel))
+    print("Hand chips: " .. tostring(G.selectedHandChips))
+    print("Hand mult: " .. tostring(G.selectedHandMult))
 end

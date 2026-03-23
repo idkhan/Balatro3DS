@@ -12,6 +12,12 @@ function Game:init(seed)
     self.pending_discard = {}
     self.discard_timer = 0
     self.selectedHand = -1
+    self.selectedHandLevel = 1
+    self.selectedHandChips = 0
+    self.selectedHandMult = 0
+    self.active_tooltip_card = nil
+    self.round_score = 0
+    self.last_hand_score = 0
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
@@ -214,6 +220,9 @@ function Game:touchreleased(id, x, y)
                 break
             end
         end
+    end
+    if not released and dist < TAP_THRESHOLD then
+        self.active_tooltip_card = nil
     end
     self.dragging = nil
     if released and self.hand then

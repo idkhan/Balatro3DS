@@ -170,6 +170,45 @@ function Card:draw_layer(atlas, quad, cell_w, cell_h, ox, oy)
 end
 
 local SELECTED_LIFT = 20
+local TOOLTIP_PAD_X = 8
+local TOOLTIP_HEADER_PAD_Y = 3
+local TOOLTIP_BODY_PAD_Y = 10
+local TOOLTIP_SPACING = 1
+local TOOLTIP_SECTION_GAP = 2
+local TOOLTIP_OUTER_PAD_X = 3
+local TOOLTIP_OUTER_PAD_Y = 3
+
+local function rank_to_label(rank)
+    if rank == 14 then return "Ace" end
+    if rank == 13 then return "King" end
+    if rank == 12 then return "Queen" end
+    if rank == 11 then return "Jack" end
+    if type(rank) == "number" then return tostring(rank) end
+    return "?"
+end
+
+local function card_base_score(rank)
+    if rank == 14 then return 11 end
+    if rank == 11 or rank == 12 or rank == 13 then return 10 end
+    if type(rank) == "number" then return rank end
+    return 0
+end
+
+local function get_card_modifier_bonus(card_data)
+    if type(card_data) ~= "table" then return 0, 0 end
+
+    if G and G.hand and G.hand.get_modifier_bonus then
+        return G.hand:get_modifier_bonus(card_data)
+    end
+
+    local chip_bonus = 0
+    local mult_bonus = 0
+    chip_bonus = chip_bonus + (tonumber(card_data.chip_bonus) or 0)
+    chip_bonus = chip_bonus + (tonumber(card_data.chips_bonus) or 0)
+    mult_bonus = mult_bonus + (tonumber(card_data.mult_bonus) or 0)
+    mult_bonus = mult_bonus + (tonumber(card_data.multiplier_bonus) or 0)
+    return chip_bonus, mult_bonus
+end
 
 function Card:get_collision_rect()
     local r = Node.get_collision_rect(self)
@@ -196,6 +235,122 @@ function Card:draw_boundingrect()
     love.graphics.translate(-cx, -cy)
     love.graphics.rectangle("line", r.x, r.y, r.w, r.h)
     love.graphics.pop()
+    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+end
+
+function Card:draw_tooltip(draw_x, draw_y)
+    local data = self.card_data or {}
+    local rank = data.rank
+    local suit = data.suit
+    local base_score = card_base_score(rank)
+    local chip_bonus, mult_bonus = get_card_modifier_bonus(data)
+
+    local rank_name = rank_to_label(rank)
+    local suit_name = tostring(suit or "?")
+    local header_prefix = string.format("%s of ", rank_name)
+    local lines = {}
+    table.insert(lines, string.format("+%d chips", base_score + chip_bonus))
+    if mult_bonus ~= 0 then
+        table.insert(lines, string.format("+%d mult", mult_bonus))
+    end
+
+    local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local prev_font = love.graphics.getFont()
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setFont(font)
+
+    local header_w = font:getWidth(header_prefix) + font:getWidth(suit_name)
+    local body_max_w = 0
+    for _, line in ipairs(lines) do
+        local w = font:getWidth(line)
+        if w > body_max_w then body_max_w = w end
+    end
+    local line_h = font:getHeight()
+    local header_w_total = header_w + (TOOLTIP_PAD_X * 2)
+    local header_h_total = line_h + (TOOLTIP_HEADER_PAD_Y * 2)
+    local body_w_total = body_max_w + (TOOLTIP_PAD_X * 2)
+    local body_h_total = (#lines * line_h) + ((#lines - 1) * TOOLTIP_SPACING) + (TOOLTIP_BODY_PAD_Y * 2)
+    local inner_w = math.max(header_w_total, body_w_total)
+    local inner_h = header_h_total + TOOLTIP_SECTION_GAP + body_h_total
+    local box_w = inner_w + (TOOLTIP_OUTER_PAD_X * 2)
+    local box_h = inner_h + (TOOLTIP_OUTER_PAD_Y * 2)
+
+    local card_w = self.VT.w * self.VT.scale
+    local tx = draw_x + (card_w - box_w) * 0.5
+    local ty = draw_y - box_h - 3
+    if tx < 2 then tx = 2 end
+    if ty < 2 then ty = draw_y + 2 end
+    tx = math.floor(tx + 0.5)
+    ty = math.floor(ty + 0.5)
+
+    -- Outer container (single rounded rectangle around both sections)
+    draw_rect_with_shadow(tx, ty, box_w, box_h, 4, 0, G.C.TOOLTIP, G.C.BLOCK.SHADOW, 1)
+        
+    love.graphics.setColor(1, 1, 1, 1)
+    draw_rounded_rect(tx, ty, box_w, box_h, 4, 2, "line")
+    
+    local header_x = tx + TOOLTIP_OUTER_PAD_X
+    local header_y = ty + TOOLTIP_OUTER_PAD_Y
+    local body_x = header_x
+    local body_y = header_y + header_h_total + TOOLTIP_SECTION_GAP
+
+    -- Outer rounded panels
+    love.graphics.setColor(G.C.TOOLTIP)
+    draw_rounded_rect(header_x, header_y, inner_w, header_h_total, 4, 0, "fill")
+    draw_rounded_rect(body_x, body_y, inner_w, body_h_total, 4, 0, "fill")    
+
+    -- Inner light fill
+    local inner_pad = 2
+    local inner_header_h = math.max(1, header_h_total - (inner_pad * 2))
+    local inner_body_h = math.max(1, body_h_total - (inner_pad * 2))
+    love.graphics.setColor(G.C.WHITE)
+    draw_rect_with_shadow(header_x + inner_pad, header_y + inner_pad, inner_w - (inner_pad * 2), inner_header_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
+    draw_rect_with_shadow(body_x + inner_pad, body_y + inner_pad -1, inner_w - (inner_pad * 2), inner_body_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
+ 
+    -- Header text with colored suit
+    local header_total_w = font:getWidth(header_prefix) + font:getWidth(suit_name)
+    local header_text_x = header_x + math.floor((inner_w - header_total_w) * 0.5 + 0.5)
+    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5)
+    love.graphics.setColor(G.C.PANEL)
+    love.graphics.print(header_prefix, header_text_x, header_text_y)
+    local suit_col = (G and G.C and G.C.SUITS and G.C.SUITS[suit_name]) or (G and G.C and G.C.PANEL) or {1, 1, 1, 1}
+    love.graphics.setColor(suit_col)
+    love.graphics.print(suit_name, header_text_x + font:getWidth(header_prefix), header_text_y)
+
+    local text_y = body_y + TOOLTIP_BODY_PAD_Y
+    for _, line in ipairs(lines) do
+        local line_w = font:getWidth(line)
+        local line_x = body_x + math.floor((inner_w - line_w) * 0.5 + 0.5)
+        local line_y = math.floor(text_y + 0.5)
+
+        if string.match(line, " chips$") then
+            local prefix = string.gsub(line, " chips$", " ")
+            local prefix_w = font:getWidth(prefix)
+            local chips_w = font:getWidth("chips")
+            local total_w = prefix_w + chips_w
+            local prefix_x = body_x + math.floor((inner_w - total_w) * 0.5 + 0.5)
+            love.graphics.setColor(0.22, 0.24, 0.26, 1)
+            love.graphics.print(prefix, prefix_x, line_y)
+            love.graphics.setColor(G.C.CHIPS)
+            love.graphics.print("chips", prefix_x + prefix_w, line_y)
+        elseif string.match(line, " mult$") then
+            local prefix = string.gsub(line, " mult$", " ")
+            local prefix_w = font:getWidth(prefix)
+            local mult_w = font:getWidth("mult")
+            local total_w = prefix_w + mult_w
+            local prefix_x = body_x + math.floor((inner_w - total_w) * 0.5 + 0.5)
+            love.graphics.setColor(0.22, 0.24, 0.26, 1)
+            love.graphics.print(prefix, prefix_x, line_y)
+            love.graphics.setColor(G.C.MULT)
+            love.graphics.print("mult", prefix_x + prefix_w, line_y)
+        else
+            love.graphics.setColor(0.22, 0.24, 0.26, 1)
+            love.graphics.print(line, line_x, line_y)
+        end
+        text_y = text_y + line_h + TOOLTIP_SPACING
+    end
+
+    love.graphics.setFont(prev_font)
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 end
 
@@ -243,6 +398,14 @@ function Card:draw()
     end
 
     love.graphics.pop()
+
+    local show_tooltip = false
+    if self.face_up then
+        show_tooltip = self.states.drag.is or (G and G.active_tooltip_card == self)
+    end
+    if show_tooltip then
+        self:draw_tooltip(draw_x, draw_y)
+    end
 
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 

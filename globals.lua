@@ -311,6 +311,7 @@ function Game:set_globals()
         YELLOW = {1,1,0,1},
         CLEAR = {0, 0, 0, 0}, 
         WHITE = {1,1,1,1},
+        DARK_WHITE = HEX('ababab'),
         PURPLE = HEX('8867a5'),
         BLACK = HEX("374244"),--4f6367"),
         L_BLACK = HEX("4f6367"),
@@ -324,7 +325,7 @@ function Game:set_globals()
         ETERNAL = HEX('c75985'),
         PERISHABLE = HEX('4f5da1'),
         RENTAL = HEX('b18f43'),
-
+        TOOLTIP = HEX('3f4a4d'),
         PANEL = HEX('2e3a3c'),
         BLOCK = {
             BACK = HEX('1b2629'),
@@ -469,6 +470,24 @@ function Game:set_globals()
         "Two Pair",
         "Pair",
         "High Card",
+    }
+    -- Hand scoring data aligned to self.handlist indices.
+    -- chips/mult at a given level:
+    -- chips = base_chips + (level - 1) * chips_per_level
+    -- mult  = base_mult  + (level - 1) * mult_per_level
+    self.hand_stats = {
+        [1]  = { level = 1, base_chips = 160, base_mult = 16, chips_per_level = 40, mult_per_level = 3 }, -- Flush Five
+        [2]  = { level = 1, base_chips = 140, base_mult = 14, chips_per_level = 40, mult_per_level = 3 }, -- Flush House
+        [3]  = { level = 1, base_chips = 120, base_mult = 12, chips_per_level = 35, mult_per_level = 3 }, -- Five of a Kind
+        [4]  = { level = 1, base_chips = 100, base_mult = 8,  chips_per_level = 40, mult_per_level = 3 }, -- Straight Flush
+        [5]  = { level = 1, base_chips = 60,  base_mult = 7,  chips_per_level = 30, mult_per_level = 3 }, -- Four of a Kind
+        [6]  = { level = 1, base_chips = 40,  base_mult = 4,  chips_per_level = 25, mult_per_level = 2 }, -- Full House
+        [7]  = { level = 1, base_chips = 35,  base_mult = 4,  chips_per_level = 15, mult_per_level = 2 }, -- Flush
+        [8]  = { level = 1, base_chips = 30,  base_mult = 4,  chips_per_level = 30, mult_per_level = 2 }, -- Straight
+        [9]  = { level = 1, base_chips = 30,  base_mult = 3,  chips_per_level = 20, mult_per_level = 2 }, -- Three of a Kind
+        [10] = { level = 1, base_chips = 20,  base_mult = 2,  chips_per_level = 20, mult_per_level = 1 }, -- Two Pair
+        [11] = { level = 1, base_chips = 10,  base_mult = 2,  chips_per_level = 15, mult_per_level = 1 }, -- Pair
+        [12] = { level = 1, base_chips = 5,   base_mult = 1,  chips_per_level = 10, mult_per_level = 1 }, -- High Card
     }
     self.button_mapping = {
         a = G.F_SWAP_AB_BUTTONS and 'b' or nil,

@@ -53,6 +53,9 @@ function love.keypressed(key)
     if (key == "l") and G and G.hand then
         if G.hand:has_selection() then G.hand:discard_selected() end
     end
+    if (key == ";") and G and G.hand then
+        if G.hand:has_selection() then G.hand:play_selected() end
+    end
     if key == "x" and G and G.deck and G.hand and not G.deck:empty() and not G.hand:is_full() then
         local card = G.deck:draw()
         if card then G.hand:add_card(card) end
@@ -66,14 +69,17 @@ function love.gamepadpressed(_, button)
     if button == "start" and G then
         G.DEBUG = not G.DEBUG
     end
-    if (button == "l" or button == "dpleft") and G and G.hand then
+    if (button == "l" or button == "dpleft") and G.hand then
         G.hand:sort_by_rank()
     end
-    if (button == "r" or button == "dpright") and G and G.hand then
+    if (button == "r" or button == "dpright") and G.hand then
         G.hand:sort_by_suit()
     end
     if (button == "leftshoulder") and G.hand and G.hand:has_selection() then
         G.hand:discard_selected()
+    end
+    if (button == "rightshoulder") and G.hand and G.hand:has_selection() then
+        G.hand:play_selected()
     end
     if (button == "b") and G and G.deck and G.hand and not G.deck:empty() and not G.hand:is_full() then
         local card = G.deck:draw()
