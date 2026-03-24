@@ -11,6 +11,9 @@ function Sprite:init(args)
     -- atlas data: either pass the atlas table directly, or by name + global atlas map
     self.atlas = args.atlas
     if not self.atlas and args.atlas_name and G and G.ASSET_ATLAS then
+        if G.ensure_asset_atlas_loaded then
+            G:ensure_asset_atlas_loaded(args.atlas_name)
+        end
         self.atlas = G.ASSET_ATLAS[args.atlas_name]
     end
 

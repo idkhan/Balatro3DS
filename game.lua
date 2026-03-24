@@ -18,6 +18,9 @@ function Game:init(seed)
     self.active_tooltip_card = nil
     self.round_score = 0
     self.last_hand_score = 0
+    self._collidables_buf = {}
+    self._gc_timer = 0
+    self._gc_discarded_nodes = 0
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
@@ -28,6 +31,8 @@ function Game:init(seed)
         self.SEED = seed
     end
     math.randomseed(self.SEED)
+    collectgarbage("setpause", 110)
+    collectgarbage("setstepmul", 200)
 
     -- set filters and load atlases
     self:set_render_settings()
@@ -65,13 +70,30 @@ function Game:update(dt)
     end
     self:check_collisions(dt)
 
+    local removed_nodes = 0
     self.discard_timer = self.discard_timer + dt
     for i = #self.pending_discard, 1, -1 do
         local entry = self.pending_discard[i]
         if self.discard_timer >= entry.remove_after then
             self:remove(entry.node)
             table.remove(self.pending_discard, i)
+            removed_nodes = removed_nodes + 1
         end
+    end
+
+    if removed_nodes > 0 then
+        self._gc_discarded_nodes = self._gc_discarded_nodes + removed_nodes
+        if self._gc_discarded_nodes >= 24 then
+            self._gc_discarded_nodes = 0
+            collectgarbage("collect")
+        end
+    end
+
+    -- Small periodic incremental GC step to smooth frame spikes on 3DS.
+    self._gc_timer = self._gc_timer + dt
+    if self._gc_timer >= 0.2 then
+        self._gc_timer = 0
+        collectgarbage("step", 96)
     end
 end
 
@@ -98,7 +120,10 @@ function Game:check_collisions(dt)
         return
     end
     
-    local collidables = {}
+    local collidables = self._collidables_buf
+    for i = #collidables, 1, -1 do
+        collidables[i] = nil
+    end
     for _, node in ipairs(self.nodes) do
         if node.states and node.states.collide.can then
             table.insert(collidables, node)
@@ -189,6 +214,7 @@ end
 local TAP_THRESHOLD = 15
 
 function Game:touchpressed(id, x, y)
+    if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
     self.touch_start_x = x
     self.touch_start_y = y
     local node = self:get_node_at(x, y)
@@ -200,12 +226,17 @@ function Game:touchpressed(id, x, y)
 end
 
 function Game:touchmoved(id, x, y, dx, dy)
+    if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
     if self.dragging and self.dragging.touchmoved then
         self.dragging:touchmoved(id, x, y, dx, dy)
     end
 end
 
 function Game:touchreleased(id, x, y)
+    if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then
+        self.dragging = nil
+        return
+    end
     local released = self.dragging
     if released and released.touchreleased then
         released:touchreleased(id, x, y)
@@ -213,7 +244,19 @@ function Game:touchreleased(id, x, y)
     local dx = x - self.touch_start_x
     local dy = y - self.touch_start_y
     local dist = math.sqrt(dx * dx + dy * dy)
-    if released and self.hand and dist < TAP_THRESHOLD then
+    local reordered = false
+    if released and self.hand and self.hand.try_reorder_card_after_drag then
+        local rmin = self.hand.reorder_drag_threshold and self.hand:reorder_drag_threshold() or 22
+        if dist >= rmin then
+            for _, node in ipairs(self.hand.card_nodes) do
+                if node == released then
+                    reordered = self.hand:try_reorder_card_after_drag(node, x)
+                    break
+                end
+            end
+        end
+    end
+    if released and self.hand and not reordered and dist < TAP_THRESHOLD then
         for _, node in ipairs(self.hand.card_nodes) do
             if node == released then
                 self.hand:toggle_selection(node)
@@ -268,6 +311,21 @@ function Game:move_selected_hand_cards_to_front()
         table.insert(ordered, node)
     end
     self.nodes = ordered
+end
+
+function Game:ensure_asset_atlas_loaded(name)
+    if not name or not self.ASSET_ATLAS then return nil end
+    local atlas = self.ASSET_ATLAS[name]
+    if not atlas then return nil end
+    if atlas.image then return atlas end
+    if not atlas.path then return atlas end
+
+    local ok, img = pcall(love.graphics.newImage, atlas.path, { dpiscale = atlas.dpiscale or self.SETTINGS.GRAPHICS.texture_scaling })
+    if not ok then
+        ok, img = pcall(love.graphics.newImage, atlas.path, {})
+    end
+    atlas.image = ok and img or nil
+    return atlas
 end
 
 function Game:set_render_settings()
@@ -358,29 +416,33 @@ function Game:set_render_settings()
             {name = "localthunk_logo", path = "resources/textures/1x/localthunk-logo.png", px=1390,py=560}
         }
     
-        -- Helper: load image; on 3DS mipmaps/dpiscale can cause "Failed to create Texture", so retry with no options
+        -- Helper: load image with no mipmaps for pixel-art memory savings.
         local function load_image(path, options)
             local ok, img = pcall(love.graphics.newImage, path, options or {})
-            if not ok and options and (options.mipmaps or options.dpiscale) then
+            if not ok and options and options.dpiscale then
                 ok, img = pcall(love.graphics.newImage, path, {})
             end
             return ok and img or nil
         end
 
-        --Load in all atli defined above
+        -- Animation atlases are small; load eagerly (no mipmaps).
         for i=1, #self.animation_atli do
             self.ANIMATION_ATLAS[self.animation_atli[i].name] = {}
             self.ANIMATION_ATLAS[self.animation_atli[i].name].name = self.animation_atli[i].name
-            self.ANIMATION_ATLAS[self.animation_atli[i].name].image = load_image(self.animation_atli[i].path, {mipmaps = true, dpiscale = self.SETTINGS.GRAPHICS.texture_scaling})
+            self.ANIMATION_ATLAS[self.animation_atli[i].name].path = self.animation_atli[i].path
+            self.ANIMATION_ATLAS[self.animation_atli[i].name].image = load_image(self.animation_atli[i].path, {dpiscale = self.SETTINGS.GRAPHICS.texture_scaling})
             self.ANIMATION_ATLAS[self.animation_atli[i].name].px = self.animation_atli[i].px
             self.ANIMATION_ATLAS[self.animation_atli[i].name].py = self.animation_atli[i].py
             self.ANIMATION_ATLAS[self.animation_atli[i].name].frames = self.animation_atli[i].frames
         end
-    
+
+        -- Register all asset atlases, lazy-load textures on first use.
         for i=1, #self.asset_atli do
             self.ASSET_ATLAS[self.asset_atli[i].name] = {}
             self.ASSET_ATLAS[self.asset_atli[i].name].name = self.asset_atli[i].name
-            self.ASSET_ATLAS[self.asset_atli[i].name].image = load_image(self.asset_atli[i].path, {mipmaps = true, dpiscale = self.SETTINGS.GRAPHICS.texture_scaling})
+            self.ASSET_ATLAS[self.asset_atli[i].name].path = self.asset_atli[i].path
+            self.ASSET_ATLAS[self.asset_atli[i].name].dpiscale = self.SETTINGS.GRAPHICS.texture_scaling
+            self.ASSET_ATLAS[self.asset_atli[i].name].image = nil
             self.ASSET_ATLAS[self.asset_atli[i].name].type = self.asset_atli[i].type
             self.ASSET_ATLAS[self.asset_atli[i].name].px = self.asset_atli[i].px
             self.ASSET_ATLAS[self.asset_atli[i].name].py = self.asset_atli[i].py
@@ -388,17 +450,27 @@ function Game:set_render_settings()
         for i=1, #self.asset_images do
             self.ASSET_ATLAS[self.asset_images[i].name] = {}
             self.ASSET_ATLAS[self.asset_images[i].name].name = self.asset_images[i].name
-            self.ASSET_ATLAS[self.asset_images[i].name].image = load_image(self.asset_images[i].path, {mipmaps = true, dpiscale = 1})
+            self.ASSET_ATLAS[self.asset_images[i].name].path = self.asset_images[i].path
+            self.ASSET_ATLAS[self.asset_images[i].name].dpiscale = 1
+            self.ASSET_ATLAS[self.asset_images[i].name].image = nil
             self.ASSET_ATLAS[self.asset_images[i].name].type = self.asset_images[i].type
             self.ASSET_ATLAS[self.asset_images[i].name].px = self.asset_images[i].px
             self.ASSET_ATLAS[self.asset_images[i].name].py = self.asset_images[i].py
         end
-    
+
+        -- Preload only the atlases needed for the current core gameplay path.
+        local preload_atlases = {
+            "cards_1", "cards_2", "centers", "ui_1", "ui_2", "chips", "balatro"
+        }
+        for i = 1, #preload_atlases do
+            self:ensure_asset_atlas_loaded(preload_atlases[i])
+        end
+
+        -- Aliases (point at same table; lazy loading still applies).
+        self.ASSET_ATLAS.Planet = self.ASSET_ATLAS.Tarot
+        self.ASSET_ATLAS.Spectral = self.ASSET_ATLAS.Tarot
+
         for _, v in pairs(G.I.SPRITE) do
             v:reset()
         end
-    
-        self.ASSET_ATLAS.Planet = self.ASSET_ATLAS.Tarot
-        self.ASSET_ATLAS.Spectral = self.ASSET_ATLAS.Tarot
-    
 end

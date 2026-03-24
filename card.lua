@@ -1,6 +1,8 @@
 ---@class Card : Moveable
 Card = Moveable:extend()
 
+local SHAKE_MAGNITUDE = 6
+
 ---@param X number
 ---@param Y number
 ---@param W number|nil
@@ -87,6 +89,9 @@ end
 
 function Card:resolve_atlas(name)
     if not name or not G or not G.ASSET_ATLAS then return nil end
+    if G.ensure_asset_atlas_loaded then
+        G:ensure_asset_atlas_loaded(name)
+    end
     return G.ASSET_ATLAS[name]
 end
 
@@ -212,7 +217,7 @@ end
 
 function Card:get_collision_rect()
     local r = Node.get_collision_rect(self)
-    if self.selected then
+    if self.selected and not self.scoring_center then
         r.y = r.y - SELECTED_LIFT
     end
     return r
@@ -354,6 +359,16 @@ function Card:draw_tooltip(draw_x, draw_y)
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 end
 
+local SHAKE_MAX_DURATION = 0.22
+
+function Card:update(dt)
+    Moveable.update(self, dt)
+    if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
+        self.scoring_shake_timer = self.scoring_shake_timer - dt
+        if self.scoring_shake_timer < 0 then self.scoring_shake_timer = 0 end
+    end
+end
+
 function Card:draw()
     if not self.states.visible then return end
 
@@ -362,7 +377,14 @@ function Card:draw()
 
     local draw_x = self.VT.x + self.collision_offset.x
     local draw_y = self.VT.y + self.collision_offset.y
-    if self.selected then draw_y = draw_y - SELECTED_LIFT end
+    if self.selected and not self.scoring_center then draw_y = draw_y - SELECTED_LIFT end
+
+    if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
+        local mag = SHAKE_MAGNITUDE * (self.scoring_shake_timer / SHAKE_MAX_DURATION)
+        local t = love.timer.getTime()
+        draw_x = draw_x + math.sin(t * 85) * mag
+        draw_y = draw_y + math.cos(t * 73) * mag * 0.65
+    end
 
     love.graphics.push()
 

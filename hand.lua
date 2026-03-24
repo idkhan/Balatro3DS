@@ -18,6 +18,15 @@ local MAX_HAND_SIZE = 8
 local DISCARD_ANIM_DURATION = 0.35
 local DRAW_DELAY = 0.2
 
+-- Play / scoring sequence (bottom screen)
+local PLAY_MOVE_MIN_TIME = 0.35
+local PLAY_MOVE_MAX_TIME = 0.85
+local PLAY_MOVE_ARRIVE_EPS = 2.5
+local PLAY_TRIGGER_INTERVAL = 0.38
+local PLAY_SHAKE_DURATION = 0.22
+local PLAY_AFTER_SCORE_PAUSE = 0.28
+local PLAY_CENTER_SCALE = 1
+
 function Hand:init(game)
     self.game = game or G
     self.cards = {}
@@ -26,6 +35,16 @@ function Hand:init(game)
     self._draw_queue = {}
     self._draw_timer = 0
     self.sort_mode = "rank"
+    self._play_sequence = nil
+end
+
+function Hand:play_sfx_trigger()
+    Sfx.play("resources/sounds/generic1.ogg")
+    Sfx.play_random("resources/sounds/chips1.ogg", "resources/sounds/chips2.ogg")
+end
+
+function Hand:is_scoring_active()
+    return self._play_sequence ~= nil
 end
 
 function Hand:add_card(card_data)
@@ -42,22 +61,93 @@ function Hand:add_card(card_data)
     new_node.VT.y = OFFSCREEN_START_Y
     new_node.VT.r = 0
     new_node.VT.scale = new_node.T.scale
+    Sfx.play_random("resources/sounds/cardSlide1.ogg", "resources/sounds/cardSlide2.ogg")
 
     if self.sort_mode == "rank" then
-        self:sort_by_rank()
+        self:sort_by_rank(new_node)
     elseif self.sort_mode == "suit" then
-        self:sort_by_suit()
+        self:sort_by_suit(new_node)
     end
+
     return node
 end
 
+--- Fan geometry for hit-testing and reorder (same math as layout).
+function Hand:_layout_metrics()
+    local nodes = self.card_nodes
+    local n = #nodes
+    if n == 0 then return nil end
+    local scale = math.max(MIN_HAND_SCALE, math.min(1, CARDS_AT_FULL_SCALE / n))
+    local card_w = CARD_W * scale
+    local card_h = CARD_H * scale
+    local step = (SCREEN_W - card_w) / math.max(1, n - 1)
+    local total_w = n == 1 and card_w or (card_w + (n - 1) * step)
+    local start_x = (SCREEN_W - total_w) * 0.5
+    local y = SCREEN_H - card_h - 20
+    return {
+        n = n,
+        scale = scale,
+        card_w = card_w,
+        card_h = card_h,
+        step = step,
+        start_x = start_x,
+        y = y,
+    }
+end
+
+--- Nearest hand slot index (1..n) for a screen x (center of card column).
+function Hand:slot_index_from_screen_x(screen_x)
+    local m = self:_layout_metrics()
+    if not m then return 1 end
+    if m.n <= 1 then return 1 end
+    local best_i, best_d = 1, 1e9
+    for i = 1, m.n do
+        local cx = m.start_x + (i - 1) * m.step + m.card_w / 2
+        local d = math.abs(screen_x - cx)
+        if d < best_d then
+            best_d = d
+            best_i = i
+        end
+    end
+    return best_i
+end
+
+--- Move card node to the slot under release_x (hand order). Returns true if order changed.
+function Hand:try_reorder_card_after_drag(node, release_x)
+    if self._play_sequence or not node then return false end
+    local from_idx
+    for i, n in ipairs(self.card_nodes) do
+        if n == node then
+            from_idx = i
+            break
+        end
+    end
+    if not from_idx then return false end
+
+    local to_idx = self:slot_index_from_screen_x(release_x)
+    if to_idx == from_idx then return false end
+
+    local card = table.remove(self.cards, from_idx)
+    local inode = table.remove(self.card_nodes, from_idx)
+    table.insert(self.cards, to_idx, card)
+    table.insert(self.card_nodes, to_idx, inode)
+
+    self:layout(false)
+    if self.game and self.game.restore_hand_draw_order then
+        self.game:restore_hand_draw_order()
+    end
+    if self.game and self.game.move_selected_hand_cards_to_front then
+        self.game:move_selected_hand_cards_to_front()
+    end
+    Sfx.play_random("resources/sounds/cardSlide1.ogg", "resources/sounds/cardSlide2.ogg")
+    return true
+end
 ---@param update_visual boolean|nil If true or omitted, VT is set to match T (instant). If false, only T is updated so cards interpolate to new positions.
----@param skip_vt_for_last boolean|nil If true, VT is not set for the last card (so it can animate in from off-screen).
-function Hand:layout(update_visual, skip_vt_for_last)
+---@param skip_vt_node Card|nil If set, that node's VT is left unchanged (e.g. animating in from off-screen).
+function Hand:layout(update_visual, skip_vt_node)
     local nodes = self.card_nodes
     if #nodes == 0 then return end
     if update_visual == nil then update_visual = true end
-    if skip_vt_for_last == nil then skip_vt_for_last = false end
 
     local n = #nodes
     local scale = math.max(MIN_HAND_SCALE, math.min(1, CARDS_AT_FULL_SCALE / n))
@@ -84,7 +174,7 @@ function Hand:layout(update_visual, skip_vt_for_last)
         node.T.y = card_y
         node.T.r = r
         node.T.scale = scale
-        local set_vt = update_visual and not (skip_vt_for_last and i == n)
+        local set_vt = update_visual and (skip_vt_node == nil or node ~= skip_vt_node)
         if set_vt then
             node.VT.x = x
             node.VT.y = card_y
@@ -103,6 +193,22 @@ function Hand:clear()
     self.selected = {}
     self._draw_queue = {}
     self._draw_timer = 0
+    self._play_sequence = nil
+end
+
+--- Selected cards in left-to-right hand order (card_nodes index), not toggle order.
+function Hand:ordered_selected_nodes()
+    local sel = {}
+    for _, n in ipairs(self.selected) do
+        sel[n] = true
+    end
+    local out = {}
+    for _, node in ipairs(self.card_nodes) do
+        if sel[node] then
+            table.insert(out, node)
+        end
+    end
+    return out
 end
 
 function Hand:is_selected(node)
@@ -113,10 +219,12 @@ function Hand:is_selected(node)
 end
 
 function Hand:toggle_selection(node)
+    if self._play_sequence then return end
     if not node or not self.game then return end
     for i, n in ipairs(self.selected) do
         if n == node then
             node.selected = false
+            Sfx.play("resources/sounds/card3.ogg")
             table.remove(self.selected, i)
             if self.game then self.game.active_tooltip_card = nil end
             if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
@@ -126,6 +234,7 @@ function Hand:toggle_selection(node)
     end
     if #self.selected >= MAX_SELECTED then return end
     node.selected = true
+    Sfx.play("resources/sounds/card1.ogg")
     table.insert(self.selected, node)
     if self.game then self.game.active_tooltip_card = node end
     if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
@@ -137,6 +246,13 @@ function Hand:has_selection()
 end
 
 function Hand:discard_selected()
+    if self._play_sequence then return end
+    if #self.selected == 0 or not self.game then return end
+    self:_discard_selected_impl()
+end
+
+--- Internal discard used after play sequence (or directly when not scoring).
+function Hand:_discard_selected_impl()
     if #self.selected == 0 or not self.game then return end
     local selected_set = {}
     for _, n in ipairs(self.selected) do selected_set[n] = true end
@@ -166,6 +282,31 @@ function Hand:discard_selected()
     self:calculate_play()
 end
 
+--- Lay out played cards in a horizontal row near the vertical center of the bottom screen.
+--- Only updates targets (T); VT lerps via Moveable for a smooth move from the hand.
+function Hand:layout_play_cards_at_center(nodes)
+    local n = #nodes
+    if n == 0 then return end
+    local scale = PLAY_CENTER_SCALE
+    local card_w = CARD_W * scale
+    local card_h = CARD_H * scale
+    local max_step = (SCREEN_W - card_w) / math.max(1, n - 1)
+    local step = n == 1 and 0 or math.min(74 * scale, max_step)
+    local total_w = n == 1 and card_w or (card_w + (n - 1) * step)
+    local start_x = (SCREEN_W - total_w) * 0.5
+    local y = math.floor(SCREEN_H * 0.25) - card_h * 0.5
+    for i, node in ipairs(nodes) do
+        node.T.x = start_x + (i - 1) * step
+        if(node.counts_for_play_score == true) then
+            node.T.y = y
+        else 
+            node.T.y = y + math.floor(card_h * 0.3)
+        end
+        node.T.r = 0
+        node.T.scale = scale
+    end
+end
+
 function Hand:fill_from_deck()
     local deck = self.game and self.game.deck
     if not deck then return end
@@ -181,7 +322,80 @@ function Hand:fill_from_deck()
     end
 end
 
+function Hand:_cards_reached_play_targets(nodes)
+    for _, node in ipairs(nodes) do
+        local dx = math.abs((node.VT.x or 0) - (node.T.x or 0))
+        local dy = math.abs((node.VT.y or 0) - (node.T.y or 0))
+        if dx > PLAY_MOVE_ARRIVE_EPS or dy > PLAY_MOVE_ARRIVE_EPS then
+            return false
+        end
+    end
+    return true
+end
+
+function Hand:_update_play_sequence(dt)
+    local seq = self._play_sequence
+    if not seq then return end
+    seq.timer = seq.timer + dt
+
+    if seq.phase == "move_center" then
+        if seq.timer >= PLAY_MOVE_MIN_TIME and self:_cards_reached_play_targets(seq.cards) then
+            seq.phase = "trigger"
+            seq.timer = 0
+            seq.idx = 0
+            seq.trigger_wait = 0
+        elseif seq.timer >= PLAY_MOVE_MAX_TIME then
+            seq.phase = "trigger"
+            seq.timer = 0
+            seq.idx = 0
+            seq.trigger_wait = 0
+        end
+    elseif seq.phase == "trigger" then
+        seq.trigger_wait = (seq.trigger_wait or 0) - dt
+        if seq.idx < #seq.cards and seq.trigger_wait <= 0 then
+            seq.idx = seq.idx + 1
+            local node = seq.cards[seq.idx]
+            local score_this = node and node.counts_for_play_score
+            if node and score_this then
+                node.scoring_shake_timer = PLAY_SHAKE_DURATION
+                self:play_sfx_trigger()
+                local chips, mult = self:accumulate_card_score(
+                    tonumber(G.selectedHandChips) or 0,
+                    tonumber(G.selectedHandMult) or 1,
+                    node
+                )
+                G.selectedHandChips = chips
+                G.selectedHandMult = mult
+            end
+            seq.trigger_wait = seq.trigger_wait + PLAY_TRIGGER_INTERVAL
+        end
+        if seq.idx >= #seq.cards then
+            seq.phase = "finalize"
+            seq.timer = 0
+        end
+    elseif seq.phase == "finalize" then
+        local chips = tonumber(G.selectedHandChips) or 0
+        local mult = tonumber(G.selectedHandMult) or 1
+        local final_score = math.floor(chips * mult)
+        G.last_hand_score = final_score
+        G.round_score = (G.round_score or 0) + final_score
+        seq.phase = "discard_wait"
+        seq.timer = 0
+    elseif seq.phase == "discard_wait" then
+        if seq.timer >= PLAY_AFTER_SCORE_PAUSE then
+            for _, node in ipairs(seq.cards) do
+                node.scoring_center = false
+            end
+            self._play_sequence = nil
+            self:_discard_selected_impl()
+        end
+    end
+end
+
 function Hand:update(dt)
+    if self._play_sequence then
+        self:_update_play_sequence(dt)
+    end
     if #self._draw_queue == 0 then return end
     self._draw_timer = self._draw_timer + dt
     if self._draw_timer >= DRAW_DELAY then
@@ -243,29 +457,47 @@ function Hand:get_modifier_bonus(card_data)
     return chip_bonus, mult_bonus
 end
 
+--- Apply one card's chips and mult bonuses (hand base chips/mult should already be in G).
+function Hand:accumulate_card_score(chips, mult, node)
+    local data = node.card_data or {}
+    local rank = data.rank
+    local suit = data.suit
+
+    local card_chips = base_card_chips(rank)
+    chips = chips + card_chips
+
+    local mod_chip_bonus, mod_mult_bonus = self:get_modifier_bonus(data)
+    chips = chips + mod_chip_bonus
+    mult = mult + mod_mult_bonus
+
+    return chips, mult
+end
+
 function Hand:score_selected_hand()
     if #self.selected == 0 then return nil end
 
     local chips = tonumber(G.selectedHandChips) or 0
     local mult = tonumber(G.selectedHandMult) or 1
+    local ordered = self:ordered_selected_nodes()
 
     print(string.format("Scoring hand start: chips=%d mult=%d", chips, mult))
 
-    for i, node in ipairs(self.selected) do
+    for i, node in ipairs(ordered) do
+        local score_this = node.counts_for_play_score == true
         local data = node.card_data or {}
         local rank = data.rank
         local suit = data.suit
-
         local card_chips = base_card_chips(rank)
-        chips = chips + card_chips
-
         local mod_chip_bonus, mod_mult_bonus = self:get_modifier_bonus(data)
-        chips = chips + mod_chip_bonus
-        mult = mult + mod_mult_bonus
+
+        if score_this then
+            chips, mult = self:accumulate_card_score(chips, mult, node)
+        end
 
         print(string.format(
-            "Card %d [%s of %s]: +%d chips, modifier +%d chips / +%d mult -> chips=%d mult=%d",
-            i, tostring(rank), tostring(suit), card_chips, mod_chip_bonus, mod_mult_bonus, chips, mult
+            "Card %d [%s of %s]: +%d chips, modifier +%d chips / +%d mult -> chips=%d mult=%d%s",
+            i, tostring(rank), tostring(suit), card_chips, mod_chip_bonus, mod_mult_bonus, chips, mult,
+            score_this and "" or " (kicker — not scored)"
         ))
     end
 
@@ -283,14 +515,30 @@ end
 
 function Hand:play_selected()
     if #self.selected == 0 then return end
+    if self._play_sequence then return end
 
-    -- Ensure current selected hand/base values are up to date before scoring cards.
+    if self.game then self.game.active_tooltip_card = nil end
+
     self:calculate_play()
-    self:score_selected_hand()
-    self:discard_selected()
+
+    local cards = self:ordered_selected_nodes()
+    for _, n in ipairs(cards) do
+        n.scoring_center = true
+    end
+
+    self._play_sequence = {
+        phase = "move_center",
+        timer = 0,
+        cards = cards,
+    }
+
+    self:layout_play_cards_at_center(cards)
+    if self.game and self.game.move_selected_hand_cards_to_front then
+        self.game:move_selected_hand_cards_to_front()
+    end
 end
 
-function Hand:sort_by_rank()
+function Hand:sort_by_rank(layout_skip_vt_node)
     self.sort_mode = "rank"
     if #self.cards == 0 then return end
     local pairs = {}
@@ -308,13 +556,13 @@ function Hand:sort_by_rank()
         table.insert(self.cards, p.card)
         table.insert(self.card_nodes, p.node)
     end
-    self:layout(false)
+    self:layout(false, layout_skip_vt_node)
     if self.game and self.game.restore_hand_draw_order then
         self.game:restore_hand_draw_order()
     end
 end
 
-function Hand:sort_by_suit()
+function Hand:sort_by_suit(layout_skip_vt_node)
     self.sort_mode = "suit"
     if #self.cards == 0 then return end
     local pairs = {}
@@ -332,15 +580,18 @@ function Hand:sort_by_suit()
         table.insert(self.cards, p.card)
         table.insert(self.card_nodes, p.node)
     end
-    self:layout(false)
+    self:layout(false, layout_skip_vt_node)
     if self.game and self.game.restore_hand_draw_order then
         self.game:restore_hand_draw_order()
     end
 end
 
 function Hand:calculate_play()
-    local n = #self.selected
-    if n == 0 then
+    local n_sel = #self.selected
+    if n_sel == 0 then
+        for _, node in ipairs(self.card_nodes) do
+            node.counts_for_play_score = false
+        end
         print("No cards selected")
         G.selectedHand = -1
         G.selectedHandLevel = 1
@@ -351,13 +602,30 @@ function Hand:calculate_play()
 
     print("Selected cards:")
 
-    -- Collect ranks and suits
+    local sel_set = {}
+    for _, node in ipairs(self.selected) do
+        sel_set[node] = true
+    end
+
+    -- One pass: clear scoring flags + build left-to-right order of selected cards
+    local ordered = {}
+    for _, node in ipairs(self.card_nodes) do
+        node.counts_for_play_score = false
+        if sel_set[node] then
+            table.insert(ordered, node)
+        end
+    end
+
+    local n = #ordered
+
+    -- Collect ranks / suits (hand order); track high rank for marking high card later
     local ranks = {}
     local suits = {}
     local rank_counts = {}
     local suit_counts = {}
+    local max_rank_for_high = nil
 
-    for i, node in ipairs(self.selected) do
+    for _, node in ipairs(ordered) do
         local data = node.card_data or {}
         local rank = data.rank
         local suit = data.suit
@@ -367,13 +635,33 @@ function Hand:calculate_play()
 
         rank_counts[rank] = (rank_counts[rank] or 0) + 1
         suit_counts[suit] = (suit_counts[suit] or 0) + 1
+
+        if type(rank) == "number" then
+            if max_rank_for_high == nil or rank > max_rank_for_high then
+                max_rank_for_high = rank
+            end
+        end
     end
 
-    -- Helpers
     local function is_flush()
         return next(suit_counts) ~= nil and next(suit_counts, next(suit_counts)) == nil
     end
 
+    -- Rank pattern: one pass over rank_counts (also used for scoring marks later)
+    local max_of_a_kind = 0
+    local pairs_count = 0
+    local has_three = false
+    local has_two = false
+    for _, c in pairs(rank_counts) do
+        if c > max_of_a_kind then max_of_a_kind = c end
+        if c == 2 then
+            pairs_count = pairs_count + 1
+            has_two = true
+        end
+        if c == 3 then has_three = true end
+    end
+
+    -- A 5-card straight requires five distinct ranks (no pair+).
     local function is_straight()
         if n < 5 then return false end
 
@@ -391,7 +679,6 @@ function Hand:calculate_play()
 
         if #uniq_ranks ~= 5 then return false end
 
-        -- Standard straight (e.g. 5,6,7,8,9 or 10,J,Q,K,A)
         local is_seq = true
         for i = 2, #uniq_ranks do
             if uniq_ranks[i] ~= uniq_ranks[i - 1] + 1 then
@@ -400,28 +687,14 @@ function Hand:calculate_play()
             end
         end
 
-        -- Wheel straight A-2-3-4-5 (ranks: 14,2,3,4,5)
-        local is_wheel = false
-        if not is_seq then
-            local hasA = uniq[14] or uniq["A"]
-            if hasA and uniq[2] and uniq[3] and uniq[4] and uniq[5] then
-                is_wheel = true
-            end
-        end
+        if is_seq then return true end
 
-        return is_seq or is_wheel
-    end
-
-    -- Rank pattern info
-    local max_of_a_kind = 0
-    local pairs_count = 0
-    for _, c in pairs(rank_counts) do
-        if c > max_of_a_kind then max_of_a_kind = c end
-        if c == 2 then pairs_count = pairs_count + 1 end
+        local hasA = uniq[14] or uniq["A"]
+        return hasA and uniq[2] and uniq[3] and uniq[4] and uniq[5]
     end
 
     local flush = is_flush()
-    local straight = is_straight()
+    local straight = (n >= 5 and max_of_a_kind == 1) and is_straight()
 
     -- Determine hand according to Balatro order in globals.handlist:
     -- 1  Flush Five      (five of same rank & same suit)
@@ -445,11 +718,6 @@ function Hand:calculate_play()
             hand_index = 1 -- Flush Five
         elseif flush then
             -- Check for Flush House: 3-of-a-kind + 2-of-a-kind, all same suit
-            local has_three, has_two = false, false
-            for _, c in pairs(rank_counts) do
-                if c == 3 then has_three = true end
-                if c == 2 then has_two = true end
-            end
             if has_three and has_two then
                 hand_index = 2 -- Flush House
             end
@@ -463,11 +731,6 @@ function Hand:calculate_play()
             elseif max_of_a_kind == 4 then
                 hand_index = 5 -- Four of a Kind
             else
-                local has_three, has_two = false, false
-                for _, c in pairs(rank_counts) do
-                    if c == 3 then has_three = true end
-                    if c == 2 then has_two = true end
-                end
                 if has_three and has_two then
                     hand_index = 6 -- Full House
                 elseif flush then
@@ -525,4 +788,58 @@ function Hand:calculate_play()
     print("Hand level: " .. tostring(G.selectedHandLevel))
     print("Hand chips: " .. tostring(G.selectedHandChips))
     print("Hand mult: " .. tostring(G.selectedHandMult))
+
+    -- Mark which selected cards actually score (ordered built above).
+    local hi = G.selectedHand
+
+    local function mark_all_ordered()
+        for _, node in ipairs(ordered) do
+            node.counts_for_play_score = true
+        end
+    end
+
+    local function mark_rank_scoring(r)
+        for _, node in ipairs(ordered) do
+            if (node.card_data or {}).rank == r then
+                node.counts_for_play_score = true
+            end
+        end
+    end
+
+    if hi == 1 or hi == 2 or hi == 3 or hi == 4 or hi == 6 or hi == 7 or hi == 8 then
+        mark_all_ordered()
+    elseif hi == 5 then
+        for r, c in pairs(rank_counts) do
+            if c == 4 then
+                mark_rank_scoring(r)
+                break
+            end
+        end
+    elseif hi == 9 then
+        for r, c in pairs(rank_counts) do
+            if c == 3 then
+                mark_rank_scoring(r)
+                break
+            end
+        end
+    elseif hi == 10 then
+        for r, c in pairs(rank_counts) do
+            if c == 2 then
+                mark_rank_scoring(r)
+            end
+        end
+    elseif hi == 11 then
+        for r, c in pairs(rank_counts) do
+            if c == 2 then
+                mark_rank_scoring(r)
+                break
+            end
+        end
+    elseif hi == 12 then
+        if max_rank_for_high ~= nil then
+            mark_rank_scoring(max_rank_for_high)
+        end
+    else
+        mark_all_ordered()
+    end
 end

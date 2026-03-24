@@ -1,3 +1,10 @@
+local raw_print = print
+function print(...)
+    if G and G.DEBUG then
+        raw_print(...)
+    end
+end
+
 local nest_ok, nest = pcall(function()
     return require("nest").init({ console = "3ds" })
 end)
@@ -12,6 +19,7 @@ require "hand"
 require "game"
 require "globals"
 require "topUI"
+Sfx = require "sfx"
 
 function love.load()
     G = Game()
@@ -22,7 +30,11 @@ function love.load()
     G.hand = Hand(G)
     G.hand:fill_from_deck()
 
-    --love.audio.newSource("resources/sounds/music1.ogg", "stream"):play()
+    G.music = love.audio.newSource("resources/sounds/music1.ogg", "static")
+    if G.music then
+        G.music:setLooping(true)
+        G.music:play()
+    end
 end
 
 function love.update(dt)
