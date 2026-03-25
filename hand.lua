@@ -356,6 +356,32 @@ function Hand:_update_play_sequence(dt)
             seq.idx = seq.idx + 1
             local node = seq.cards[seq.idx]
             local score_this = node and node.counts_for_play_score
+
+            -- Joker event: card_played (only for scored cards).
+            -- "A card being scored" means `counts_for_play_score == true`.
+            if node and score_this == true then
+                local data = (node and node.card_data) or {}
+                local chips = tonumber(G.selectedHandChips) or 0
+                local mult = tonumber(G.selectedHandMult) or 1
+                local ctx = {
+                    event = "card_played",
+                    rank = data.rank,
+                    suit = data.suit,
+                    chips = chips,
+                    mult = mult,
+                    hand_index = G.selectedHand,
+                    hand_level = G.selectedHandLevel,
+                    card_node = node,
+                }
+                if G and G.emit_joker_event then
+                    G:emit_joker_event("card_played", ctx)
+                    chips = tonumber(ctx.chips) or chips
+                    mult = tonumber(ctx.mult) or mult
+                    G.selectedHandChips = chips
+                    G.selectedHandMult = mult
+                end
+            end
+
             if node and score_this then
                 node.scoring_shake_timer = PLAY_SHAKE_DURATION
                 self:play_sfx_trigger()
@@ -376,6 +402,55 @@ function Hand:_update_play_sequence(dt)
     elseif seq.phase == "finalize" then
         local chips = tonumber(G.selectedHandChips) or 0
         local mult = tonumber(G.selectedHandMult) or 1
+
+        -- Joker event: hand_played (after all cards are processed).
+        if seq._hand_played_emitted ~= true then
+            seq._hand_played_emitted = true
+
+            local hand_type = nil
+            if G and G.handlist and G.selectedHand and G.handlist[G.selectedHand] then
+                hand_type = G.handlist[G.selectedHand]
+            end
+            hand_type = hand_type or tostring(G.selectedHand or "unknown")
+
+            local ctx = {
+                event = "hand_played",
+                hand_index = G.selectedHand,
+                hand_type = hand_type,
+                hand_level = G.selectedHandLevel,
+                chips = chips,
+                mult = mult,
+                cards = seq.cards,
+            }
+            if G and G.emit_joker_event then
+                G:emit_joker_event("hand_played", ctx)
+                chips = tonumber(ctx.chips) or chips
+                mult = tonumber(ctx.mult) or mult
+                G.selectedHandChips = chips
+                G.selectedHandMult = mult
+            end
+        end
+
+        -- Joker event: on_hand_scored
+        -- Mutate ctx.chips/ctx.mult via joker effects before final score is computed.
+        local ctx = {
+            event = "on_hand_scored",
+            chips = chips,
+            mult = mult,
+            hand_index = G.selectedHand,
+            hand_level = G.selectedHandLevel,
+            cards = seq.cards,
+        }
+        if G and G.emit_joker_event then
+            G:emit_joker_event("on_hand_scored", ctx)
+        end
+
+        chips = tonumber(ctx.chips) or 0
+        mult = tonumber(ctx.mult) or 1
+        -- Keep globals in sync so UI/debug reflect updated values.
+        G.selectedHandChips = chips
+        G.selectedHandMult = mult
+
         local final_score = math.floor(chips * mult)
         G.last_hand_score = final_score
         G.round_score = (G.round_score or 0) + final_score

@@ -158,7 +158,58 @@ function TopUI.draw()
     TopUI.LabeledField("Ante", value, fieldsPositionX + (fieldWidth + padding) * 2, fieldsPositionY, fieldWidth, fieldHeight, G.C.ORANGE)
     TopUI.LabeledField("Round", value, fieldsPositionX + (fieldWidth + padding) * 2, fieldsPositionY + fieldHeight + padding, fieldWidth, fieldHeight, G.C.RED)
     TopUI.LabeledField("", value, fieldsPositionX, fieldsPositionY + fieldHeight + padding, fieldWidth * 2 + padding, fieldHeight, G.C.MONEY)
-    
+
+    -- Joker panel behind all jokers (shown only when jokers are on the top screen).
+    local capacity = (G and G.joker_capacity) or (G and #G.jokers) or 0
+    if G and G.jokers_on_bottom ~= true and capacity > 0 then
+        local slot_count = capacity
+        local slot_w, slot_h = G.joker_slot_w or 71, G.joker_slot_h or 95
+        local slot_gap = G.joker_slot_gap or 8
+        local slot_y = G.joker_slot_y_top or (panelY + panelHeight + 6)
+        local total_w = slot_count * slot_w + (slot_count - 1) * slot_gap
+        local start_x = G.joker_slot_start_x or math.floor((400 - total_w) * 0.5 + 0.5)
+
+        -- Extra padding so jokers don't touch the panel edges.
+        local panel_pad = 4
+        total_w = total_w + (panel_pad * 2)
+        start_x = start_x - panel_pad
+        slot_y = slot_y - panel_pad
+        slot_h = slot_h + (panel_pad * 2)
+
+        -- Dark panel background.
+        local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+        if _G.draw_rect_with_shadow then
+            draw_rect_with_shadow(
+                start_x,
+                slot_y,
+                total_w,
+                slot_h,
+                4,
+                2,
+                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
+                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
+                2
+            )
+        else
+            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
+            love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
+        end
+        love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        love.graphics.setColor(G.C.WHITE)
+
+        -- Jokers are normally invisible on top; force visibility while drawing this row.
+        for _, joker in ipairs(G.jokers) do
+            if joker and joker.draw then
+                local prev_visible = joker.states and joker.states.visible
+                if joker.states then joker.states.visible = true end
+                joker:draw()
+                if joker.states then joker.states.visible = prev_visible end
+            end
+        end
+    end
+
 end
 
 function TopUI.LabeledField(string, value, x, y, iw, ih, fieldColor)

@@ -36,6 +36,10 @@ function Game:init(seed)
 
     -- set filters and load atlases
     self:set_render_settings()
+
+    -- Create joker slots + initial joker instances.
+    -- (Top-screen rendering is handled by `TopUI.draw()`)
+    self:init_jokers()
 end
 
 function Game:add(node)
@@ -54,6 +58,44 @@ function Game:remove(node)
 end
 
 function Game:draw()
+    -- Dark panel behind the entire joker row (bottom screen).
+    if self.jokers_on_bottom == true and self.jokers then
+        local slot_count = self.joker_capacity or self.joker_slot_count or #self.jokers
+        local slot_w = self.joker_slot_w or 71
+        local slot_h = self.joker_slot_h or 95
+        local slot_gap = self.joker_slot_gap or 8
+        local s = self.joker_slot_scale_bottom or 1
+
+        local total_w_base = slot_count * slot_w + (slot_count - 1) * slot_gap
+        local panel_x = self.joker_slot_start_x_bottom or 0
+        local panel_y = self.joker_slot_y_bottom or 20
+        local panel_w = total_w_base * s
+        local panel_h = slot_h * s
+
+        -- Extra padding so jokers don't touch the panel edges.
+        local panel_pad = 4
+        local panel_pad_scaled = panel_pad * s
+        panel_x = panel_x - panel_pad_scaled
+        panel_y = panel_y - panel_pad_scaled
+        panel_w = panel_w + (panel_pad_scaled * 2)
+        panel_h = panel_h + (panel_pad_scaled * 2)
+
+        local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+        if _G.draw_rect_with_shadow then
+            draw_rect_with_shadow(
+                panel_x, panel_y, panel_w, panel_h,
+                4, 2,
+                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
+                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
+                2
+            )
+        else
+            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
+            love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
+        end
+        love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+    end
+
     for _, node in ipairs(self.nodes) do
         node:draw()
     end
@@ -69,6 +111,31 @@ function Game:update(dt)
         self.hand:update(dt)
     end
     self:check_collisions(dt)
+
+    -- Determine whether the joker slide animation is still running.
+    -- While sliding, guides should move with jokers; afterward, guides lock to slot geometry.
+    if self.jokers_sliding == true then
+        self.jokers_slide_time_left = (self.jokers_slide_time_left or 0) - dt
+        local all_snapped = true
+        if self.jokers then
+            for _, j in ipairs(self.jokers) do
+                if j and j.VT and j.T then
+                    local dx = math.abs((j.VT.x or 0) - (j.T.x or 0))
+                    local dy = math.abs((j.VT.y or 0) - (j.T.y or 0))
+                    local ds = math.abs((j.VT.scale or 0) - (j.T.scale or 0))
+                    if dx > 0.6 or dy > 0.6 or ds > 0.02 then
+                        all_snapped = false
+                        break
+                    end
+                end
+            end
+        end
+
+        if all_snapped == true or (self.jokers_slide_time_left or 0) <= 0 then
+            self.jokers_sliding = false
+            self.jokers_slide_time_left = 0
+        end
+    end
 
     local removed_nodes = 0
     self.discard_timer = self.discard_timer + dt
@@ -201,6 +268,301 @@ function Game:get_node_at(x, y)
     return nil
 end
 
+function Game:init_jokers()
+    -- Owned Jokers live in `self.jokers` (packed left-to-right).
+    -- `self.joker_capacity` defines the fixed UI slot count (panel size),
+    -- and does NOT change the number of owned nodes.
+    self.jokers = {}
+
+    if not Joker then return end
+
+    -- Capacity-first: start at 5 (you can modify later via gameplay).
+    self.joker_capacity = self.joker_capacity or 5
+
+    self.jokers_on_bottom = false
+    self.jokers_sliding = false
+    self.jokers_slide_time_left = 0
+
+    -- Slot geometry is shared by both top- and bottom-screen placements.
+    self.joker_slot_w, self.joker_slot_h = 71, 95
+    self.joker_slot_gap = 8
+    self.joker_slot_y_top = 124 -- under top HUD panel
+    self.joker_slot_y_bottom = 20 -- above the hand fan on bottom screen
+
+    -- Bottom screen is narrower than top in this project (hand uses 320 wide).
+    local BOTTOM_SCREEN_W = 320
+    local TOP_SCREEN_W = 400
+
+    local slot_count = self.joker_capacity
+    local base_total_w = slot_count * self.joker_slot_w + (slot_count - 1) * self.joker_slot_gap
+
+    -- Top layout uses full scale (1.0) and centers within the top-screen width.
+    local top_start_x = math.floor((TOP_SCREEN_W - base_total_w) * 0.5 + 0.5)
+    if top_start_x < 0 then top_start_x = 0 end
+    self.joker_slot_start_x = top_start_x
+
+    -- Bottom layout centers and scales down to fit within the bottom-screen width.
+    local bottom_scale = math.min(1, (BOTTOM_SCREEN_W or 320) / math.max(1, base_total_w))
+    self.joker_slot_scale_bottom = bottom_scale
+
+    local bottom_total_w = base_total_w * bottom_scale
+    local bottom_start_x = math.floor((BOTTOM_SCREEN_W - bottom_total_w) * 0.5 + 0.5)
+    if bottom_start_x < 0 then bottom_start_x = 0 end
+    self.joker_slot_start_x_bottom = bottom_start_x
+
+    -- Demo-owned jokers (randomized for testing).
+    -- Replace this with your shop/buy system later.
+    local pool = {}
+    if JOKER_DEFS and type(JOKER_DEFS) == "table" then
+        for def_id, _ in pairs(JOKER_DEFS) do
+            pool[#pool + 1] = def_id
+        end
+    end
+
+    -- Fisher–Yates shuffle
+    for i = #pool, 2, -1 do
+        local j = math.random(i)
+        pool[i], pool[j] = pool[j], pool[i]
+    end
+
+    local want = math.min(self.joker_capacity or 0, #pool)
+    for i = 1, want do
+        self:add_joker_by_def(pool[i])
+    end
+end
+
+---Add an owned Joker by definition id.
+---Owned Jokers are packed left-to-right and never exceed `self.joker_capacity`.
+---@param def_id string
+---@return boolean
+function Game:add_joker_by_def(def_id)
+    if type(def_id) ~= "string" or def_id == "" then return false end
+    if not JOKER_DEFS or type(JOKER_DEFS) ~= "table" then return false end
+    local def = JOKER_DEFS[def_id]
+    if type(def) ~= "table" then return false end
+
+    if not self.joker_capacity then self.joker_capacity = 5 end
+    if not self.jokers then self.jokers = {} end
+    if #self.jokers >= self.joker_capacity then return false end
+
+    -- Create at an arbitrary location; `_apply_joker_layout()` will position it.
+    local j = Joker(0, 0, self.joker_slot_w, self.joker_slot_h, def, { face_up = true })
+    table.insert(self.jokers, j)
+    self:add(j)
+
+    self:_apply_joker_layout()
+    self:sync_jokers_interactivity()
+
+    -- Snap immediately if we're not in a DPAD slide transition.
+    if self.jokers_sliding ~= true then
+        for _, jj in ipairs(self.jokers) do
+            if jj and jj.VT and jj.T then
+                jj.VT.x = jj.T.x
+                jj.VT.y = jj.T.y
+                jj.VT.scale = jj.T.scale
+            end
+        end
+    end
+
+    return true
+end
+
+function Game:_apply_joker_layout()
+    if not self.jokers then return end
+
+    if self.jokers_on_bottom == true then
+        local s = self.joker_slot_scale_bottom or 1
+        local start_x = self.joker_slot_start_x_bottom or 0
+        local y = self.joker_slot_y_bottom
+
+        -- Compensation because Joker scales around its center, which shifts
+        -- the visible top-left when s != 1.
+        local slot_w = self.joker_slot_w or 71
+        local slot_h = self.joker_slot_h or 95
+        local delta_x = (slot_w * s * (1 - s)) / 2
+        local delta_y = (slot_h * s * (1 - s)) / 2
+
+        -- We want the effective visible left/top edges to match:
+        --   desired_left = start_x + (i-1)*step
+        -- So set T.x/T.y to the draw coordinates that counteract that shift.
+
+        for i, j in ipairs(self.jokers) do
+            if j and j.T then
+                local step = (slot_w + (self.joker_slot_gap or 0)) * s
+                local desired_left = start_x + (i - 1) * step
+                j.T.x = desired_left - delta_x
+                j.T.y = y - delta_y
+                j.T.scale = s
+            end
+        end
+    else
+        local s = 1
+        local start_x = self.joker_slot_start_x or 0
+        local y = self.joker_slot_y_top
+
+        for i, j in ipairs(self.jokers) do
+            if j and j.T then
+                local step = (self.joker_slot_w + self.joker_slot_gap) * s
+                j.T.x = start_x + (i - 1) * step
+                j.T.y = y
+                j.T.scale = s
+            end
+        end
+    end
+end
+
+function Game:sync_jokers_interactivity()
+    local on_bottom = self.jokers_on_bottom == true
+    if not self.jokers then return end
+    for _, j in ipairs(self.jokers) do
+        if j and j.states then
+            j.states.click.can = on_bottom
+            j.states.drag.can = on_bottom
+            -- Bottom screen draw path uses `j:draw()`, which checks `states.visible`.
+            -- Top screen draw is handled by `TopUI.draw()` which temporarily overrides visibility.
+            j.states.visible = on_bottom
+        end
+    end
+end
+
+---Emit a joker event to all jokers and apply their effects to the context.
+---`ctx` is a mutable table that joker effects can update (e.g. ctx.chips/ctx.mult).
+---@param event_name string
+---@param ctx table|nil
+function Game:emit_joker_event(event_name, ctx)
+    if not self.jokers or type(self.jokers) ~= "table" then return end
+    if type(event_name) ~= "string" or event_name == "" then return end
+    if type(ctx) ~= "table" then ctx = {} end
+
+    for _, j in ipairs(self.jokers) do
+        if j and j.matches_trigger and j:matches_trigger(event_name, ctx) then
+            if j.apply_effect then
+                j:apply_effect(ctx)
+            end
+        end
+    end
+end
+
+function Game:set_jokers_location(on_bottom)
+    if self.jokers_on_bottom == (on_bottom == true) then return end
+    local from_bottom = self.jokers_on_bottom == true
+    local to_bottom = on_bottom == true
+
+    self.jokers_on_bottom = to_bottom
+    self:sync_jokers_interactivity()
+
+    -- Update target transforms first.
+    self:_apply_joker_layout()
+
+    -- Guide rectangles should move with jokers during this transition.
+    -- They'll lock back to stationary slot geometry once the jokers snap.
+    self.jokers_sliding = true
+    self.jokers_slide_time_left = 0.6
+
+    -- Then force VT to the previous layout so the slide always starts
+    -- from a consistent top/bottom position (independent of prior VT drift).
+    if self.jokers then
+        local start_y
+        if to_bottom then
+            -- Start above the bottom screen so it feels like sliding down from the top.
+            local s = self.joker_slot_scale_bottom or 1
+            local slot_h = self.joker_slot_h or 95
+            local h = slot_h * s
+            local delta_y = (slot_h * s * (1 - s)) / 2
+            start_y = -(h + 60) - delta_y -- guaranteed < 0 (effective visible)
+        else
+            -- Start below the bottom slots so it feels like sliding up.
+            local s = self.joker_slot_scale_bottom or 1
+            local slot_h = self.joker_slot_h or 95
+            local h = slot_h * s
+            local delta_y = (slot_h * s * (1 - s)) / 2
+            start_y = (self.joker_slot_y_bottom or 20) + h + 60 - delta_y
+        end
+
+        for i, j in ipairs(self.jokers) do
+            if j and j.VT then
+                -- Keep VT centered and sized like the final slot;
+                -- this prevents extra horizontal/scale drift during the slide.
+                if j.T then
+                    j.VT.x = j.T.x
+                    j.VT.scale = j.T.scale
+                end
+                j.VT.y = start_y
+            end
+        end
+    end
+end
+
+function Game:_joker_nearest_slot_idx(release_x)
+    local owned_count = self.jokers and #self.jokers or 0
+    if owned_count <= 0 then return 1 end
+
+    if self.jokers_on_bottom == true then
+        local s = self.joker_slot_scale_bottom or 1
+        local start_x = self.joker_slot_start_x_bottom or 0
+        local step = (self.joker_slot_w + self.joker_slot_gap) * s
+        local slot_w_scaled = self.joker_slot_w * s
+        local best_i, best_d = 1, 1e9
+        for i = 1, owned_count do
+            local cx = start_x + (i - 1) * step + slot_w_scaled / 2
+            local d = math.abs(release_x - cx)
+            if d < best_d then
+                best_d = d
+                best_i = i
+            end
+        end
+        return best_i
+    end
+
+    local best_i, best_d = 1, 1e9
+    for i = 1, owned_count do
+        local cx = self.joker_slot_start_x + (i - 1) * (self.joker_slot_w + self.joker_slot_gap) + self.joker_slot_w / 2
+        local d = math.abs(release_x - cx)
+        if d < best_d then
+            best_d = d
+            best_i = i
+        end
+    end
+    return best_i
+end
+
+function Game:try_reorder_joker_after_drag(joker_node, release_x)
+    if not joker_node or not self.jokers or not self.jokers_on_bottom then return false end
+
+    local from_idx
+    for i, j in ipairs(self.jokers) do
+        if j == joker_node then
+            from_idx = i
+            break
+        end
+    end
+    if not from_idx then return false end
+
+    local to_idx = self:_joker_nearest_slot_idx(release_x)
+    if to_idx == from_idx then return false end
+
+    local reordered = false
+    local node = table.remove(self.jokers, from_idx)
+    table.insert(self.jokers, to_idx, node)
+    reordered = true
+
+    -- Update target positions to reflect new slot order.
+    self:_apply_joker_layout()
+
+    -- Snap immediately to avoid visible overshoot beyond the bottom screen.
+    -- We only do this when the slide transition is not active.
+    if self.jokers_sliding ~= true then
+        for _, j in ipairs(self.jokers) do
+            if j and j.VT and j.T then
+                j.VT.x = j.T.x
+                j.VT.y = j.T.y
+                j.VT.scale = j.T.scale
+            end
+        end
+    end
+    return reordered
+end
+
 function Game:move_to_front(node)
     for i, n in ipairs(self.nodes) do
         if n == node then
@@ -245,6 +607,15 @@ function Game:touchreleased(id, x, y)
     local dy = y - self.touch_start_y
     local dist = math.sqrt(dx * dx + dy * dy)
     local reordered = false
+
+    -- Joker reordering (bottom screen only).
+    if released and self.jokers and self.jokers_on_bottom then
+        local rmin = self.joker_reorder_drag_threshold and self.joker_reorder_drag_threshold() or 22
+        if dist >= rmin then
+            reordered = self:try_reorder_joker_after_drag(released, x) or false
+        end
+    end
+
     if released and self.hand and self.hand.try_reorder_card_after_drag then
         local rmin = self.hand.reorder_drag_threshold and self.hand:reorder_drag_threshold() or 22
         if dist >= rmin then
@@ -346,7 +717,8 @@ function Game:set_render_settings()
             {name = "cards_1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/8BitDeck.png",px=72,py=95},
             {name = "cards_2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/8BitDeck_opt2.png",px=72,py=95},
             {name = "centers", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Enhancers.png",px=72,py=95},
-            {name = "Joker", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers.png",px=64,py=85},
+            {name = "Joker1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers1.png",px=71,py=95},
+            {name = "Joker2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers2.png",px=71,py=95},
             {name = "Tarot", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Tarots.png",px=72,py=95},
             {name = "Voucher", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Vouchers.png",px=72,py=95},
             {name = "Booster", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/boosters.png",px=72,py=95},
