@@ -378,6 +378,24 @@ function Hand:build_contained_hand_types(nodes)
     return contained
 end
 
+local function printTable(t, level, seen)
+    level = level or 0
+    seen = seen or {}
+    if type(t) == "table" then
+        if seen[t] then io.write(" {*circular*}") return end
+        seen[t] = true
+        print(string.rep("\t", level) .. "{")
+        for k, v in pairs(t) do
+            io.write(string.rep("\t", level + 1), tostring(k), " = ")
+            printTable(v, level + 1, seen)
+        end
+        print(string.rep("\t", level) .. "}")
+    else
+        print(tostring(t))
+    end
+end
+
+
 function Hand:_update_play_sequence(dt)
     local seq = self._play_sequence
     if not seq then return end
@@ -479,6 +497,12 @@ function Hand:_update_play_sequence(dt)
 
         -- Joker event: on_hand_scored
         -- Mutate ctx.chips/ctx.mult via joker effects before final score is computed.
+        local free_joker_slots = 0
+        if G then
+            local cap = tonumber(G.joker_capacity) or tonumber(G.joker_slot_count) or 0
+            local used = (type(G.jokers) == "table") and #G.jokers or 0
+            free_joker_slots = math.max(0, cap - used)
+        end
         local ctx = {
             event = "on_hand_scored",
             chips = chips,
@@ -486,11 +510,12 @@ function Hand:_update_play_sequence(dt)
             hand_index = G.selectedHand,
             hand_level = G.selectedHandLevel,
             cards = seq.cards,
+            free_joker_slots = free_joker_slots,
         }
         if G and G.emit_joker_event then
             G:emit_joker_event("on_hand_scored", ctx)
         end
-
+        printTable(ctx.cards, 0, {})
         chips = tonumber(ctx.chips) or 0
         mult = tonumber(ctx.mult) or 1
         -- Keep globals in sync so UI/debug reflect updated values.
@@ -738,6 +763,16 @@ function Hand:calculate_play()
     end
 
     local n = #ordered
+    local has_four_fingers = false
+    if G and type(G.jokers) == "table" then
+        for _, j in ipairs(G.jokers) do
+            local def = j and j.def
+            if type(def) == "table" and def.id == "j_four_fingers" then
+                has_four_fingers = true
+                break
+            end
+        end
+    end
 
     -- Collect ranks / suits (hand order); track high rank for marking high card later
     local ranks = {}
@@ -764,7 +799,10 @@ function Hand:calculate_play()
         end
     end
 
+    local min_straight_flush_cards = has_four_fingers and 4 or 5
+
     local function is_flush()
+        if n < min_straight_flush_cards then return false end
         return next(suit_counts) ~= nil and next(suit_counts, next(suit_counts)) == nil
     end
 
@@ -782,9 +820,9 @@ function Hand:calculate_play()
         if c == 3 then has_three = true end
     end
 
-    -- A 5-card straight requires five distinct ranks (no pair+).
+    -- A straight usually needs 5 cards, but Four Fingers allows 4-card straights.
     local function is_straight()
-        if n < 5 then return false end
+        if n < min_straight_flush_cards then return false end
 
         local uniq = {}
         for _, r in ipairs(ranks) do
@@ -798,24 +836,30 @@ function Hand:calculate_play()
         end
         table.sort(uniq_ranks)
 
-        if #uniq_ranks ~= 5 then return false end
+        if #uniq_ranks < min_straight_flush_cards then return false end
 
-        local is_seq = true
+        -- Need any consecutive run of required length (so 5-card straights
+        -- still work when Four Fingers lowers the requirement to 4).
+        local run_len = 1
         for i = 2, #uniq_ranks do
-            if uniq_ranks[i] ~= uniq_ranks[i - 1] + 1 then
-                is_seq = false
-                break
+            if uniq_ranks[i] == uniq_ranks[i - 1] + 1 then
+                run_len = run_len + 1
+                if run_len >= min_straight_flush_cards then
+                    return true
+                end
+            else
+                run_len = 1
             end
         end
 
-        if is_seq then return true end
-
         local hasA = uniq[14] or uniq["A"]
-        return hasA and uniq[2] and uniq[3] and uniq[4] and uniq[5]
+        local wheel5 = hasA and uniq[2] and uniq[3] and uniq[4] and uniq[5]
+        local wheel4 = hasA and uniq[2] and uniq[3] and uniq[4]
+        return wheel5 or (min_straight_flush_cards <= 4 and wheel4)
     end
 
     local flush = is_flush()
-    local straight = (n >= 5 and max_of_a_kind == 1) and is_straight()
+    local straight = is_straight()
 
     -- Determine hand according to Balatro order in globals.handlist:
     -- 1  Flush Five      (five of same rank & same suit)
@@ -871,8 +915,14 @@ function Hand:calculate_play()
         end
     else
         -- Fewer than 5 cards: fall back to best matching category we can infer
-        if max_of_a_kind >= 4 then
+        if flush and straight then
+            hand_index = 4 -- Straight Flush (Four Fingers 4-card enable)
+        elseif max_of_a_kind >= 4 then
             hand_index = 5 -- Four of a Kind (partial)
+        elseif flush then
+            hand_index = 7 -- Flush (Four Fingers 4-card enable)
+        elseif straight then
+            hand_index = 8 -- Straight (Four Fingers 4-card enable)
         elseif max_of_a_kind == 3 then
             hand_index = 9 -- Three of a Kind
         elseif pairs_count >= 2 then
