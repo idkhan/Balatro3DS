@@ -260,7 +260,14 @@ function Joker:matches_trigger(event_name, ctx)
             if ctx == nil or ctx.suit ~= extra.suit then return false end
         end
     elseif self.effect_type == "Type Mult" or self.effect_type == "Type Chips" then
-        if ctx == nil or ctx.hand_type ~= cfg.type then return false end
+        if ctx == nil then return false end
+
+        if ctx.hand_type ~= cfg.type then
+            local contains = ctx.contains_hand_types
+            if type(contains) ~= "table" or contains[cfg.type] ~= true then
+                return false
+            end
+        end
     end
 
     return true

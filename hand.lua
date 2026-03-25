@@ -333,6 +333,51 @@ function Hand:_cards_reached_play_targets(nodes)
     return true
 end
 
+--- Build a map of lower hand types contained by these cards.
+--- Example: a Flush with rank pattern 2,2,1 will contain Pair and Two Pair.
+function Hand:build_contained_hand_types(nodes)
+    local contained = {}
+    if type(nodes) ~= "table" then return contained end
+
+    local rank_counts = {}
+    local suit_counts = {}
+    local n = 0
+
+    for _, node in ipairs(nodes) do
+        local data = (node and node.card_data) or {}
+        local rank = data.rank
+        local suit = data.suit
+        if rank ~= nil then
+            rank_counts[rank] = (rank_counts[rank] or 0) + 1
+        end
+        if suit ~= nil then
+            suit_counts[suit] = (suit_counts[suit] or 0) + 1
+        end
+        n = n + 1
+    end
+
+    local pairs_count = 0
+    local max_of_a_kind = 0
+    for _, c in pairs(rank_counts) do
+        if c > max_of_a_kind then max_of_a_kind = c end
+        if c == 2 then pairs_count = pairs_count + 1 end
+    end
+
+    local suit_kinds = 0
+    for _ in pairs(suit_counts) do
+        suit_kinds = suit_kinds + 1
+    end
+    local flush = (suit_kinds == 1 and n > 0)
+
+    if pairs_count >= 1 then contained["Pair"] = true end
+    if pairs_count >= 2 then contained["Two Pair"] = true end
+    if max_of_a_kind >= 3 then contained["Three of a Kind"] = true end
+    if max_of_a_kind >= 4 then contained["Four of a Kind"] = true end
+    if flush then contained["Flush"] = true end
+
+    return contained
+end
+
 function Hand:_update_play_sequence(dt)
     local seq = self._play_sequence
     if not seq then return end
@@ -417,6 +462,7 @@ function Hand:_update_play_sequence(dt)
                 event = "hand_played",
                 hand_index = G.selectedHand,
                 hand_type = hand_type,
+                contains_hand_types = self:build_contained_hand_types(seq.cards),
                 hand_level = G.selectedHandLevel,
                 chips = chips,
                 mult = mult,
