@@ -24,6 +24,11 @@ require "topUI"
 Sfx = require "sfx"
 
 function love.load()
+    -- Decode static SFX once; avoids stutter on first play (sources stay in `Sfx` cache).
+    if Sfx and Sfx.preload_game_sounds then
+        Sfx.preload_game_sounds()
+    end
+
     G = Game()
 
     G.deck = Deck()

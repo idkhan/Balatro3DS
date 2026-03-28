@@ -185,6 +185,9 @@ function Joker:draw()
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         local mag = SHAKE_MAGNITUDE * (self.scoring_shake_timer / SHAKE_MAX_DURATION)
         local t = love.timer.getTime()
+        if self.scoring_shake_t0 then
+            t = t - self.scoring_shake_t0
+        end
         draw_x = draw_x + math.sin(t * 85) * mag
         draw_y = draw_y + math.cos(t * 73) * mag * 0.65
     end
@@ -219,6 +222,7 @@ function Joker:update(dt)
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         self.scoring_shake_timer = self.scoring_shake_timer - dt
         if self.scoring_shake_timer < 0 then self.scoring_shake_timer = 0 end
+        if self.scoring_shake_timer <= 0 then self.scoring_shake_t0 = nil end
     end
 end
 
@@ -228,6 +232,11 @@ end
 function Joker:matches_trigger(event_name, ctx)
     local tc = self.trigger_condition
     if type(tc) ~= "table" then tc = {} end
+
+    -- Passive, do nothing
+    if self.effect_type == "Hand card double" then
+        return false
+    end
 
     -- If we can't interpret the joker as a data-driven effect, fall back to the old trigger_condition behavior.
     if self.effect_type == nil then
@@ -296,10 +305,12 @@ function Joker:apply_effect(ctx)
 
     -- Visual feedback: shake when this joker actually triggers.
     self.scoring_shake_timer = SHAKE_MAX_DURATION
+    self.scoring_shake_t0 = love.timer.getTime()
 
     if self.effect_type == "Mult" then
         local amount = tonumber(cfg.mult) or 0
         ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     elseif self.effect_type == "Chips" then
         local amount = tonumber(cfg.chips) or 0
         ctx.chips = (tonumber(ctx.chips) or 0) + amount
@@ -307,6 +318,7 @@ function Joker:apply_effect(ctx)
         local extra = type(cfg.extra) == "table" and cfg.extra or {}
         local amount = tonumber(extra.s_mult) or 0
         ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     elseif self.effect_type == "Suit Chips" then
         local extra = type(cfg.extra) == "table" and cfg.extra or {}
         local amount = tonumber(extra.s_chips) or 0
@@ -314,6 +326,7 @@ function Joker:apply_effect(ctx)
     elseif self.effect_type == "Type Mult" then
         local amount = tonumber(cfg.t_mult) or 0
         ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     elseif self.effect_type == "Type Chips" then
         local amount = tonumber(cfg.t_chips) or 0
         ctx.chips = (tonumber(ctx.chips) or 0) + amount
@@ -321,10 +334,12 @@ function Joker:apply_effect(ctx)
         local extra = type(cfg.extra) == "table" and cfg.extra or {}
         local amount = tonumber(extra.mult) or tonumber(cfg.mult) or 0
         ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     elseif self.effect_type == "Stencil Mult" then
         local free_slots = tonumber(ctx.free_joker_slots) or 0
         local factor = free_slots + 1
         ctx.mult = (tonumber(ctx.mult) or 0) * factor
+        Sfx.play_mult2()
     end
 end
 

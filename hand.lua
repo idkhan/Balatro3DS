@@ -40,7 +40,7 @@ end
 
 function Hand:play_sfx_trigger()
     Sfx.play("resources/sounds/generic1.ogg")
-    Sfx.play_random("resources/sounds/chips1.ogg", "resources/sounds/chips2.ogg")
+    Sfx.play_chips()
 end
 
 function Hand:is_scoring_active()
@@ -254,6 +254,17 @@ end
 --- Internal discard used after play sequence (or directly when not scoring).
 function Hand:_discard_selected_impl()
     if #self.selected == 0 or not self.game then return end
+    local deck = self.game.deck
+    if deck and deck.push_discard then
+        for _, node in ipairs(self.selected) do
+            for i, n in ipairs(self.card_nodes) do
+                if n == node then
+                    deck:push_discard(self.cards[i])
+                    break
+                end
+            end
+        end
+    end
     local selected_set = {}
     for _, n in ipairs(self.selected) do selected_set[n] = true end
     local new_cards, new_nodes = {}, {}
@@ -280,6 +291,89 @@ function Hand:_discard_selected_impl()
     end
     self:fill_from_deck()
     self:calculate_play()
+end
+
+--- Insert a duplicate of the card at index (shallow copy of card data). Returns the new Card node or nil.
+---@param index integer
+---@return Card|nil
+function Hand:duplicate_card_at_index(index)
+    if not self.game then return nil end
+    local cd = self.cards[index]
+    if not cd then return nil end
+    local copy = Deck.copy_card_data(cd)
+    if not copy then return nil end
+    return self:add_card(copy)
+end
+
+--- Create a new hand card from logical `card_data` (rank/suit/extras). Returns the new `Card` node or nil if full.
+---@param card_data table
+---@return Card|nil
+function Hand:create_card(card_data)
+    return self:add_card(card_data)
+end
+
+--- Destroy a hand card: removed from the game entirely (no discard pile). Use `discard_card_at_index` to send to the discard pile instead.
+---@param index integer
+---@return boolean
+function Hand:destroy_card_at_index(index)
+    return self:remove_card_at_index(index)
+end
+
+--- Same as `destroy_card_at_index`, but by `Card` node reference.
+---@param node Card|nil
+---@return boolean
+function Hand:destroy_card_node(node)
+    if not node then return false end
+    for i, n in ipairs(self.card_nodes) do
+        if n == node then
+            return self:remove_card_at_index(i)
+        end
+    end
+    return false
+end
+
+--- Send one hand card to the discard pile, then remove it from the hand (same logical outcome as discarding). Destroy/break effects must use `destroy_card_*` instead.
+---@param index integer
+---@return boolean
+function Hand:discard_card_at_index(index)
+    if not self.game then return false end
+    local deck = self.game.deck
+    local cd = self.cards[index]
+    if not cd then return false end
+    if deck and deck.push_discard then
+        deck:push_discard(cd)
+    end
+    return self:remove_card_at_index(index)
+end
+
+--- Remove a card from the hand by index without sending it to the discard pile (destroyed / gone from the run).
+---@param index integer
+---@return boolean
+function Hand:remove_card_at_index(index)
+    if not self.game then return false end
+    local node = self.card_nodes[index]
+    local cd = self.cards[index]
+    if not node or not cd then return false end
+
+    for i, sel in ipairs(self.selected) do
+        if sel == node then
+            table.remove(self.selected, i)
+            break
+        end
+    end
+    node.selected = false
+    self.game:remove(node)
+    table.remove(self.cards, index)
+    table.remove(self.card_nodes, index)
+    if self.game.active_tooltip_card == node then
+        self.game.active_tooltip_card = nil
+    end
+    self:layout(false)
+    if self.game.restore_hand_draw_order then
+        self.game:restore_hand_draw_order()
+    end
+    self:calculate_play()
+    return true
 end
 
 --- Lay out played cards in a horizontal row near the vertical center of the bottom screen.
@@ -420,13 +514,23 @@ function Hand:_update_play_sequence(dt)
             local node = seq.cards[seq.idx]
             local score_this = node and node.counts_for_play_score
 
-            -- Joker event: card_played (only for scored cards).
-            -- "A card being scored" means `counts_for_play_score == true`.
+            -- Scoring order for each scored card: base chips → card `card_played` enhancements → jokers `card_played`.
             if node and score_this == true then
+                node.scoring_shake_timer = PLAY_SHAKE_DURATION
+                node.scoring_shake_t0 = love.timer.getTime()
+                self:play_sfx_trigger()
+                local chips, mult = self:accumulate_card_score(
+                    tonumber(G.selectedHandChips) or 0,
+                    tonumber(G.selectedHandMult) or 1,
+                    node
+                )
+                G.selectedHandChips = chips
+                G.selectedHandMult = mult
+
                 local data = (node and node.card_data) or {}
-                local chips = tonumber(G.selectedHandChips) or 0
-                local mult = tonumber(G.selectedHandMult) or 1
-                local ctx = {
+                chips = tonumber(G.selectedHandChips) or 0
+                mult = tonumber(G.selectedHandMult) or 1
+                local card_ctx = {
                     event = "card_played",
                     rank = data.rank,
                     suit = data.suit,
@@ -436,97 +540,214 @@ function Hand:_update_play_sequence(dt)
                     hand_level = G.selectedHandLevel,
                     card_node = node,
                 }
-                if G and G.emit_joker_event then
-                    G:emit_joker_event("card_played", ctx)
-                    chips = tonumber(ctx.chips) or chips
-                    mult = tonumber(ctx.mult) or mult
-                    G.selectedHandChips = chips
-                    G.selectedHandMult = mult
+                if node.emit_hand_event then
+                    node:emit_hand_event("card_played", card_ctx)
                 end
-            end
-
-            if node and score_this then
-                node.scoring_shake_timer = PLAY_SHAKE_DURATION
-                self:play_sfx_trigger()
-                local chips, mult = self:accumulate_card_score(
-                    tonumber(G.selectedHandChips) or 0,
-                    tonumber(G.selectedHandMult) or 1,
-                    node
-                )
+                chips = tonumber(card_ctx.chips) or chips
+                mult = tonumber(card_ctx.mult) or mult
                 G.selectedHandChips = chips
                 G.selectedHandMult = mult
+
+                if card_ctx.glass_broken_node == node then
+                    card_ctx.glass_broken_node = nil
+                    self:destroy_card_node(node)
+                end
+
+                local jctx = {
+                    event = "card_played",
+                    rank = data.rank,
+                    suit = data.suit,
+                    chips = tonumber(G.selectedHandChips) or 0,
+                    mult = tonumber(G.selectedHandMult) or 1,
+                    hand_index = G.selectedHand,
+                    hand_level = G.selectedHandLevel,
+                    card_node = node,
+                }
+                if G and G.begin_joker_emit and G:begin_joker_emit("card_played", jctx) then
+                    seq.phase = "wait_jokers"
+                    seq.joker_wait_resume = { phase = "trigger", bump_trigger_wait = true }
+                elseif G and G.emit_joker_event then
+                    G:emit_joker_event("card_played", jctx)
+                    G.selectedHandChips = tonumber(jctx.chips) or G.selectedHandChips
+                    G.selectedHandMult = tonumber(jctx.mult) or G.selectedHandMult
+                end
             end
-            seq.trigger_wait = seq.trigger_wait + PLAY_TRIGGER_INTERVAL
+            if seq.phase == "trigger" then
+                seq.trigger_wait = seq.trigger_wait + PLAY_TRIGGER_INTERVAL
+            end
         end
-        if seq.idx >= #seq.cards then
-            seq.phase = "finalize"
+        if seq.phase == "trigger" and seq.idx >= #seq.cards then
+            seq.phase = "inhand_trigger"
             seq.timer = 0
+        end
+    elseif seq.phase == "wait_jokers" then
+        if G and G.joker_emit_busy and G:joker_emit_busy() then
+            -- Stagger runs in `Game:update` (`_update_joker_emit_queue`).
+        else
+            local r = seq.joker_wait_resume
+            seq.joker_wait_resume = nil
+            if r and r.phase == "trigger" then
+                seq.phase = "trigger"
+                if r.bump_trigger_wait then
+                    seq.trigger_wait = (seq.trigger_wait or 0) + PLAY_TRIGGER_INTERVAL
+                end
+            elseif r and r.phase == "finalize" then
+                seq.phase = "finalize"
+                seq.finalize_step = r.finalize_step
+                seq.timer = 0
+            end
+        end
+    elseif seq.phase == "inhand_trigger" then
+        -- After played cards finish triggering, notify cards still held (staggered like play triggers).
+        if not seq.inhand_queue then
+            local played = {}
+            for _, n in ipairs(seq.cards) do
+                played[n] = true
+            end
+            seq.inhand_queue = {}
+            for _, node in ipairs(self.card_nodes or {}) do
+                if not played[node] and node.matches_trigger and node:matches_trigger("held_in_hand") then
+                    table.insert(seq.inhand_queue, node)
+                end
+            end
+            table.sort(seq.inhand_queue, function(a, b)
+                local ax = (a.VT and a.VT.x) or (a.T and a.T.x) or 0
+                local bx = (b.VT and b.VT.x) or (b.T and b.T.x) or 0
+                return ax < bx
+            end)
+            seq.inhand_i = 0
+            seq.inhand_wait = 0
+        end
+        seq.inhand_wait = (seq.inhand_wait or 0) - dt
+        local chips = tonumber(G and G.selectedHandChips) or 0
+        local mult = tonumber(G and G.selectedHandMult) or 1
+        local ctx = {
+            event = "inhand_trigger",
+            hand_index = G and G.selectedHand,
+            hand_level = G and G.selectedHandLevel,
+            chips = chips,
+            mult = mult,
+            played_cards = seq.cards,
+        }
+        local q = seq.inhand_queue or {}
+        if seq.inhand_wait <= 0 then
+            if seq.inhand_i < #q then
+                seq.inhand_i = seq.inhand_i + 1
+                local node = q[seq.inhand_i]
+                ctx.chips = tonumber(G.selectedHandChips) or ctx.chips
+                ctx.mult = tonumber(G.selectedHandMult) or ctx.mult
+                if node and node.emit_hand_event then
+                    node:emit_hand_event("held_in_hand", ctx)
+                end
+                G.selectedHandChips = tonumber(ctx.chips) or G.selectedHandChips
+                G.selectedHandMult = tonumber(ctx.mult) or G.selectedHandMult
+                if seq.inhand_i < #q then
+                    seq.inhand_wait = PLAY_TRIGGER_INTERVAL
+                end
+            end
+            if seq.inhand_i >= #q then
+                local mime_repeat = (seq.inhand_mime_repeats_left or 0) > 0
+                if mime_repeat then
+                    seq.inhand_mime_repeats_left = seq.inhand_mime_repeats_left - 1
+                end
+                seq.inhand_queue = nil
+                seq.inhand_i = nil
+                seq.inhand_wait = nil
+                if mime_repeat then
+                    -- Stay in `inhand_trigger`; queue rebuilds on next tick.
+                else
+                    seq.phase = "finalize"
+                    seq.timer = 0
+                    seq.finalize_step = nil
+                end
+            end
         end
     elseif seq.phase == "finalize" then
         local chips = tonumber(G.selectedHandChips) or 0
         local mult = tonumber(G.selectedHandMult) or 1
 
-        -- Joker event: hand_played (after all cards are processed).
-        if seq._hand_played_emitted ~= true then
-            seq._hand_played_emitted = true
+        if seq.finalize_step == nil then
+            seq.finalize_step = 1
+        end
 
-            local hand_type = nil
-            if G and G.handlist and G.selectedHand and G.handlist[G.selectedHand] then
-                hand_type = G.handlist[G.selectedHand]
+        -- Step 1: hand_played jokers (staggered, left-to-right).
+        if seq.finalize_step == 1 then
+            if seq._hand_played_emitted ~= true then
+                seq._hand_played_emitted = true
+
+                local hand_type = nil
+                if G and G.handlist and G.selectedHand and G.handlist[G.selectedHand] then
+                    hand_type = G.handlist[G.selectedHand]
+                end
+                hand_type = hand_type or tostring(G.selectedHand or "unknown")
+
+                local ctx = {
+                    event = "hand_played",
+                    hand_index = G.selectedHand,
+                    hand_type = hand_type,
+                    contains_hand_types = self:build_contained_hand_types(seq.cards),
+                    hand_level = G.selectedHandLevel,
+                    chips = chips,
+                    mult = mult,
+                    cards = seq.cards,
+                }
+                if G and G.begin_joker_emit and G:begin_joker_emit("hand_played", ctx) then
+                    seq.phase = "wait_jokers"
+                    seq.joker_wait_resume = { phase = "finalize", finalize_step = 2 }
+                    seq.timer = 0
+                    return
+                elseif G and G.emit_joker_event then
+                    G:emit_joker_event("hand_played", ctx)
+                    G.selectedHandChips = tonumber(ctx.chips) or G.selectedHandChips
+                    G.selectedHandMult = tonumber(ctx.mult) or G.selectedHandMult
+                end
             end
-            hand_type = hand_type or tostring(G.selectedHand or "unknown")
+            seq.finalize_step = 2
+        end
 
+        -- Step 2: on_hand_scored jokers (uses chips/mult after hand_played).
+        if seq.finalize_step == 2 then
+            chips = tonumber(G.selectedHandChips) or 0
+            mult = tonumber(G.selectedHandMult) or 1
+            local free_joker_slots = 0
+            if G then
+                local cap = tonumber(G.joker_capacity) or tonumber(G.joker_slot_count) or 0
+                local used = (type(G.jokers) == "table") and #G.jokers or 0
+                free_joker_slots = math.max(0, cap - used)
+            end
             local ctx = {
-                event = "hand_played",
-                hand_index = G.selectedHand,
-                hand_type = hand_type,
-                contains_hand_types = self:build_contained_hand_types(seq.cards),
-                hand_level = G.selectedHandLevel,
+                event = "on_hand_scored",
                 chips = chips,
                 mult = mult,
+                hand_index = G.selectedHand,
+                hand_level = G.selectedHandLevel,
                 cards = seq.cards,
+                free_joker_slots = free_joker_slots,
             }
-            if G and G.emit_joker_event then
-                G:emit_joker_event("hand_played", ctx)
-                chips = tonumber(ctx.chips) or chips
-                mult = tonumber(ctx.mult) or mult
-                G.selectedHandChips = chips
-                G.selectedHandMult = mult
+            if G and G.begin_joker_emit and G:begin_joker_emit("on_hand_scored", ctx) then
+                seq.phase = "wait_jokers"
+                seq.joker_wait_resume = { phase = "finalize", finalize_step = 3 }
+                seq.timer = 0
+                return
+            elseif G and G.emit_joker_event then
+                G:emit_joker_event("on_hand_scored", ctx)
             end
+            seq.finalize_step = 3
         end
 
-        -- Joker event: on_hand_scored
-        -- Mutate ctx.chips/ctx.mult via joker effects before final score is computed.
-        local free_joker_slots = 0
-        if G then
-            local cap = tonumber(G.joker_capacity) or tonumber(G.joker_slot_count) or 0
-            local used = (type(G.jokers) == "table") and #G.jokers or 0
-            free_joker_slots = math.max(0, cap - used)
-        end
-        local ctx = {
-            event = "on_hand_scored",
-            chips = chips,
-            mult = mult,
-            hand_index = G.selectedHand,
-            hand_level = G.selectedHandLevel,
-            cards = seq.cards,
-            free_joker_slots = free_joker_slots,
-        }
-        if G and G.emit_joker_event then
-            G:emit_joker_event("on_hand_scored", ctx)
-        end
-        printTable(ctx.cards, 0, {})
-        chips = tonumber(ctx.chips) or 0
-        mult = tonumber(ctx.mult) or 1
-        -- Keep globals in sync so UI/debug reflect updated values.
-        G.selectedHandChips = chips
-        G.selectedHandMult = mult
+        -- Step 3: final score.
+        if seq.finalize_step == 3 then
+            chips = tonumber(G.selectedHandChips) or 0
+            mult = tonumber(G.selectedHandMult) or 1
+            G.selectedHandChips = chips
+            G.selectedHandMult = mult
 
-        local final_score = math.floor(chips * mult)
-        G.last_hand_score = final_score
-        G.round_score = (G.round_score or 0) + final_score
-        seq.phase = "discard_wait"
-        seq.timer = 0
+            local final_score = math.floor(chips * mult)
+            G.last_hand_score = final_score
+            G.round_score = (G.round_score or 0) + final_score
+            seq.phase = "discard_wait"
+            seq.timer = 0
+        end
     elseif seq.phase == "discard_wait" then
         if seq.timer >= PLAY_AFTER_SCORE_PAUSE then
             for _, node in ipairs(seq.cards) do
@@ -676,6 +897,8 @@ function Hand:play_selected()
         phase = "move_center",
         timer = 0,
         cards = cards,
+        -- Mime Joker: run `inhand_trigger` twice (first pass + one repeat).
+        inhand_mime_repeats_left = self:hasJoker("j_mime") and 1 or 0,
     }
 
     self:layout_play_cards_at_center(cards)
@@ -732,6 +955,18 @@ function Hand:sort_by_suit(layout_skip_vt_node)
     end
 end
 
+function Hand:hasJoker(joker_id)
+    if G and type(G.jokers) == "table" then
+        for _, j in ipairs(G.jokers) do
+            local def = j and j.def
+            if type(def) == "table" and def.id == joker_id then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 function Hand:calculate_play()
     local n_sel = #self.selected
     if n_sel == 0 then
@@ -764,14 +999,8 @@ function Hand:calculate_play()
 
     local n = #ordered
     local has_four_fingers = false
-    if G and type(G.jokers) == "table" then
-        for _, j in ipairs(G.jokers) do
-            local def = j and j.def
-            if type(def) == "table" and def.id == "j_four_fingers" then
-                has_four_fingers = true
-                break
-            end
-        end
+    if self:hasJoker("j_four_fingers") then
+        has_four_fingers = true
     end
 
     -- Collect ranks / suits (hand order); track high rank for marking high card later

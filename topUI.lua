@@ -157,7 +157,7 @@ function TopUI.draw()
     TopUI.LabeledField("Discards", value, fieldsPositionX + fieldWidth + padding, fieldsPositionY, fieldWidth, fieldHeight, G.C.RED)
     TopUI.LabeledField("Ante", value, fieldsPositionX + (fieldWidth + padding) * 2, fieldsPositionY, fieldWidth, fieldHeight, G.C.ORANGE)
     TopUI.LabeledField("Round", value, fieldsPositionX + (fieldWidth + padding) * 2, fieldsPositionY + fieldHeight + padding, fieldWidth, fieldHeight, G.C.RED)
-    TopUI.LabeledField("", value, fieldsPositionX, fieldsPositionY + fieldHeight + padding, fieldWidth * 2 + padding, fieldHeight, G.C.MONEY)
+    TopUI.LabeledField("", tostring(G.money), fieldsPositionX, fieldsPositionY + fieldHeight + padding, fieldWidth * 2 + padding, fieldHeight, G.C.MONEY)
 
     -- Joker panel behind all jokers (shown only when jokers are on the top screen).
     local capacity = (G and G.joker_capacity) or (G and #G.jokers) or 0

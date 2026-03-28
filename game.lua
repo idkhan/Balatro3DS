@@ -18,9 +18,16 @@ function Game:init(seed)
     self.active_tooltip_card = nil
     self.round_score = 0
     self.last_hand_score = 0
+    --- Run currency
+    self.money = 0
     self._collidables_buf = {}
     self._gc_timer = 0
     self._gc_discarded_nodes = 0
+    --- Staggered joker resolution (left-to-right); see `begin_joker_emit` / `_update_joker_emit_queue`.
+    self._joker_emit_queue = nil
+    self._joker_emit_next = 1
+    self._joker_emit_timer = 0
+    self.JOKER_EMIT_INTERVAL = 0.18
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
@@ -102,6 +109,7 @@ function Game:draw()
 end
 
 function Game:update(dt)
+    self:_update_joker_emit_queue(dt)
     for _, node in ipairs(self.nodes) do
         if node.update then
             node:update(dt)
@@ -319,16 +327,21 @@ function Game:init_jokers()
         end
     end
 
-    -- Fisher–Yates shuffle
-    for i = #pool, 2, -1 do
-        local j = math.random(i)
-        pool[i], pool[j] = pool[j], pool[i]
-    end
+    -- -- Fisher–Yates shuffle
+    -- for i = #pool, 2, -1 do
+    --     local j = math.random(i)
+    --     pool[i], pool[j] = pool[j], pool[i]
+    -- end
 
-    local want = math.min(self.joker_capacity or 0, #pool)
-    for i = 1, want do
-        self:add_joker_by_def(pool[i])
-    end
+    -- local want = math.min(self.joker_capacity or 0, #pool)
+    -- for i = 1, want do
+    --     self:add_joker_by_def(pool[i])
+    -- end
+    self:add_joker_by_def("j_mime")
+    self:add_joker_by_def("j_greedy_joker")
+    self:add_joker_by_def("j_lusty_joker")
+    self:add_joker_by_def("j_wrathful_joker")
+    self:add_joker_by_def("j_gluttenous_joker")
 end
 
 ---Add an owned Joker by definition id.
@@ -425,6 +438,30 @@ function Game:sync_jokers_interactivity()
     end
 end
 
+--- Jokers in slot order (left-to-right) that match `event_name` and have `apply_effect`.
+---@param event_name string
+---@param ctx table
+---@return table[]
+function Game:collect_matching_jokers(event_name, ctx)
+    local out = {}
+    if not self.jokers or type(self.jokers) ~= "table" then return out end
+    if type(event_name) ~= "string" or event_name == "" then return out end
+    if type(ctx) ~= "table" then ctx = {} end
+
+    for _, j in ipairs(self.jokers) do
+        if j and j.matches_trigger and j:matches_trigger(event_name, ctx) and j.apply_effect then
+            table.insert(out, j)
+        end
+    end
+    -- Resolve left-to-right on screen (array order can diverge after drag-reorder).
+    table.sort(out, function(a, b)
+        local ax = (a.T and a.T.x) or (a.VT and a.VT.x) or 0
+        local bx = (b.T and b.T.x) or (b.VT and b.VT.x) or 0
+        return ax < bx
+    end)
+    return out
+end
+
 ---Emit a joker event to all jokers and apply their effects to the context.
 ---`ctx` is a mutable table that joker effects can update (e.g. ctx.chips/ctx.mult).
 ---@param event_name string
@@ -440,6 +477,75 @@ function Game:emit_joker_event(event_name, ctx)
                 j:apply_effect(ctx)
             end
         end
+    end
+end
+
+function Game:_sync_joker_ctx(ctx)
+    if type(ctx) ~= "table" then return end
+    self.selectedHandChips = tonumber(ctx.chips) or self.selectedHandChips
+    self.selectedHandMult = tonumber(ctx.mult) or self.selectedHandMult
+end
+
+--- True while a staggered joker batch (from `begin_joker_emit`) is still resolving.
+function Game:joker_emit_busy()
+    return self._joker_emit_queue ~= nil
+end
+
+--- Apply one joker from the stagger queue and sync chips/mult to `G`.
+function Game:_apply_one_joker_emit()
+    local q = self._joker_emit_queue
+    if not q or type(q.list) ~= "table" then
+        self._joker_emit_queue = nil
+        self._joker_emit_timer = 0
+        return
+    end
+    local j = q.list[self._joker_emit_next]
+    if j and j.apply_effect then
+        j:apply_effect(q.ctx)
+    end
+    self:_sync_joker_ctx(q.ctx)
+    self._joker_emit_next = self._joker_emit_next + 1
+    if self._joker_emit_next > #q.list then
+        self._joker_emit_queue = nil
+        self._joker_emit_timer = 0
+    end
+end
+
+--- Resolve matching jokers left-to-right with a delay between each trigger (first applies immediately).
+--- Returns true if any joker was queued (caller should wait until `joker_emit_busy()` is false).
+---@param event_name string
+---@param ctx table|nil
+---@return boolean
+function Game:begin_joker_emit(event_name, ctx)
+    local list = self:collect_matching_jokers(event_name, ctx)
+    if #list == 0 then return false end
+    if type(ctx) ~= "table" then ctx = {} end
+    self._joker_emit_queue = { list = list, ctx = ctx }
+    self._joker_emit_next = 1
+    self._joker_emit_timer = 0
+    self:_apply_one_joker_emit()
+    return true
+end
+
+function Game:_update_joker_emit_queue(dt)
+    if not self._joker_emit_queue then return end
+    self._joker_emit_timer = self._joker_emit_timer + dt
+    local interval = tonumber(self.JOKER_EMIT_INTERVAL) or 0.18
+    if self._joker_emit_timer >= interval then
+        self._joker_emit_timer = 0
+        self:_apply_one_joker_emit()
+    end
+end
+
+--- End Round — call once when the current round finishes (e.g. blind beaten).
+--- Shuffles the discard pile into the draw pile so the next round draws from a full recycled deck.
+function Game:end_round()
+    local deck = self.deck
+    if deck and deck.end_round then
+        deck:end_round()
+    end
+    if self.hand and self.hand.fill_from_deck then
+        self.hand:fill_from_deck()
     end
 end
 
