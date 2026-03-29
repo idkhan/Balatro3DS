@@ -30,12 +30,7 @@ function love.load()
     end
 
     G = Game()
-
-    G.deck = Deck()
-    G.deck:shuffle()
-
-    G.hand = Hand(G)
-    G.hand:fill_from_deck()
+    G:initialize_run_loop()
 
     G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
     if G.music then
@@ -67,24 +62,55 @@ function love.keypressed(key)
     if key == "f1" then
         if G then G.DEBUG = not G.DEBUG end
     end
-    if key == "e" and G and G.hand then
+    if not G then return end
+    if G.STATE == G.STATES.BLIND_SELECT then
+        if key == "left" then G:move_blind_select_cursor(-1) end
+        if key == "right" then G:move_blind_select_cursor(1) end
+        if key == ";" or key == "return" or key == "space" then
+            G:start_selected_blind()
+        end
+        return
+    end
+    if G.STATE == G.STATES.SHOP then
+        if key == "left" then
+            G.shop_offer_cursor = math.max(1, (G.shop_offer_cursor or 1) - 1)
+        elseif key == "right" then
+            G.shop_offer_cursor = math.min(#(G.shop_offers or {}), (G.shop_offer_cursor or 1) + 1)
+        elseif key == "up" then
+            G.shop_sell_cursor = math.max(1, (G.shop_sell_cursor or 1) - 1)
+        elseif key == "down" then
+            G.shop_sell_cursor = math.min(#(G.jokers or {}), (G.shop_sell_cursor or 1) + 1)
+        elseif key == "x" then
+            G:buy_shop_joker(G.shop_offer_cursor or 1)
+        elseif key == "c" then
+            G:sell_owned_joker(G.shop_sell_cursor or 1)
+        elseif key == ";" or key == "return" or key == "space" then
+            G:continue_from_shop()
+        end
+        return
+    end
+    if G.STATE ~= G.STATES.SELECTING_HAND then
+        return
+    end
+
+    if key == "e" and G.hand then
         G.hand:sort_by_rank()
     end
-    if key == "r" and G and G.hand then
+    if key == "r" and G.hand then
         G.hand:sort_by_suit()
     end
-    if (key == "l") and G and G.hand then
+    if (key == "l") and G.hand then
         if G.hand:has_selection() then G.hand:discard_selected() end
     end
-    if (key == ";") and G and G.hand then
+    if (key == ";") and G.hand then
         if G.hand:has_selection() then G.hand:play_selected() end
     end
-    if key == "x" and G and G.deck and G.hand and not G.deck:empty() and not G.hand:is_full() then
+    if key == "x" and G.deck and G.hand and not G.deck:empty() and not G.hand:is_full() then
         local card = G.deck:draw()
         if card then G.hand:add_card(card) end
     end
 
-    if G and G.set_jokers_location then
+    if G.set_jokers_location then
         if key == "up" then
             G:set_jokers_location(true)
             return
@@ -101,8 +127,39 @@ function love.gamepadpressed(_, button)
         G.DEBUG = not G.DEBUG
     end
 
+    if not G then return end
+    if G.STATE == G.STATES.BLIND_SELECT then
+        if button == "dpleft" then G:move_blind_select_cursor(-1) end
+        if button == "dpright" then G:move_blind_select_cursor(1) end
+        if button == "y" or button == "a" then
+            G:start_selected_blind()
+        end
+        return
+    end
+    if G.STATE == G.STATES.SHOP then
+        if button == "dpleft" then
+            G.shop_offer_cursor = math.max(1, (G.shop_offer_cursor or 1) - 1)
+        elseif button == "dpright" then
+            G.shop_offer_cursor = math.min(#(G.shop_offers or {}), (G.shop_offer_cursor or 1) + 1)
+        elseif button == "dpup" then
+            G.shop_sell_cursor = math.max(1, (G.shop_sell_cursor or 1) - 1)
+        elseif button == "dpdown" then
+            G.shop_sell_cursor = math.min(#(G.jokers or {}), (G.shop_sell_cursor or 1) + 1)
+        elseif button == "x" then
+            G:buy_shop_joker(G.shop_offer_cursor or 1)
+        elseif button == "leftshoulder" then
+            G:sell_owned_joker(G.shop_sell_cursor or 1)
+        elseif button == "y" or button == "a" then
+            G:continue_from_shop()
+        end
+        return
+    end
+    if G.STATE ~= G.STATES.SELECTING_HAND then
+        return
+    end
+
     -- Bring jokers down to bottom screen for touch interaction.
-    if G and G.set_jokers_location then
+    if G.set_jokers_location then
         if button == "dpup" or button == "up" then
             G:set_jokers_location(true)
             return

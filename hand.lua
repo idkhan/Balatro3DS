@@ -196,6 +196,22 @@ function Hand:clear()
     self._play_sequence = nil
 end
 
+--- Push every card still in the hand (and queued draws) to the deck discard pile, then clear hand nodes. Used when a blind is beaten.
+function Hand:send_entire_hand_to_discard_pile()
+    local deck = self.game and self.game.deck
+    if not deck or not deck.push_discard then
+        self:clear()
+        return
+    end
+    for _, c in ipairs(self._draw_queue or {}) do
+        deck:push_discard(c)
+    end
+    for i = 1, #self.cards do
+        deck:push_discard(self.cards[i])
+    end
+    self:clear()
+end
+
 --- Selected cards in left-to-right hand order (card_nodes index), not toggle order.
 function Hand:ordered_selected_nodes()
     local sel = {}
@@ -727,6 +743,9 @@ function Hand:_update_play_sequence(dt)
             end
             self._play_sequence = nil
             self:_discard_selected_impl()
+            if G and G.evaluate_blind_progress then
+                G:evaluate_blind_progress()
+            end
         end
     end
 end

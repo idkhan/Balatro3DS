@@ -32,8 +32,44 @@ function draw_rect_with_shadow(x, y, w, h, radius, padding, color, shadowColor, 
 end
 
 function TopUI.draw()
-    panelHeight = 104;
-    panelY = 4;
+    local panelHeight = 104
+    local panelY = 4
+    local is_blind_select = (G.STATE == G.STATES.BLIND_SELECT)
+    local blind_def = nil
+    if G and G.get_blind_def then
+        if G.STATE == G.STATES.SELECTING_HAND then
+            blind_def = G:get_blind_def(G.current_blind_index or 1)
+        else
+            blind_def = G:get_preview_blind()
+        end
+    end
+    local blind_index = G.selected_blind_index or G.current_blind_index or 1
+    if G.STATE == G.STATES.SELECTING_HAND then
+        blind_index = G.current_blind_index or blind_index
+    end
+    local blind_name = (G.get_blind_display_name and G:get_blind_display_name(blind_index)) or ((blind_def and blind_def.name) or (G.current_blind_name or "Blind"))
+    
+    local blind_target = tonumber(G.current_blind_target) or 0
+    if G.STATE == G.STATES.BLIND_SELECT and G.get_blind_target then
+        blind_target = G:get_blind_target(G.selected_blind_index or G.current_blind_index or 1, G.ante)
+    end
+    local blind_reward = tonumber(G.current_blind_reward) or 0
+    if G.STATE == G.STATES.BLIND_SELECT and blind_def then
+        blind_reward = tonumber(blind_def.reward) or blind_reward
+        if blind_def.id == "boss" and G.get_boss_blind_prototype then
+            local proto = G:get_boss_blind_prototype()
+            blind_reward = tonumber(proto and proto.dollars) or blind_reward
+        end
+    end
+    local blind_key = (blind_def and blind_def.key) or "Big"
+    local blind_color = G.C.BLIND_COLORS.Big
+    if not is_blind_select then
+        blind_color = (G.get_blind_color and G:get_blind_color(blind_index)) or G.C.BLIND_COLORS.Big
+    end
+    local blind_dark = is_blind_select and G.C.BLIND_COLORS.BigDark
+        or (G.C.BLIND_COLORS[blind_key .. "Dark"] or G.C.BLIND_COLORS.BigDark)
+    local blind_sign = blind_dark
+
     -- Panel
     love.graphics.setColor(G.C.PANEL)
     love.graphics.rectangle("fill", 0, panelY, 400, panelHeight)
@@ -42,49 +78,64 @@ function TopUI.draw()
     love.graphics.rectangle("line", 0, panelY, 401, panelHeight)
 
     -- Title
-    titlePosX = 2;
-    titlePosY = 5 + panelY;
-    titleHeight = 90;
-    titleWidth = 120;
+    local titlePosX = 2
+    local titlePosY = 5 + panelY
+    local titleHeight = 90
+    local titleWidth = 120
     love.graphics.setColor(G.C.BLOCK.SHADOW)
     local ix, iy, iw, ih = draw_rect_with_shadow(titlePosX, titlePosY, titleWidth, titleHeight , 4, 2, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2)
 
     -- Blind
-    blindPosX, blindPosY = ix, iy
-    blindWidth, blindHeight = iw, math.floor((ih/4) - 1)
-    ix, iy, iw, ih = draw_rect_with_shadow(blindPosX, blindPosY, blindWidth, blindHeight, 4, 4, G.C.BLIND_COLORS.Big, G.C.BLIND_COLORS.BigDark, 2)
+    local blindPosX, blindPosY = ix, iy
+    local blindWidth, blindHeight = iw, math.floor((ih/4) - 1)
+    ix, iy, iw, ih = draw_rect_with_shadow(blindPosX, blindPosY, blindWidth, blindHeight, 4, 4, blind_color, blind_dark, 2)
     
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
-    TopUI.center_text("Big Blind", ix, iy -2, iw, ih)
+    if not is_blind_select then
+        TopUI.center_text(blind_name, ix, iy -2, iw, ih)
+    else 
+        TopUI.center_text("Choose blind", ix, iy -2, iw, ih)
+    end
 
     -- Score Requirements Box
-    love.graphics.setColor(G.C.BLIND_COLORS.BigSign)
+    love.graphics.setColor(blind_sign)
     ix, iy, iw, ih = draw_rounded_rect(blindPosX, blindPosY + blindHeight + 4, blindWidth, blindHeight * 3, 4, 4, "fill")
+    local score_box_ix, score_box_iy, score_box_iw, score_box_ih = ix, iy, iw, ih
 
     ix, iy, iw, ih = draw_rect_with_shadow(ix + math.floor(iw/3), iy - 1, 72, ih, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2)
-    love.graphics.setColor(G.C.WHITE)
-    love.graphics.setFont(G.FONTS.PIXEL.SMALL)
-    love.graphics.print("Score at least", ix, iy - 2)
+    if is_blind_select then
+        
+    else
+        G:draw_blind_chip_anim(
+            blind_index,
+            score_box_ix + math.floor(score_box_iw / 6) - 2,
+            score_box_iy + math.floor(score_box_ih / 2),
+            1.1
+        )
+        
+        love.graphics.setColor(G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.SMALL)
+        love.graphics.print("Score at least", ix, iy - 2)
 
-    love.graphics.setColor(G.C.RED)
-    love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
-    scoreReq = "10000"
-    offset = 6
-    love.graphics.print(scoreReq, ix + math.floor(iw/2) - math.floor(love.graphics.getFont():getWidth(scoreReq)/2) + 5, iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 5)
+        love.graphics.setColor(G.C.RED)
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        local scoreReq = tostring(math.floor(blind_target))
+        love.graphics.print(scoreReq, ix + math.floor(iw/2) - math.floor(love.graphics.getFont():getWidth(scoreReq)/2) + 5, iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 5)
 
-    love.graphics.setColor(G.C.WHITE)
-    love.graphics.setFont(G.FONTS.PIXEL.SMALL)
-    rewardText = "Reward: "
-    rewardY = iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 6 + G.FONTS.PIXEL.MEDIUM_HEIGHT
-    love.graphics.print(rewardText, ix, rewardY)
-    love.graphics.setColor(G.C.MONEY)
-    moneyText = "$$$"
-    love.graphics.print(moneyText, ix + love.graphics.getFont():getWidth(rewardText) + math.floor((iw - math.floor(love.graphics.getFont():getWidth(rewardText)))/2) - math.floor(love.graphics.getFont():getWidth(moneyText)/2), rewardY)
+        love.graphics.setColor(G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.SMALL)
+        local rewardText = "Reward: "
+        local rewardY = iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 6 + G.FONTS.PIXEL.MEDIUM_HEIGHT
+        love.graphics.print(rewardText, ix, rewardY)
+        love.graphics.setColor(G.C.MONEY)
+        local moneyText = "$" .. tostring(blind_reward)
+        love.graphics.print(moneyText, ix + love.graphics.getFont():getWidth(rewardText) + math.floor((iw - math.floor(love.graphics.getFont():getWidth(rewardText)))/2) - math.floor(love.graphics.getFont():getWidth(moneyText)/2), rewardY)
+    end
 
     -- Round Score, Chips and Mult
     love.graphics.setColor(G.C.BLOCK.SHADOW)
-    width = iw
+    local width = iw
     ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY, titleWidth, math.floor(titleHeight/3.5), 4, 4, "fill")
     
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
@@ -93,10 +144,10 @@ function TopUI.draw()
     love.graphics.print("Score", ix, iy + 7)
 
     love.graphics.setColor(G.C.PANEL)
-    paneOffset = 30
+    local paneOffset = 30
     ix, iy, iw, ih = draw_rounded_rect(ix + paneOffset, iy, iw - paneOffset, ih, 2, 2, "fill")
 
-    score = tostring(G.round_score or 0)
+    local score = tostring(G.round_score or 0)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
     love.graphics.setColor(G.C.WHITE)
     TopUI.center_text(score, ix, iy -1, iw, ih)
@@ -107,19 +158,19 @@ function TopUI.draw()
 
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
-    handSelected = ""
+    local handSelected = ""
     if G.selectedHand and G.selectedHand ~= -1 then
         handSelected = G.handlist[G.selectedHand]
     end
     if(love.graphics.getFont():getWidth(handSelected) > iw) then
         love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     end
-    posX, posY = TopUI.center_text(handSelected, ix, iy -2, iw -20, math.floor(ih/3))
+    local posX, posY = TopUI.center_text(handSelected, ix, iy -2, iw -20, math.floor(ih/3))
 
     posX = posX + love.graphics.getFont():getWidth(handSelected) + 6
     posY = posY + math.floor(G.FONTS.PIXEL.MEDIUM_HEIGHT/6)
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
-    handLevel = G.selectedHandLevel or 1
+    local handLevel = G.selectedHandLevel or 1
     if(handSelected ~= "") then
         love.graphics.print("lvl." .. handLevel, posX, posY)
     end
@@ -129,11 +180,11 @@ function TopUI.draw()
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
     TopUI.center_text("X", ix, iy + math.floor(ih/5), iw, ih)
     -- Chip
-    ChipX = ix
-    ChipY = iy + ih/3 + 6
-    ChipWidth = iw/2 - 8
-    ChipHeight = ih/2 + 2
-    totalW = iw
+    local ChipX = ix
+    local ChipY = iy + ih/3 + 6
+    local ChipWidth = iw/2 - 8
+    local ChipHeight = ih/2 + 2
+    local totalW = iw
     draw_rect_with_shadow(ChipX, ChipY, ChipWidth, ChipHeight, 4, 2, G.C.CHIPS, G.C.CHIPS_DARK, 2)
 
     --Mult
@@ -147,12 +198,11 @@ function TopUI.draw()
     TopUI.center_text(handMult, ChipX + totalW - ChipWidth, ChipY - 1, ChipWidth, ChipHeight)
     
     -- Hands, Discards, Money, Ante and Round
-    fieldsPositionX = titlePosX + (titleWidth + 4) * 2
-    fieldsPositionY = titlePosY
-    fieldWidth = 46
-    fieldHeight = 43
-    padding = 4
-    value = 0
+    local fieldsPositionX = titlePosX + (titleWidth + 4) * 2
+    local fieldsPositionY = titlePosY
+    local fieldWidth = 46
+    local fieldHeight = 43
+    local padding = 4
     TopUI.LabeledField("Hands", G.hands, fieldsPositionX, fieldsPositionY, fieldWidth, fieldHeight, G.C.BLUE)
     TopUI.LabeledField("Discards", G.discards, fieldsPositionX + fieldWidth + padding, fieldsPositionY, fieldWidth, fieldHeight, G.C.RED)
     TopUI.LabeledField("Ante", G.ante, fieldsPositionX + (fieldWidth + padding) * 2, fieldsPositionY, fieldWidth, fieldHeight, G.C.ORANGE)

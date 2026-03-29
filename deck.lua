@@ -26,11 +26,11 @@ end
 
 function Deck:fill()
     self.cards = {}
-    --local enhancements = { "mult", "steel"}
+    --local enhancements = { "mult", "steel", "none", "bonus", "gold", "glass", "lucky", "stone"}
     --local seals = { "gold", "red", "blue", "purple", "none" }
     for _, suit in ipairs(SUITS) do
         for rank = MIN_RANK, MAX_RANK do
-            --local enhancement = enhancements[math.random(1, #enhancements)]
+            local enhancement = enhancements[math.random(1, #enhancements)]
             --local seal = seals[math.random(1, #seals)]
             table.insert(self.cards, { rank = rank, suit = suit, enhancement = nil, seal = nil })
         end
@@ -72,8 +72,9 @@ function Deck:shuffle_discard_into_draw()
     self:shuffle()
 end
 
---- Convenience alias: recycle discard into the draw pile at round end.
+--- Recycle the full deck at blind/round end: remaining draw pile and discard pile merge, then shuffle into draw.
 function Deck:end_round()
+    self:move_draw_pile_to_discard()
     self:shuffle_discard_into_draw()
 end
 
