@@ -30,7 +30,7 @@ function Deck:fill()
     --local seals = { "gold", "red", "blue", "purple", "none" }
     for _, suit in ipairs(SUITS) do
         for rank = MIN_RANK, MAX_RANK do
-            local enhancement = enhancements[math.random(1, #enhancements)]
+            --local enhancement = enhancements[math.random(1, #enhancements)]
             --local seal = seals[math.random(1, #seals)]
             table.insert(self.cards, { rank = rank, suit = suit, enhancement = nil, seal = nil })
         end
