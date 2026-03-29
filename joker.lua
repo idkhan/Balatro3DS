@@ -253,10 +253,14 @@ function Joker:matches_trigger(event_name, ctx)
     elseif self.effect_type == "Suit Mult" or self.effect_type == "Suit Chips" then
         default_event = "card_played"
     elseif self.effect_type == "Type Mult" or self.effect_type == "Type Chips" then
-        default_event = "hand_played"
+        default_event = "on_hand_scored"
     elseif self.effect_type == "Hand Size Mult" then
         default_event = "on_hand_scored"
     elseif self.effect_type == "Stencil Mult" then
+        default_event = "on_hand_scored"
+    elseif self.effect_type == "Discard Chips" then
+        default_event = "on_hand_scored"
+    elseif self.effect_type == "No Discard Mult" then
         default_event = "on_hand_scored"
     end
 
@@ -292,6 +296,13 @@ function Joker:matches_trigger(event_name, ctx)
     elseif self.effect_type == "Stencil Mult" then
         if ctx == nil then return false end
         if tonumber(ctx.free_joker_slots) == nil then
+            return false
+        end
+    elseif self.effect_type == "No Discard Mult" then
+        -- Mystic Summit: only active when no discards remain.
+        local d_remaining = tonumber((type(cfg.extra) == "table" and cfg.extra.d_remaining)) or 0
+        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
+        if discards_left ~= d_remaining then
             return false
         end
     end
@@ -340,6 +351,17 @@ function Joker:apply_effect(ctx)
         local factor = free_slots + 1
         ctx.mult = (tonumber(ctx.mult) or 0) * factor
         Sfx.play_mult2()
+    elseif self.effect_type == "Discard Chips" then
+        -- Banner: +X chips for each remaining discard.
+        local extra = tonumber(cfg.extra) or 0
+        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
+        ctx.chips = (tonumber(ctx.chips) or 0) + (extra * math.max(0, discards_left))
+    elseif self.effect_type == "No Discard Mult" then
+        -- Mystic Summit: +mult only when no discards remain (condition also gated in matches_trigger).
+        local extra = type(cfg.extra) == "table" and cfg.extra or {}
+        local amount = tonumber(extra.mult) or tonumber(cfg.mult) or 0
+        ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     end
 end
 

@@ -685,21 +685,25 @@ function Card:do_enhancement(ctx)
     if self.enhancement == "bonus" then
         --+30 chips
         ctx.chips = chips + 30
+        Sfx.play_chips()
     elseif self.enhancement == "mult" then
         --+4 mult
         ctx.mult = mult + 4
     elseif self.enhancement == "glass" then
         -- x2 mult, 1 in 4 chance to break
         ctx.mult = mult * 2
+        Sfx.play_mult()
         if math.random(1, 4) == 1 then
             ctx.glass_broken_node = self
         end
     elseif self.enhancement == "steel" then
         -- x1.5 mult when held in hand
-        ctx.mult = (tonumber(ctx.mult) or 1) * 1.5
+        ctx.mult = math.floor((tonumber(ctx.mult) or 1) * 1.5)
+        Sfx.play_mult()
     elseif self.enhancement == "stone" then
         -- +50 chip
         ctx.chips = (tonumber(ctx.chips) or 0) + 50
+        Sfx.play_chips()
     elseif self.enhancement == "gold" then
         -- +$3 when held in hand
         G.money = G.money + 3
@@ -708,6 +712,7 @@ function Card:do_enhancement(ctx)
         -- 1 in 5 chance to give +20 mult
         if math.random(1, 5) == 1 then
             ctx.mult = (tonumber(ctx.mult) or 1) + 20
+            Sfx.play_mult()
         end
         -- 1 in 15 to give +$20
         if math.random(1, 15) == 1 then

@@ -247,7 +247,8 @@ end
 
 function Hand:discard_selected()
     if self._play_sequence then return end
-    if #self.selected == 0 or not self.game then return end
+    if #self.selected == 0 or not self.game or G.discards <= 0 then return end
+    G.discards = G.discards - 1
     self:_discard_selected_impl()
 end
 
@@ -670,45 +671,13 @@ function Hand:_update_play_sequence(dt)
             seq.finalize_step = 1
         end
 
-        -- Step 1: hand_played jokers (staggered, left-to-right).
+        -- Step 1: single scored-hand joker event.
         if seq.finalize_step == 1 then
-            if seq._hand_played_emitted ~= true then
-                seq._hand_played_emitted = true
-
-                local hand_type = nil
-                if G and G.handlist and G.selectedHand and G.handlist[G.selectedHand] then
-                    hand_type = G.handlist[G.selectedHand]
-                end
-                hand_type = hand_type or tostring(G.selectedHand or "unknown")
-
-                local ctx = {
-                    event = "hand_played",
-                    hand_index = G.selectedHand,
-                    hand_type = hand_type,
-                    contains_hand_types = self:build_contained_hand_types(seq.cards),
-                    hand_level = G.selectedHandLevel,
-                    chips = chips,
-                    mult = mult,
-                    cards = seq.cards,
-                }
-                if G and G.begin_joker_emit and G:begin_joker_emit("hand_played", ctx) then
-                    seq.phase = "wait_jokers"
-                    seq.joker_wait_resume = { phase = "finalize", finalize_step = 2 }
-                    seq.timer = 0
-                    return
-                elseif G and G.emit_joker_event then
-                    G:emit_joker_event("hand_played", ctx)
-                    G.selectedHandChips = tonumber(ctx.chips) or G.selectedHandChips
-                    G.selectedHandMult = tonumber(ctx.mult) or G.selectedHandMult
-                end
+            local hand_type = nil
+            if G and G.handlist and G.selectedHand and G.handlist[G.selectedHand] then
+                hand_type = G.handlist[G.selectedHand]
             end
-            seq.finalize_step = 2
-        end
-
-        -- Step 2: on_hand_scored jokers (uses chips/mult after hand_played).
-        if seq.finalize_step == 2 then
-            chips = tonumber(G.selectedHandChips) or 0
-            mult = tonumber(G.selectedHandMult) or 1
+            hand_type = hand_type or tostring(G.selectedHand or "unknown")
             local free_joker_slots = 0
             if G then
                 local cap = tonumber(G.joker_capacity) or tonumber(G.joker_slot_count) or 0
@@ -720,23 +689,26 @@ function Hand:_update_play_sequence(dt)
                 chips = chips,
                 mult = mult,
                 hand_index = G.selectedHand,
+                hand_type = hand_type,
+                contains_hand_types = self:build_contained_hand_types(seq.cards),
                 hand_level = G.selectedHandLevel,
                 cards = seq.cards,
                 free_joker_slots = free_joker_slots,
+                discards_left = tonumber(G and G.discards) or 0,
             }
             if G and G.begin_joker_emit and G:begin_joker_emit("on_hand_scored", ctx) then
                 seq.phase = "wait_jokers"
-                seq.joker_wait_resume = { phase = "finalize", finalize_step = 3 }
+                seq.joker_wait_resume = { phase = "finalize", finalize_step = 2 }
                 seq.timer = 0
                 return
             elseif G and G.emit_joker_event then
                 G:emit_joker_event("on_hand_scored", ctx)
             end
-            seq.finalize_step = 3
+            seq.finalize_step = 2
         end
 
-        -- Step 3: final score.
-        if seq.finalize_step == 3 then
+        -- Step 2: final score.
+        if seq.finalize_step == 2 then
             chips = tonumber(G.selectedHandChips) or 0
             mult = tonumber(G.selectedHandMult) or 1
             G.selectedHandChips = chips
@@ -881,7 +853,8 @@ function Hand:score_selected_hand()
 end
 
 function Hand:play_selected()
-    if #self.selected == 0 then return end
+    if #self.selected == 0 or G.hands <= 0 then return end
+    G.hands = G.hands - 1
     if self._play_sequence then return end
 
     if self.game then self.game.active_tooltip_card = nil end

@@ -20,6 +20,14 @@ function Game:init(seed)
     self.last_hand_score = 0
     --- Run currency
     self.money = 0
+    -- Run Discards
+    self.discards = 5
+    -- Run Hands
+    self.hands = 5
+    -- Round Count
+    self.round = 1
+    -- Ante Count
+    self.ante = 1
     self._collidables_buf = {}
     self._gc_timer = 0
     self._gc_discarded_nodes = 0
@@ -27,7 +35,7 @@ function Game:init(seed)
     self._joker_emit_queue = nil
     self._joker_emit_next = 1
     self._joker_emit_timer = 0
-    self.JOKER_EMIT_INTERVAL = 0.18
+    self.JOKER_EMIT_INTERVAL = 0.5
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
@@ -338,9 +346,9 @@ function Game:init_jokers()
     --     self:add_joker_by_def(pool[i])
     -- end
     self:add_joker_by_def("j_mime")
-    self:add_joker_by_def("j_greedy_joker")
-    self:add_joker_by_def("j_lusty_joker")
-    self:add_joker_by_def("j_wrathful_joker")
+    self:add_joker_by_def("j_banner")
+    self:add_joker_by_def("j_mystic_summit")
+    self:add_joker_by_def("j_clever")
     self:add_joker_by_def("j_gluttenous_joker")
 end
 
