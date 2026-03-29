@@ -185,6 +185,9 @@ function Joker:draw()
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         local mag = SHAKE_MAGNITUDE * (self.scoring_shake_timer / SHAKE_MAX_DURATION)
         local t = love.timer.getTime()
+        if self.scoring_shake_t0 then
+            t = t - self.scoring_shake_t0
+        end
         draw_x = draw_x + math.sin(t * 85) * mag
         draw_y = draw_y + math.cos(t * 73) * mag * 0.65
     end
@@ -219,6 +222,7 @@ function Joker:update(dt)
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         self.scoring_shake_timer = self.scoring_shake_timer - dt
         if self.scoring_shake_timer < 0 then self.scoring_shake_timer = 0 end
+        if self.scoring_shake_timer <= 0 then self.scoring_shake_t0 = nil end
     end
 end
 
@@ -228,6 +232,11 @@ end
 function Joker:matches_trigger(event_name, ctx)
     local tc = self.trigger_condition
     if type(tc) ~= "table" then tc = {} end
+
+    -- Passive, do nothing
+    if self.effect_type == "Hand card double" then
+        return false
+    end
 
     -- If we can't interpret the joker as a data-driven effect, fall back to the old trigger_condition behavior.
     if self.effect_type == nil then
@@ -244,7 +253,15 @@ function Joker:matches_trigger(event_name, ctx)
     elseif self.effect_type == "Suit Mult" or self.effect_type == "Suit Chips" then
         default_event = "card_played"
     elseif self.effect_type == "Type Mult" or self.effect_type == "Type Chips" then
-        default_event = "hand_played"
+        default_event = "on_hand_scored"
+    elseif self.effect_type == "Hand Size Mult" then
+        default_event = "on_hand_scored"
+    elseif self.effect_type == "Stencil Mult" then
+        default_event = "on_hand_scored"
+    elseif self.effect_type == "Discard Chips" then
+        default_event = "on_hand_scored"
+    elseif self.effect_type == "No Discard Mult" then
+        default_event = "on_hand_scored"
     end
 
     local expected_event = tc.event or default_event
@@ -268,6 +285,26 @@ function Joker:matches_trigger(event_name, ctx)
                 return false
             end
         end
+    elseif self.effect_type == "Hand Size Mult" then
+        if ctx == nil then return false end
+        local extra = type(cfg.extra) == "table" and cfg.extra or {}
+        local max_size = tonumber(extra.size) or 3
+        local cards = ctx.cards
+        if type(cards) ~= "table" or #cards > max_size then
+            return false
+        end
+    elseif self.effect_type == "Stencil Mult" then
+        if ctx == nil then return false end
+        if tonumber(ctx.free_joker_slots) == nil then
+            return false
+        end
+    elseif self.effect_type == "No Discard Mult" then
+        -- Mystic Summit: only active when no discards remain.
+        local d_remaining = tonumber((type(cfg.extra) == "table" and cfg.extra.d_remaining)) or 0
+        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
+        if discards_left ~= d_remaining then
+            return false
+        end
     end
 
     return true
@@ -279,10 +316,12 @@ function Joker:apply_effect(ctx)
 
     -- Visual feedback: shake when this joker actually triggers.
     self.scoring_shake_timer = SHAKE_MAX_DURATION
+    self.scoring_shake_t0 = love.timer.getTime()
 
     if self.effect_type == "Mult" then
         local amount = tonumber(cfg.mult) or 0
         ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     elseif self.effect_type == "Chips" then
         local amount = tonumber(cfg.chips) or 0
         ctx.chips = (tonumber(ctx.chips) or 0) + amount
@@ -290,6 +329,7 @@ function Joker:apply_effect(ctx)
         local extra = type(cfg.extra) == "table" and cfg.extra or {}
         local amount = tonumber(extra.s_mult) or 0
         ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     elseif self.effect_type == "Suit Chips" then
         local extra = type(cfg.extra) == "table" and cfg.extra or {}
         local amount = tonumber(extra.s_chips) or 0
@@ -297,9 +337,31 @@ function Joker:apply_effect(ctx)
     elseif self.effect_type == "Type Mult" then
         local amount = tonumber(cfg.t_mult) or 0
         ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     elseif self.effect_type == "Type Chips" then
         local amount = tonumber(cfg.t_chips) or 0
         ctx.chips = (tonumber(ctx.chips) or 0) + amount
+    elseif self.effect_type == "Hand Size Mult" then
+        local extra = type(cfg.extra) == "table" and cfg.extra or {}
+        local amount = tonumber(extra.mult) or tonumber(cfg.mult) or 0
+        ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
+    elseif self.effect_type == "Stencil Mult" then
+        local free_slots = tonumber(ctx.free_joker_slots) or 0
+        local factor = free_slots + 1
+        ctx.mult = (tonumber(ctx.mult) or 0) * factor
+        Sfx.play_mult2()
+    elseif self.effect_type == "Discard Chips" then
+        -- Banner: +X chips for each remaining discard.
+        local extra = tonumber(cfg.extra) or 0
+        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
+        ctx.chips = (tonumber(ctx.chips) or 0) + (extra * math.max(0, discards_left))
+    elseif self.effect_type == "No Discard Mult" then
+        -- Mystic Summit: +mult only when no discards remain (condition also gated in matches_trigger).
+        local extra = type(cfg.extra) == "table" and cfg.extra or {}
+        local amount = tonumber(extra.mult) or tonumber(cfg.mult) or 0
+        ctx.mult = (tonumber(ctx.mult) or 0) + amount
+        Sfx.play_mult()
     end
 end
 

@@ -258,6 +258,22 @@ function Game:set_globals()
     self.STATE = self.STATES.SPLASH
     self.TAROT_INTERRUPT = nil
     self.STATE_COMPLETE = false
+    self.BASE_REQUIREMENT_BY_ANTE = {
+        [0] = 100,
+        [1] = 300,
+        [2] = 800,
+        [3] = 2000,
+        [4] = 5000,
+        [5] = 11000,
+        [6] = 20000,
+        [7] = 35000,
+        [8] = 50000
+    }
+    self.BLIND_DEFS = {
+        { id = "small", name = "Small Blind", key = "Small", multiplier = 1.0, reward = 3 },
+        { id = "big", name = "Big Blind", key = "Big", multiplier = 1.5, reward = 4 },
+        { id = "boss", name = "Boss Blind", key = "Boss", multiplier = 2.0, reward = 5 }
+    }
 
     --||||||||||||||||||||||||||||||
     --          INSTANCES
@@ -405,12 +421,13 @@ function Game:set_globals()
             won = HEX("4f6367")
         },
         BLIND_COLORS = {
-            Small = HEX("50846e"),
-
+            Small = HEX("0068ad"),
+            SmallDark = HEX("003f6f"),
             Big = HEX("a56c00"),
             BigDark = HEX("6a4200"),
             BigSign = HEX("54451a"),
             Boss = HEX("b44430"),
+            BossDark = HEX("6a2015"),
             won = HEX("4f6367")
         },
         HAND_LEVELS = {

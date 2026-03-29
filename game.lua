@@ -18,13 +18,42 @@ function Game:init(seed)
     self.active_tooltip_card = nil
     self.round_score = 0
     self.last_hand_score = 0
+    --- Run currency
+    self.money = 0
+    -- Run Discards
+    self.discards = 5
+    -- Run Hands
+    self.hands = 5
+    -- Round Count
+    self.round = 1
+    -- Ante Count
+    self.ante = 1
+    self._last_completed_blind_was_boss = false
+    self.current_blind_index = 1
+    self.current_blind_target = 0
+    self.current_blind_reward = 0
+    self.current_blind_name = "Small Blind"
+    self.selected_blind_index = 1
+    self._blind_resolution_pending = false
+    self.shop_offers = {}
+    self.shop_offer_cursor = 1
+    self.shop_sell_cursor = 1
+    self.current_boss_blind_id = nil
     self._collidables_buf = {}
     self._gc_timer = 0
     self._gc_discarded_nodes = 0
+    --- Staggered joker resolution (left-to-right); see `begin_joker_emit` / `_update_joker_emit_queue`.
+    self._joker_emit_queue = nil
+    self._joker_emit_next = 1
+    self._joker_emit_timer = 0
+    self.JOKER_EMIT_INTERVAL = 0.5
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
         self:set_globals()
+    end
+    if self.init_item_prototypes then
+        self:init_item_prototypes()
     end
 
     if seed ~= nil then
@@ -47,6 +76,120 @@ function Game:add(node)
     return node
 end
 
+function Game:set_state(state_id)
+    self.STATE = state_id
+end
+
+function Game:get_base_requirement_for_ante(ante)
+    local base_table = self.BASE_REQUIREMENT_BY_ANTE or {}
+    local a = math.max(1, tonumber(ante) or 1)
+    if base_table[a] then
+        return tonumber(base_table[a]) or 0
+    end
+    local max_ante = 1
+    for k, _ in pairs(base_table) do
+        if k > max_ante then max_ante = k end
+    end
+    local last_base = tonumber(base_table[max_ante]) or 300
+    local overflow = math.max(0, a - max_ante)
+    return math.floor(last_base * (1 + overflow * 0.6))
+end
+
+function Game:get_blind_def(index)
+    local defs = self.BLIND_DEFS or {}
+    return defs[index]
+end
+
+function Game:get_boss_blind_pool()
+    local out = {}
+    for key, blind in pairs(self.P_BLINDS or {}) do
+        if key ~= "bl_small" and key ~= "bl_big" and type(blind) == "table" and type(blind.boss) == "table" then
+            out[#out + 1] = key
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+function Game:roll_boss_blind()
+    local pool = self:get_boss_blind_pool()
+    if #pool == 0 then
+        self.current_boss_blind_id = nil
+        return nil
+    end
+    self.current_boss_blind_id = pool[math.random(#pool)]
+    return self.current_boss_blind_id
+end
+
+function Game:get_boss_blind_prototype()
+    local key = self.current_boss_blind_id
+    if not key or not self.P_BLINDS or not self.P_BLINDS[key] then
+        key = self:roll_boss_blind()
+    end
+    return key and self.P_BLINDS and self.P_BLINDS[key] or nil
+end
+
+function Game:get_blind_display_name(index)
+    local def = self:get_blind_def(index)
+    if not def then return "Blind" end
+    if def.id == "boss" then
+        local proto = self:get_boss_blind_prototype()
+        if proto and proto.name then return proto.name end
+    end
+    return def.name or "Blind"
+end
+
+function Game:get_blind_color(index)
+    local def = self:get_blind_def(index)
+    if not def then return self.C.BLIND_COLORS.Big end
+    if def.id == "boss" then
+        local proto = self:get_boss_blind_prototype()
+        if proto and proto.boss_colour then
+            return proto.boss_colour
+        end
+    end
+    return self.C.BLIND_COLORS[def.key] or self.C.BLIND_COLORS.Big
+end
+
+function Game:get_blind_reward(index)
+    local def = self:get_blind_def(index)
+    if not def then return 0 end
+    return tonumber(def.reward) or 0
+end
+
+function Game:get_blind_sprite_index(index)
+    local def = self:get_blind_def(index)
+    if not def then return 0 end
+    if def.id == "small" then
+        return tonumber(self.P_BLINDS and self.P_BLINDS.bl_small and self.P_BLINDS.bl_small.pos) or 0
+    end
+    if def.id == "big" then
+        return tonumber(self.P_BLINDS and self.P_BLINDS.bl_big and self.P_BLINDS.bl_big.pos) or 1
+    end
+    local proto = self:get_boss_blind_prototype()
+    return tonumber(proto and proto.pos) or 2
+end
+
+function Game:get_blind_target(index, ante)
+    local def = self:get_blind_def(index)
+    if not def then return 0 end
+    local base = self:get_base_requirement_for_ante(ante or self.ante or 1)
+    local mult = tonumber(def.multiplier) or 1
+    if def.id == "boss" then
+        local proto = self:get_boss_blind_prototype()
+        mult = tonumber(proto and proto.mult) or mult
+    end
+    return math.floor(base * mult)
+end
+
+function Game:get_preview_blind()
+    return self:get_blind_def(self.selected_blind_index or self.current_blind_index or 1)
+end
+
+function Game:is_blind_selectable(index)
+    return tonumber(index) == tonumber(self.current_blind_index)
+end
+
 function Game:remove(node)
     for i, n in ipairs(self.nodes) do
         if n == node then
@@ -55,6 +198,81 @@ function Game:remove(node)
         end
     end
     return false
+end
+
+function Game:init_item_prototypes()
+    self.P_TAGS = {
+        tag_uncommon =      {name = 'Uncommon Tag',     set = 'Tag', discovered = false, min_ante = nil, order = 1, config = {type = 'store_joker_create'}, pos = {x = 0,y = 0}},
+        tag_rare =          {name = 'Rare Tag',         set = 'Tag', discovered = false, min_ante = nil, order = 2, config = {type = 'store_joker_create', odds = 3}, requires = 'j_blueprint', pos = {x = 1,y = 0}},
+        tag_negative =      {name = 'Negative Tag',     set = 'Tag', discovered = false, min_ante = 2,   order = 3, config = {type = 'store_joker_modify', edition = 'negative', odds = 5}, requires = 'e_negative', pos = {x = 2, y = 0}},
+        tag_foil =          {name = 'Foil Tag',         set = 'Tag', discovered = false, min_ante = nil, order = 4, config = {type = 'store_joker_modify', edition = 'foil', odds = 2}, requires = 'e_foil', pos = {x = 3,y = 0}},
+        tag_holo =          {name = 'Holographic Tag',  set = 'Tag', discovered = false, min_ante = nil, order = 5, config = {type = 'store_joker_modify', edition = 'holo', odds = 3}, requires = 'e_holo', pos = {x = 0,y = 1}},
+        tag_polychrome =    {name = 'Polychrome Tag',   set = 'Tag', discovered = false, min_ante = nil, order = 6, config = {type = 'store_joker_modify', edition = 'polychrome', odds = 4}, requires = 'e_polychrome', pos = {x = 1,y = 1}},
+        tag_investment =    {name = 'Investment Tag',   set = 'Tag', discovered = false, min_ante = nil, order = 7, config = {type = 'eval', dollars = 25}, pos = {x = 2,y = 1}},
+        tag_voucher =       {name = 'Voucher Tag',      set = 'Tag', discovered = false, min_ante = nil, order = 8, config = {type = 'voucher_add'}, pos = {x = 3,y = 1}},
+        tag_boss =          {name = 'Boss Tag',         set = 'Tag', discovered = false, min_ante = nil, order = 9, config = {type = 'new_blind_choice', }, pos = {x = 0,y = 2}},
+        tag_standard =      {name = 'Standard Tag',     set = 'Tag', discovered = false, min_ante = 2,   order = 10, config = {type = 'new_blind_choice', }, pos = {x = 1,y = 2}},
+        tag_charm =         {name = 'Charm Tag',        set = 'Tag', discovered = false, min_ante = nil, order = 11, config = {type = 'new_blind_choice', }, pos = {x = 2,y = 2}},
+        tag_meteor =        {name = 'Meteor Tag',       set = 'Tag', discovered = false, min_ante = 2,   order = 12, config = {type = 'new_blind_choice', }, pos = {x = 3,y = 2}},
+        tag_buffoon =       {name = 'Buffoon Tag',      set = 'Tag', discovered = false, min_ante = 2,   order = 13, config = {type = 'new_blind_choice', }, pos = {x = 4,y = 2}},
+        tag_handy =         {name = 'Handy Tag',        set = 'Tag', discovered = false, min_ante = 2,   order = 14, config = {type = 'immediate', dollars_per_hand = 1}, pos = {x = 1,y = 3}},
+        tag_garbage =       {name = 'Garbage Tag',      set = 'Tag', discovered = false, min_ante = 2,   order = 15, config = {type = 'immediate', dollars_per_discard = 1}, pos = {x = 2,y = 3}},
+        tag_ethereal =      {name = 'Ethereal Tag',     set = 'Tag', discovered = false, min_ante = 2,   order = 16, config = {type = 'new_blind_choice'}, pos = {x = 3,y = 3}},
+        tag_coupon =        {name = 'Coupon Tag',       set = 'Tag', discovered = false, min_ante = nil, order = 17, config = {type = 'shop_final_pass', }, pos = {x = 4,y = 0}},
+        tag_double =        {name = 'Double Tag',       set = 'Tag', discovered = false, min_ante = nil, order = 18, config = {type = 'tag_add', }, pos = {x = 5,y = 0}},
+        tag_juggle =        {name = 'Juggle Tag',       set = 'Tag', discovered = false, min_ante = nil, order = 19, config = {type = 'round_start_bonus', h_size = 3}, pos = {x = 5,y = 1}},
+        tag_d_six =         {name = 'D6 Tag',           set = 'Tag', discovered = false, min_ante = nil, order = 20, config = {type = 'shop_start', }, pos = {x = 5,y = 3}},
+        tag_top_up =        {name = 'Top-up Tag',       set = 'Tag', discovered = false, min_ante = 2,   order = 21, config = {type = 'immediate', spawn_jokers = 2}, pos = {x = 4,y = 1}},
+        tag_skip =          {name = 'Skip Tag',         set = 'Tag', discovered = false, min_ante = nil, order = 22, config = {type = 'immediate', skip_bonus = 5}, pos = {x = 0,y = 3}},
+        tag_orbital =       {name = 'Orbital Tag',      set = 'Tag', discovered = false, min_ante = 2,   order = 23, config = {type = 'immediate', levels = 3}, pos = {x = 5,y = 2}},
+        tag_economy =       {name = 'Economy Tag',      set = 'Tag', discovered = false, min_ante = nil, order = 24, config = {type = 'immediate', max = 40}, pos = {x = 4,y = 3}},
+    }
+    self.tag_undiscovered = {name = 'Not Discovered', order = 1, config = {type = ''}, pos = {x=3,y=4}}
+
+    self.P_STAKES = {
+        stake_white =   {name = 'White Chip',   unlocked = true,  order = 1, pos = {x = 0,y = 0}, stake_level = 1, set = 'Stake'},
+        stake_red =     {name = 'Red Chip',     unlocked = false, order = 2, pos = {x = 1,y = 0}, stake_level = 2, set = 'Stake'},
+        stake_green =   {name = 'Green Chip',   unlocked = false, order = 3, pos = {x = 2,y = 0}, stake_level = 3, set = 'Stake'},  
+        stake_black =   {name = 'Black Chip',   unlocked = false, order = 4, pos = {x = 4,y = 0}, stake_level = 4, set = 'Stake'},
+        stake_blue =    {name = 'Blue Chip',    unlocked = false, order = 5, pos = {x = 3,y = 0}, stake_level = 5, set = 'Stake'},
+        stake_purple =  {name = 'Purple Chip',  unlocked = false, order = 6, pos = {x = 0,y = 1}, stake_level = 6, set = 'Stake'},
+        stake_orange =  {name = 'Orange Chip',  unlocked = false, order = 7, pos = {x = 1,y = 1}, stake_level = 7, set = 'Stake'},
+        stake_gold =    {name = 'Gold Chip',    unlocked = false, order = 8, pos = {x = 2,y = 1}, stake_level = 8, set = 'Stake'},
+    }
+
+    self.P_BLINDS = {
+        bl_small =           {name = 'Small Blind',  defeated = false, order = 1, dollars = 3, mult = 1,  vars = {}, debuff_text = '', debuff = {}, pos = 0},
+        bl_big =             {name = 'Big Blind',    defeated = false, order = 2, dollars = 4, mult = 1.5,vars = {}, debuff_text = '', debuff = {}, pos = 1},
+        bl_ox =              {name = 'The Ox',       defeated = false, order = 4, dollars = 5, mult = 2,  vars = {'ph_most_played'}, debuff = {}, pos = 2, boss = {min = 6, max = 10}, boss_colour = HEX('b95b08')},
+        bl_hook =            {name = 'The Hook',     defeated = false, order = 3, dollars = 5, mult = 2,  vars = {}, debuff = {}, pos = 7, boss = {min = 1, max = 10}, boss_colour = HEX('a84024')},
+        bl_mouth =           {name = 'The Mouth',    defeated = false, order = 17, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 18, boss = {min = 2, max = 10}, boss_colour = HEX('ae718e')},
+        bl_fish =            {name = 'The Fish',     defeated = false, order = 10, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 5, boss = {min = 2, max = 10}, boss_colour = HEX('3e85bd')},
+        bl_club =            {name = 'The Club',     defeated = false, order = 9, dollars = 5, mult = 2,  vars = {}, debuff = {suit = 'Clubs'}, pos = 4, boss = {min = 1, max = 10}, boss_colour = HEX('b9cb92')},
+        bl_manacle =         {name = 'The Manacle',  defeated = false, order = 15, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 8, boss = {min = 1, max = 10}, boss_colour = HEX('575757')},
+        bl_tooth =           {name = 'The Tooth',    defeated = false, order = 23, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 22, boss = {min = 3, max = 10}, boss_colour = HEX('b52d2d')},
+        bl_wall =            {name = 'The Wall',     defeated = false, order = 6, dollars = 5, mult = 4,  vars = {}, debuff = {}, pos = 9, boss = {min = 2, max = 10}, boss_colour = HEX('8a59a5')},
+        bl_house =           {name = 'The House',    defeated = false, order = 5, dollars = 5, mult = 2,  vars = {}, debuff = {}, pos = 3, boss ={min = 2, max = 10}, boss_colour = HEX('5186a8')},
+        bl_mark =            {name = 'The Mark',     defeated = false, order = 25, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 23, boss = {min = 2, max = 10}, boss_colour = HEX('6a3847')},
+        bl_final_bell =      {name = 'Cerulean Bell',defeated = false, order = 30, dollars = 8, mult = 2, vars = {}, debuff = {}, pos = 26, boss = {showdown = true, min = 10, max = 10}, boss_colour = HEX('009cfd')},
+        bl_wheel =           {name = 'The Wheel',    defeated = false, order = 7, dollars = 5, mult = 2,  vars = {}, debuff = {}, pos = 10, boss = {min = 2, max = 10}, boss_colour = HEX('50bf7c')},
+        bl_arm =             {name = 'The Arm',      defeated = false, order = 8, dollars = 5, mult = 2,  vars = {}, debuff = {}, pos = 11, boss = {min = 2, max = 10}, boss_colour = HEX('6865f3')},
+        bl_psychic =         {name = 'The Psychic',  defeated = false, order = 11, dollars = 5, mult = 2, vars = {}, debuff = {h_size_ge = 5}, pos = 12, boss = {min = 1, max = 10}, boss_colour = HEX('efc03c')},
+        bl_goad =            {name = 'The Goad',     defeated = false, order = 12, dollars = 5, mult = 2, vars = {}, debuff = {suit = 'Spades'}, pos = 13, boss = {min = 1, max = 10}, boss_colour = HEX('b95c96')},
+        bl_water =           {name = 'The Water',    defeated = false, order = 13, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 14, boss = {min = 2, max = 10}, boss_colour = HEX('c6e0eb')},
+        bl_eye =             {name = 'The Eye',      defeated = false, order = 16, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 17, boss = {min = 3, max = 10}, boss_colour = HEX('4b71e4')},
+        bl_plant =           {name = 'The Plant',    defeated = false, order = 18, dollars = 5, mult = 2, vars = {}, debuff = {is_face = 'face'}, pos = 19, boss = {min = 4, max = 10}, boss_colour = HEX('709284')},
+        bl_needle =          {name = 'The Needle',   defeated = false, order = 21, dollars = 5, mult = 1, vars = {}, debuff = {}, pos = 20, boss = {min = 2, max = 10}, boss_colour = HEX('5c6e31')},
+        bl_head =            {name = 'The Head',     defeated = false, order = 22, dollars = 5, mult = 2, vars = {}, debuff = {suit = 'Hearts'}, pos = 21, boss = {min = 1, max = 10}, boss_colour = HEX('ac9db4')},
+        bl_final_leaf =      {name = 'Verdant Leaf', defeated = false, order = 27, dollars = 8, mult = 2, vars = {}, debuff = {}, pos = 28, boss = {showdown = true, min = 10, max = 10}, boss_colour = HEX('56a786')},
+        bl_final_vessel =    {name = 'Violet Vessel',defeated = false, order = 28, dollars = 8, mult = 6, vars = {}, debuff = {}, pos = 29, boss = {showdown = true, min = 10, max = 10}, boss_colour = HEX('8a71e1')},
+        bl_window =          {name = 'The Window',   defeated = false, order = 14, dollars = 5, mult = 2, vars = {}, debuff = {suit = 'Diamonds'}, pos = 6, boss = {min = 1, max = 10}, boss_colour = HEX('a9a295')},
+        bl_serpent =         {name = 'The Serpent',  defeated = false, order = 19, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 15, boss = {min = 5, max = 10}, boss_colour = HEX('439a4f')},
+        bl_pillar =          {name = 'The Pillar',   defeated = false, order = 20, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 16, boss = {min = 1, max = 10}, boss_colour = HEX('7e6752')},
+        bl_flint =           {name = 'The Flint',    defeated = false, order = 24, dollars = 5, mult = 2, vars = {}, debuff = {}, pos = 24, boss = {min = 2, max = 10}, boss_colour = HEX('e56a2f')},
+        bl_final_acorn =     {name = 'Amber Acorn',  defeated = false, order = 26, dollars = 8, mult = 2, vars = {}, debuff = {}, pos = 27, boss = {showdown = true, min = 10, max = 10}, boss_colour = HEX('fda200')},
+        bl_final_heart =     {name = 'Crimson Heart',defeated = false, order = 29, dollars = 8, mult = 2, vars = {}, debuff = {}, pos = 25, boss = {showdown = true, min = 10, max = 10}, boss_colour = HEX('ac3232')},
+        
+    }
 end
 
 function Game:draw()
@@ -99,9 +317,258 @@ function Game:draw()
     for _, node in ipairs(self.nodes) do
         node:draw()
     end
+
+    if self.STATE == self.STATES.BLIND_SELECT then
+        self:draw_bottom_blind_select()
+    elseif self.STATE == self.STATES.SHOP then
+        self:draw_bottom_shop()
+    end
+end
+
+function Game:_point_in_rect_simple(px, py, r)
+    return r and px >= r.x and px <= (r.x + r.w) and py >= r.y and py <= (r.y + r.h)
+end
+
+function Game:draw_blind_chip_anim(blind_index, center_x, center_y, scale)
+    local atlas = self.ANIMATION_ATLAS and self.ANIMATION_ATLAS.blind_chips
+    if not atlas or not atlas.image then return end
+    local cell_w = tonumber(atlas.px) or 36
+    local cell_h = tonumber(atlas.py) or 36
+    local frames_per_blind = tonumber(atlas.frames) or 1
+    local blind_row = tonumber(self:get_blind_sprite_index(blind_index)) or 0
+    local anim_fps = 10
+    local t = love.timer.getTime()
+    local frame = math.floor(t * anim_fps) % math.max(1, frames_per_blind)
+    local sprite_index = (blind_row * frames_per_blind) + frame
+    local iw, ih = atlas.image:getDimensions()
+    local cols = math.max(1, math.floor(iw / cell_w))
+    local total_cells = math.floor((iw / cell_w) * (ih / cell_h))
+    if sprite_index >= total_cells then
+        sprite_index = 0
+    end
+    local col = sprite_index % cols
+    local row = math.floor(sprite_index / cols)
+    local qx = col * cell_w
+    local qy = row * cell_h
+    local quad = love.graphics.newQuad(qx, qy, cell_w, cell_h, iw, ih)
+    local s = scale or 1
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(atlas.image, quad, center_x - (cell_w * s * 0.5), center_y - (cell_h * s * 0.5), 0, s, s)
+end
+
+function Game:draw_bottom_blind_select()
+    local card_w, card_h = 98, 300
+    local gap = 8
+    local start_x = 6
+    local y = 8
+    self._blind_select_tap_rects = {}
+    for i = 1, 3 do
+        local def = self:get_blind_def(i)
+        local x = start_x + (i - 1) * (card_w + gap)
+        local selectable = self:is_blind_selectable(i)
+        local target = self:get_blind_target(i, self.ante)
+        local card_color = self.C.PANEL
+        if not selectable then
+            y = 60
+        else 
+            y = 8
+        end
+        
+        love.graphics.setColor(card_color)
+        love.graphics.rectangle("fill", x, y, card_w, card_h, 4, 4)
+        local blind_color = self:get_blind_color(i) or self.C.BLOCK.BACK
+        love.graphics.setColor(blind_color)
+        love.graphics.setLineWidth(3)
+        love.graphics.rectangle("line", x, y, card_w, card_h, 4, 4)
+
+
+        local padding = 16
+        love.graphics.setLineWidth(2)
+        love.graphics.setColor(self.C.GREY)
+        love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142, 4, 4)
+        love.graphics.setLineWidth(1)
+
+
+        local selectText = "Upcoming"
+        if selectable then
+            selectText = "Select"
+        end
+        local selectWidth = 60
+        local selectHeight = 16
+        local offset = 6
+        local btn_x = x + math.floor(card_w / 2) - math.floor(selectWidth / 2)
+        local btn_y = y + padding/2 + offset
+        if selectable then
+            draw_rect_with_shadow(btn_x, btn_y, selectWidth, selectHeight, 4, 4, self.C.ORANGE, self.C.BLOCK.SHADOW, 2)
+        else
+            draw_rect_with_shadow(btn_x, btn_y, selectWidth, selectHeight, 4, 4, self.C.GREY, self.C.BLOCK.SHADOW, 2)
+        end
+        self._blind_select_tap_rects[i] = { x = btn_x, y = btn_y, w = selectWidth, h = selectHeight }
+
+        love.graphics.setColor(self.C.WHITE)
+        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        local tx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(selectText) / 2)
+        love.graphics.print(selectText, tx, btn_y + 2)
+
+        local blindWidth = 70
+        local label = self:get_blind_display_name(i)
+        love.graphics.setColor(blind_color)
+        tx = x + math.floor(card_w / 2) - math.floor(blindWidth / 2)
+        love.graphics.rectangle("fill", tx, btn_y + selectHeight + 8, blindWidth, selectHeight, 4, 4)
+
+        tx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(label) / 2)
+        love.graphics.setColor(self.C.WHITE)
+        love.graphics.print(label, tx, btn_y + selectHeight + 8 + 2)
+        self:draw_blind_chip_anim(i, x + math.floor(card_w / 2), y + 80, 1.1)
+
+        local scoreWidth = 78
+        local scoreHeight = 28
+        local reward = self:get_blind_reward(i)
+
+        if reward > 0 then 
+            scoreHeight = 44
+        end
+        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        love.graphics.setColor(self.C.BLOCK.BACK)
+        tx = x + math.floor(card_w / 2) - math.floor(scoreWidth / 2)
+        love.graphics.rectangle("fill", tx, y + 105, scoreWidth, scoreHeight, 4, 4)
+
+        love.graphics.setColor(self.C.WHITE)
+        ty = y + 108
+        love.graphics.print("Score at Least", tx + 6, ty)
+        love.graphics.setColor(self.C.RED)
+        local req = tostring(target)
+        local rx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(req) / 2)
+        love.graphics.print(req, rx, ty + 12)
+        
+        love.graphics.setColor(self.C.WHITE)
+        req = "Reward: "..string.rep("$", reward).."+"
+        rx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(req) / 2)
+
+        love.graphics.print("Reward: ", rx, ty + 24)
+        love.graphics.setColor(self.C.MONEY)
+        love.graphics.print("$"..string.rep("$", reward).."+", rx + love.graphics.getFont():getWidth("Reward: "), ty + 24)
+        
+
+        --[[ if not selectable then
+            local grey = self.C.GREY
+            local premultiplied_grey = {
+                grey[1] * grey[4],
+                grey[2] * grey[4],
+                grey[3] * grey[4],
+                grey[4] or 1
+            }
+            love.graphics.setBlendMode("multiply", "premultiplied")
+            love.graphics.setColor(premultiplied_grey)
+            love.graphics.setLineWidth(3)
+            love.graphics.rectangle("fill", x, y, card_w, card_h, 4, 4)
+            love.graphics.setBlendMode("alpha")
+            love.graphics.setLineWidth(1)
+
+        end ]]
+    end
+end
+
+function Game:draw_bottom_shop()
+    local panel_x, panel_y, panel_w, panel_h = 8, 8, 304, 124
+    if _G.draw_rect_with_shadow then
+        draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 4, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
+    else
+        love.graphics.setColor(self.C.PANEL)
+        love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
+    end
+
+    love.graphics.setColor(self.C.WHITE)
+    love.graphics.setFont(self.FONTS.PIXEL.MEDIUM)
+    love.graphics.print("Shop", panel_x + 8, panel_y + 4)
+    love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+    love.graphics.print("Tap offer to buy | Tap owned joker to sell", panel_x + 8, panel_y + 22)
+
+    self._shop_offer_rects = {}
+    local offer_w, offer_h = 145, 34
+    for i, offer in ipairs(self.shop_offers or {}) do
+        local ox = panel_x + 8 + ((i - 1) * (offer_w + 6))
+        local oy = panel_y + 42
+        if _G.draw_rect_with_shadow then
+            draw_rect_with_shadow(ox, oy, offer_w, offer_h, 3, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
+        else
+            love.graphics.setColor(self.C.BLOCK.BACK)
+            love.graphics.rectangle("fill", ox, oy, offer_w, offer_h, 3, 3)
+        end
+        love.graphics.setColor(self.C.WHITE)
+        love.graphics.print(offer.name or "Joker", ox + 6, oy + 5)
+        love.graphics.setColor(self.C.MONEY)
+        love.graphics.print("$"..tostring(offer.price or 0), ox + 6, oy + 18)
+        self._shop_offer_rects[i] = { x = ox, y = oy, w = offer_w, h = offer_h }
+    end
+
+    self._shop_owned_rects = {}
+    local owned_y = panel_y + 84
+    local owned_w, owned_h = 56, 26
+    for i, j in ipairs(self.jokers or {}) do
+        local ox = panel_x + 8 + ((i - 1) * (owned_w + 4))
+        if ox + owned_w <= panel_x + panel_w - 8 then
+            if _G.draw_rect_with_shadow then
+                draw_rect_with_shadow(ox, owned_y, owned_w, owned_h, 3, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
+            else
+                love.graphics.setColor(self.C.BLOCK.BACK)
+                love.graphics.rectangle("fill", ox, owned_y, owned_w, owned_h, 3, 3)
+            end
+            love.graphics.setColor(self.C.WHITE)
+            local short = (j.def and j.def.name) and string.sub(j.def.name, 1, 7) or "Joker"
+            love.graphics.print(short, ox + 4, owned_y + 3)
+            love.graphics.setColor(self.C.MONEY)
+            love.graphics.print("$"..tostring(j.sell_value or 0), ox + 4, owned_y + 14)
+            self._shop_owned_rects[i] = { x = ox, y = owned_y, w = owned_w, h = owned_h }
+        end
+    end
+
+    self._shop_continue_rect = { x = panel_x + panel_w - 84, y = panel_y + panel_h - 24, w = 74, h = 18 }
+    love.graphics.setColor(self.C.GREEN)
+    love.graphics.rectangle("line", self._shop_continue_rect.x, self._shop_continue_rect.y, self._shop_continue_rect.w, self._shop_continue_rect.h, 3, 3)
+    love.graphics.setColor(self.C.WHITE)
+    love.graphics.print("Continue", self._shop_continue_rect.x + 10, self._shop_continue_rect.y + 4)
+end
+
+function Game:handle_blind_select_touch(x, y)
+    for i, r in ipairs(self._blind_select_tap_rects or {}) do
+        if self:_point_in_rect_simple(x, y, r) then
+            if not self:is_blind_selectable(i) then
+                return true
+            end
+            if self.selected_blind_index == i then
+                self:start_selected_blind()
+            else
+                self.selected_blind_index = i
+            end
+            return true
+        end
+    end
+    return false
+end
+
+function Game:handle_shop_touch(x, y)
+    for i, r in ipairs(self._shop_offer_rects or {}) do
+        if self:_point_in_rect_simple(x, y, r) then
+            self:buy_shop_joker(i)
+            return true
+        end
+    end
+    for i, r in ipairs(self._shop_owned_rects or {}) do
+        if self:_point_in_rect_simple(x, y, r) then
+            self:sell_owned_joker(i)
+            return true
+        end
+    end
+    if self:_point_in_rect_simple(x, y, self._shop_continue_rect) then
+        self:continue_from_shop()
+        return true
+    end
+    return false
 end
 
 function Game:update(dt)
+    self:_update_joker_emit_queue(dt)
     for _, node in ipairs(self.nodes) do
         if node.update then
             node:update(dt)
@@ -319,16 +786,21 @@ function Game:init_jokers()
         end
     end
 
-    -- Fisher–Yates shuffle
-    for i = #pool, 2, -1 do
-        local j = math.random(i)
-        pool[i], pool[j] = pool[j], pool[i]
-    end
+    -- -- Fisher–Yates shuffle
+    -- for i = #pool, 2, -1 do
+    --     local j = math.random(i)
+    --     pool[i], pool[j] = pool[j], pool[i]
+    -- end
 
-    local want = math.min(self.joker_capacity or 0, #pool)
-    for i = 1, want do
-        self:add_joker_by_def(pool[i])
-    end
+    -- local want = math.min(self.joker_capacity or 0, #pool)
+    -- for i = 1, want do
+    --     self:add_joker_by_def(pool[i])
+    -- end
+    self:add_joker_by_def("j_mime")
+    self:add_joker_by_def("j_banner")
+    self:add_joker_by_def("j_mystic_summit")
+    self:add_joker_by_def("j_clever")
+    self:add_joker_by_def("j_gluttenous_joker")
 end
 
 ---Add an owned Joker by definition id.
@@ -425,6 +897,30 @@ function Game:sync_jokers_interactivity()
     end
 end
 
+--- Jokers in slot order (left-to-right) that match `event_name` and have `apply_effect`.
+---@param event_name string
+---@param ctx table
+---@return table[]
+function Game:collect_matching_jokers(event_name, ctx)
+    local out = {}
+    if not self.jokers or type(self.jokers) ~= "table" then return out end
+    if type(event_name) ~= "string" or event_name == "" then return out end
+    if type(ctx) ~= "table" then ctx = {} end
+
+    for _, j in ipairs(self.jokers) do
+        if j and j.matches_trigger and j:matches_trigger(event_name, ctx) and j.apply_effect then
+            table.insert(out, j)
+        end
+    end
+    -- Resolve left-to-right on screen (array order can diverge after drag-reorder).
+    table.sort(out, function(a, b)
+        local ax = (a.T and a.T.x) or (a.VT and a.VT.x) or 0
+        local bx = (b.T and b.T.x) or (b.VT and b.VT.x) or 0
+        return ax < bx
+    end)
+    return out
+end
+
 ---Emit a joker event to all jokers and apply their effects to the context.
 ---`ctx` is a mutable table that joker effects can update (e.g. ctx.chips/ctx.mult).
 ---@param event_name string
@@ -441,6 +937,302 @@ function Game:emit_joker_event(event_name, ctx)
             end
         end
     end
+end
+
+function Game:_sync_joker_ctx(ctx)
+    if type(ctx) ~= "table" then return end
+    self.selectedHandChips = tonumber(ctx.chips) or self.selectedHandChips
+    self.selectedHandMult = tonumber(ctx.mult) or self.selectedHandMult
+end
+
+--- True while a staggered joker batch (from `begin_joker_emit`) is still resolving.
+function Game:joker_emit_busy()
+    return self._joker_emit_queue ~= nil
+end
+
+--- Apply one joker from the stagger queue and sync chips/mult to `G`.
+function Game:_apply_one_joker_emit()
+    local q = self._joker_emit_queue
+    if not q or type(q.list) ~= "table" then
+        self._joker_emit_queue = nil
+        self._joker_emit_timer = 0
+        return
+    end
+    local j = q.list[self._joker_emit_next]
+    if j and j.apply_effect then
+        j:apply_effect(q.ctx)
+    end
+    self:_sync_joker_ctx(q.ctx)
+    self._joker_emit_next = self._joker_emit_next + 1
+    if self._joker_emit_next > #q.list then
+        self._joker_emit_queue = nil
+        self._joker_emit_timer = 0
+    end
+end
+
+--- Resolve matching jokers left-to-right with a delay between each trigger (first applies immediately).
+--- Returns true if any joker was queued (caller should wait until `joker_emit_busy()` is false).
+---@param event_name string
+---@param ctx table|nil
+---@return boolean
+function Game:begin_joker_emit(event_name, ctx)
+    local list = self:collect_matching_jokers(event_name, ctx)
+    if #list == 0 then return false end
+    if type(ctx) ~= "table" then ctx = {} end
+    self._joker_emit_queue = { list = list, ctx = ctx }
+    self._joker_emit_next = 1
+    self._joker_emit_timer = 0
+    self:_apply_one_joker_emit()
+    return true
+end
+
+function Game:_update_joker_emit_queue(dt)
+    if not self._joker_emit_queue then return end
+    self._joker_emit_timer = self._joker_emit_timer + dt
+    local interval = tonumber(self.JOKER_EMIT_INTERVAL) or 0.18
+    if self._joker_emit_timer >= interval then
+        self._joker_emit_timer = 0
+        self:_apply_one_joker_emit()
+    end
+end
+
+--- End Round — call once when the current round finishes (e.g. blind beaten).
+--- Discards the hand, merges draw + discard piles, shuffles into the draw pile, then refills the hand.
+function Game:end_round()
+    if self.hand and self.hand.send_entire_hand_to_discard_pile then
+        self.hand:send_entire_hand_to_discard_pile()
+    end
+    local deck = self.deck
+    if deck and deck.end_round then
+        deck:end_round()
+    end
+    if self.hand and self.hand.fill_from_deck then
+        self.hand:fill_from_deck()
+    end
+end
+
+--- After beating a blind: return all cards to the deck and reshuffle; hand stays empty until the next blind starts.
+function Game:recycle_full_deck_after_blind_win()
+    if self.hand and self.hand.send_entire_hand_to_discard_pile then
+        self.hand:send_entire_hand_to_discard_pile()
+    end
+    local deck = self.deck
+    if deck and deck.end_round then
+        deck:end_round()
+    end
+end
+
+function Game:prepare_hand_for_new_blind()
+    if not self.deck and Deck then
+        self.deck = Deck()
+    end
+    if self.deck and self.deck.shuffle then
+        self.deck:shuffle()
+    end
+    if not self.hand and Hand then
+        self.hand = Hand(self)
+    end
+    if self.hand and self.hand.clear then
+        self.hand:clear()
+    end
+    if self.hand and self.hand.fill_from_deck then
+        self.hand:fill_from_deck()
+    end
+end
+
+function Game:initialize_run_loop()
+    self.STAGE = self.STAGES.RUN
+    self.ante = 1
+    self.round = 1
+    self.money = 0
+    self.hands = 5
+    self.discards = 5
+    self.round_score = 0
+    self.last_hand_score = 0
+    self.current_blind_index = 1
+    self.selected_blind_index = 1
+    self._blind_resolution_pending = false
+    self.current_blind_target = 0
+    self.current_blind_reward = 0
+    self.current_blind_name = "Small Blind"
+    self.shop_offers = {}
+    self.shop_offer_cursor = 1
+    self.shop_sell_cursor = 1
+    if self.hand and self.hand.clear then
+        self.hand:clear()
+    end
+    self:set_state(self.STATES.BLIND_SELECT)
+end
+
+function Game:enter_blind_select()
+    self:set_state(self.STATES.BLIND_SELECT)
+    self.selected_blind_index = self.current_blind_index or 1
+    if self.selected_blind_index == 3 then
+        self:roll_boss_blind()
+    end
+    self.round_score = 0
+    self.last_hand_score = 0
+    self.current_blind_target = 0
+    self.current_blind_reward = 0
+    self._blind_resolution_pending = false
+    if self.hand and self.hand.clear then
+        self.hand:clear()
+    end
+end
+
+function Game:start_selected_blind()
+    local idx = tonumber(self.selected_blind_index) or tonumber(self.current_blind_index) or 1
+    if not self:is_blind_selectable(idx) then
+        return false
+    end
+    local def = self:get_blind_def(idx)
+    if not def then return false end
+
+    self.current_blind_index = idx
+    self.current_blind_target = self:get_blind_target(idx, self.ante)
+    self.current_blind_reward = tonumber(def.reward) or 0
+    self.current_blind_name = def.name or "Blind"
+    if def.id == "boss" then
+        local proto = self:get_boss_blind_prototype()
+        if proto then
+            self.current_blind_name = proto.name or self.current_blind_name
+            self.current_blind_reward = tonumber(proto.dollars) or self.current_blind_reward
+        end
+    end
+    self.hands = 5
+    self.discards = 5
+    self.round_score = 0
+    self.last_hand_score = 0
+    self._blind_resolution_pending = false
+    self:prepare_hand_for_new_blind()
+    self:set_state(self.STATES.SELECTING_HAND)
+    return true
+end
+
+function Game:advance_after_shop()
+    if self._last_completed_blind_was_boss then
+        self.ante = (tonumber(self.ante) or 1) + 1
+        self.current_blind_index = 1
+    else
+        self.current_blind_index = math.min(3, (tonumber(self.current_blind_index) or 1) + 1)
+    end
+    self.selected_blind_index = self.current_blind_index
+    self.round = (tonumber(self.round) or 0) + 1
+    self._last_completed_blind_was_boss = false
+    self:enter_blind_select()
+end
+
+function Game:continue_from_shop()
+    self:advance_after_shop()
+end
+
+function Game:_build_shop_pool()
+    local pool = {}
+    if type(JOKER_DEFS) ~= "table" then return pool end
+    local owned = {}
+    for _, j in ipairs(self.jokers or {}) do
+        if j and j.def and j.def.id then
+            owned[j.def.id] = true
+        end
+    end
+    for id, def in pairs(JOKER_DEFS) do
+        if type(def) == "table" and owned[id] ~= true then
+            pool[#pool + 1] = id
+        end
+    end
+    for i = #pool, 2, -1 do
+        local j = math.random(i)
+        pool[i], pool[j] = pool[j], pool[i]
+    end
+    return pool
+end
+
+function Game:roll_shop_offers()
+    local pool = self:_build_shop_pool()
+    self.shop_offers = {}
+    local max_offers = math.min(2, #pool)
+    for i = 1, max_offers do
+        local id = pool[i]
+        local def = JOKER_DEFS[id]
+        local sell_value = tonumber(def and def.sell_value) or 1
+        self.shop_offers[#self.shop_offers + 1] = {
+            id = id,
+            name = def and def.name or id,
+            price = math.max(3, math.floor(sell_value * 2)),
+            sell_value = sell_value
+        }
+    end
+    self.shop_offer_cursor = 1
+    self.shop_sell_cursor = math.min(1, #self.jokers or 0)
+end
+
+function Game:enter_shop_after_blind()
+    self:recycle_full_deck_after_blind_win()
+    self.money = (tonumber(self.money) or 0) + (tonumber(self.current_blind_reward) or 0)
+    self:set_state(self.STATES.SHOP)
+    self:roll_shop_offers()
+end
+
+function Game:remove_owned_joker_at(index)
+    if type(index) ~= "number" or index < 1 then return nil end
+    if type(self.jokers) ~= "table" then return nil end
+    local joker = self.jokers[index]
+    if not joker then return nil end
+    table.remove(self.jokers, index)
+    self:remove(joker)
+    self:_apply_joker_layout()
+    self:sync_jokers_interactivity()
+    return joker
+end
+
+function Game:buy_shop_joker(slot_index)
+    local offer = self.shop_offers and self.shop_offers[slot_index]
+    if not offer then return false end
+    if (tonumber(self.money) or 0) < (tonumber(offer.price) or 0) then return false end
+    if #self.jokers >= (self.joker_capacity or 5) then return false end
+    if not self:add_joker_by_def(offer.id) then return false end
+    self.money = self.money - offer.price
+    table.remove(self.shop_offers, slot_index)
+    if self.shop_offer_cursor > #self.shop_offers then
+        self.shop_offer_cursor = math.max(1, #self.shop_offers)
+    end
+    self.shop_sell_cursor = math.max(1, math.min(self.shop_sell_cursor, #self.jokers))
+    return true
+end
+
+function Game:sell_owned_joker(index)
+    local joker = self:remove_owned_joker_at(index)
+    if not joker then return false end
+    local value = tonumber(joker.sell_value) or tonumber(joker.def and joker.def.sell_value) or 0
+    self.money = (tonumber(self.money) or 0) + value
+    self.shop_sell_cursor = math.max(1, math.min(self.shop_sell_cursor, #self.jokers))
+    return true
+end
+
+function Game:evaluate_blind_progress()
+    if self.STATE ~= self.STATES.SELECTING_HAND then
+        return
+    end
+    if self._blind_resolution_pending then
+        return
+    end
+    local target = tonumber(self.current_blind_target) or 0
+    local score = tonumber(self.round_score) or 0
+    if score >= target and target > 0 then
+        self._blind_resolution_pending = true
+        self._last_completed_blind_was_boss = (self.current_blind_index == 3)
+        self:enter_shop_after_blind()
+        return
+    end
+    if (tonumber(self.hands) or 0) <= 0 and score < target then
+        self._blind_resolution_pending = true
+        self:handle_failed_blind_reset()
+    end
+end
+
+function Game:handle_failed_blind_reset()
+    self:set_state(self.STATES.GAME_OVER)
+    self:initialize_run_loop()
 end
 
 function Game:set_jokers_location(on_bottom)
@@ -576,6 +1368,15 @@ end
 local TAP_THRESHOLD = 15
 
 function Game:touchpressed(id, x, y)
+    if self.STATE == self.STATES.BLIND_SELECT then
+        self:handle_blind_select_touch(x, y)
+        return
+    end
+    if self.STATE == self.STATES.SHOP then
+        self:handle_shop_touch(x, y)
+        return
+    end
+    if self.STATE ~= self.STATES.SELECTING_HAND then return end
     if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
     self.touch_start_x = x
     self.touch_start_y = y
@@ -588,6 +1389,8 @@ function Game:touchpressed(id, x, y)
 end
 
 function Game:touchmoved(id, x, y, dx, dy)
+    if self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP then return end
+    if self.STATE ~= self.STATES.SELECTING_HAND then return end
     if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
     if self.dragging and self.dragging.touchmoved then
         self.dragging:touchmoved(id, x, y, dx, dy)
@@ -595,6 +1398,14 @@ function Game:touchmoved(id, x, y, dx, dy)
 end
 
 function Game:touchreleased(id, x, y)
+    if self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP then
+        self.dragging = nil
+        return
+    end
+    if self.STATE ~= self.STATES.SELECTING_HAND then
+        self.dragging = nil
+        return
+    end
     if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then
         self.dragging = nil
         return
