@@ -430,7 +430,14 @@ function Card:draw_tooltip(draw_x, draw_y)
     local card_w = self.VT.w * self.VT.scale
     local tx = draw_x + (card_w - box_w) * 0.5
     local ty = draw_y - box_h - 3
-    if tx < 2 then tx = 2 end
+    local margin = 2
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+        if not sw or sw <= 0 then sw = 320 end
+    end
+    tx = math.max(margin, math.min(tx, sw - box_w - margin))
     if ty < 2 then ty = draw_y + 2 end
     tx = math.floor(tx + 0.5)
     ty = math.floor(ty + 0.5)

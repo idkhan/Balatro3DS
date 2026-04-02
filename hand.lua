@@ -252,7 +252,10 @@ function Hand:toggle_selection(node)
     node.selected = true
     Sfx.play("resources/sounds/card1.ogg")
     table.insert(self.selected, node)
-    if self.game then self.game.active_tooltip_card = node end
+    if self.game then
+        self.game.active_tooltip_card = node
+        self.game.active_tooltip_joker = nil
+    end
     if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
     self:calculate_play()
 end
@@ -890,7 +893,7 @@ function Hand:play_selected()
         timer = 0,
         cards = cards,
         -- Mime Joker: run `inhand_trigger` twice (first pass + one repeat).
-        inhand_mime_repeats_left = self:hasJoker("j_mime") and 1 or 0,
+        inhand_mime_repeats_left = self.game and self.game:hasJoker("j_mime") and 1 or 0,
     }
 
     self:layout_play_cards_at_center(cards)
@@ -947,18 +950,6 @@ function Hand:sort_by_suit(layout_skip_vt_node)
     end
 end
 
-function Hand:hasJoker(joker_id)
-    if G and type(G.jokers) == "table" then
-        for _, j in ipairs(G.jokers) do
-            local def = j and j.def
-            if type(def) == "table" and def.id == joker_id then
-                return true
-            end
-        end
-    end
-    return false
-end
-
 function Hand:calculate_play()
     local n_sel = #self.selected
     if n_sel == 0 then
@@ -991,7 +982,7 @@ function Hand:calculate_play()
 
     local n = #ordered
     local has_four_fingers = false
-    if self:hasJoker("j_four_fingers") then
+    if self.game and self.game:hasJoker("j_four_fingers") then
         has_four_fingers = true
     end
 

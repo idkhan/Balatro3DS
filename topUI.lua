@@ -209,14 +209,14 @@ function TopUI.draw()
     TopUI.LabeledField("Round", G.round, fieldsPositionX + (fieldWidth + padding) * 2, fieldsPositionY + fieldHeight + padding, fieldWidth, fieldHeight, G.C.RED)
     TopUI.LabeledField("", tostring(G.money), fieldsPositionX, fieldsPositionY + fieldHeight + padding, fieldWidth * 2 + padding, fieldHeight, G.C.MONEY)
 
-    -- Joker panel behind all jokers (shown only when jokers are on the top screen).
-    local capacity = (G and G.joker_capacity) or (G and #G.jokers) or 0
-    if G and G.jokers_on_bottom ~= true and capacity > 0 then
-        local slot_count = capacity
+    -- Joker panel behind owned jokers only (top screen); width matches fanned row from `Game`.
+    local n = G and G.jokers and #G.jokers or 0
+    if G and G.jokers_on_bottom ~= true and n > 0 then
         local slot_w, slot_h = G.joker_slot_w or 71, G.joker_slot_h or 95
         local slot_gap = G.joker_slot_gap or 8
         local slot_y = G.joker_slot_y_top or (panelY + panelHeight + 6)
-        local total_w = slot_count * slot_w + (slot_count - 1) * slot_gap
+        local total_w = tonumber(G.joker_row_span_top)
+            or select(2, G:_compute_fanned_joker_row(n, 400, slot_w, slot_gap, 8))
         local start_x = G.joker_slot_start_x or math.floor((400 - total_w) * 0.5 + 0.5)
 
         -- Extra padding so jokers don't touch the panel edges.
