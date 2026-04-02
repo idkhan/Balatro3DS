@@ -499,6 +499,28 @@ function Game:draw_blind_chip_anim(blind_index, center_x, center_y, scale)
     love.graphics.draw(atlas.image, quad, center_x - (cell_w * s * 0.5), center_y - (cell_h * s * 0.5), 0, s, s)
 end
 
+--- Horizontal strip: `animation_atli.shop_sign` (px×py per frame, `frames` count).
+function Game:draw_shop_sign_anim(center_x, center_y, scale)
+    local atlas = self.ANIMATION_ATLAS and self.ANIMATION_ATLAS.shop_sign
+    if not atlas or not atlas.image then return end
+    local cell_w = tonumber(atlas.px) or 113
+    local cell_h = tonumber(atlas.py) or 60
+    local frame_count = tonumber(atlas.frames) or 4
+    local anim_fps = 8
+    local t = love.timer.getTime()
+    local frame = math.floor(t * anim_fps) % math.max(1, frame_count)
+    local iw, ih = atlas.image:getDimensions()
+    local cols = math.max(1, math.floor(iw / cell_w))
+    local col = frame % cols
+    local row = math.floor(frame / cols)
+    local qx = col * cell_w
+    local qy = row * cell_h
+    local quad = love.graphics.newQuad(qx, qy, cell_w, cell_h, iw, ih)
+    local s = scale or 1
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(atlas.image, quad, center_x - (cell_w * s * 0.5), center_y - (cell_h * s * 0.5), 0, s, s)
+end
+
 function Game:draw_bottom_blind_select()
     local card_w, card_h = 98, 300
     local gap = 8

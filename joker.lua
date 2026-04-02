@@ -799,6 +799,18 @@ function Joker:apply_edition_on_hand_scored(ctx)
         ctx.mult = (tonumber(ctx.mult) or 0) + 10
     elseif ed == "polychrome" then
         ctx.mult = (tonumber(ctx.mult) or 0) * 1.5
+    else
+        return
+    end
+
+    self.scoring_shake_timer = SHAKE_MAX_DURATION
+    self.scoring_shake_t0 = love.timer.getTime()
+    if ed == "foil" and Sfx and Sfx.play_chips then
+        Sfx.play_chips()
+    elseif ed == "polychrome" and Sfx and Sfx.play_mult2 then
+        Sfx.play_mult2()
+    elseif Sfx and Sfx.play_mult then
+        Sfx.play_mult()
     end
 end
 

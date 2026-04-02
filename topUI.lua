@@ -88,25 +88,39 @@ function TopUI.draw()
     -- Blind
     local blindPosX, blindPosY = ix, iy
     local blindWidth, blindHeight = iw, math.floor((ih/4) - 1)
-    ix, iy, iw, ih = draw_rect_with_shadow(blindPosX, blindPosY, blindWidth, blindHeight, 4, 4, blind_color, blind_dark, 2)
     
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
-    if not is_blind_select then
-        TopUI.center_text(blind_name, ix, iy -2, iw, ih)
-    else 
-        TopUI.center_text("Choose blind", ix, iy -2, iw, ih)
-    end
-
-    -- Score Requirements Box
-    love.graphics.setColor(blind_sign)
-    ix, iy, iw, ih = draw_rounded_rect(blindPosX, blindPosY + blindHeight + 4, blindWidth, blindHeight * 3, 4, 4, "fill")
-    local score_box_ix, score_box_iy, score_box_iw, score_box_ih = ix, iy, iw, ih
-
-    ix, iy, iw, ih = draw_rect_with_shadow(ix + math.floor(iw/3), iy - 1, 72, ih, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2)
+    
+    
     if is_blind_select then
-        
+        TopUI.center_text("Choose blind", ix, iy -2, iw, ih)
+
+    elseif G.STATE == G.STATES.SHOP then
+        local cell_w = 113
+        local cell_h = 60
+        if G.ANIMATION_ATLAS and G.ANIMATION_ATLAS.shop_sign then
+            local a = G.ANIMATION_ATLAS.shop_sign
+            cell_w = tonumber(a.px) or cell_w
+            cell_h = tonumber(a.py) or cell_h
+        end
+        local s = math.min(iw / cell_w, ih / cell_h) * 0.92
+        if s > 1.25 then s = 1.25 end
+        G:draw_shop_sign_anim(ix + math.floor(iw / 2), iy + math.floor(ih / 2), s)
+
     else
+        -- Score Requirements Box
+        ix, iy, iw, ih = draw_rect_with_shadow(blindPosX, blindPosY, blindWidth, blindHeight, 4, 4, blind_color, blind_dark, 2)
+        love.graphics.setColor(G.C.WHITE)
+        TopUI.center_text(blind_name, ix, iy -2, iw, ih)
+        
+        love.graphics.setColor(blind_sign)
+        ix, iy, iw, ih = draw_rounded_rect(blindPosX, blindPosY + blindHeight + 4, blindWidth, blindHeight * 3, 4, 4, "fill")
+        local score_box_ix, score_box_iy, score_box_iw, score_box_ih = ix, iy, iw, ih
+
+        
+        ix, iy, iw, ih = draw_rect_with_shadow(score_box_ix + math.floor(score_box_iw/3), score_box_iy - 1, 72, score_box_ih, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2)
+
         G:draw_blind_chip_anim(
             blind_index,
             score_box_ix + math.floor(score_box_iw / 6) - 2,
@@ -135,7 +149,7 @@ function TopUI.draw()
 
     -- Round Score, Chips and Mult
     love.graphics.setColor(G.C.BLOCK.SHADOW)
-    local width = iw
+    local width = 64
     ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY, titleWidth, math.floor(titleHeight/3.5), 4, 4, "fill")
     
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
