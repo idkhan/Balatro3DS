@@ -24,11 +24,11 @@ end
 --- Extra shop cost and sell value from the edition alone (added to def `cost` / `sell_cost`).
 function Joker.edition_price_deltas(ed)
     ed = Joker.normalize_edition(ed)
-    if ed == "foil" then return 2, 1 end
-    if ed == "holo" then return 2, 1 end
-    if ed == "polychrome" then return 3, 2 end
-    if ed == "negative" then return 5, 2 end
-    return 0, 0
+    if ed == "foil" then return 2 end
+    if ed == "holo" then return 3 end
+    if ed == "polychrome" then return 5 end
+    if ed == "negative" then return 5 end
+    return 0
 end
 
 --- Atlas key for the front sheet: Negative edition uses pre-baked `Joker1_negative` / `Joker2_negative` sheets.
@@ -110,9 +110,9 @@ function Joker:init(X, Y, W, H, def, params)
     if base_sell == nil then
         base_sell = math.max(1, math.floor(base_cost / 2))
     end
-    local ec, es = Joker.edition_price_deltas(self.edition)
+    local ec = Joker.edition_price_deltas(self.edition)
     self.cost = base_cost + ec
-    self.sell_cost = math.max(0, base_sell + es)
+    self.sell_cost = math.max(1, base_sell)
 
     self.effect_config = self.def.config or {}
 
