@@ -44,7 +44,7 @@ function TopUI.draw()
         end
     end
     local blind_index = G.selected_blind_index or G.current_blind_index or 1
-    if G.STATE == G.STATES.SELECTING_HAND then
+    if G.STATE == G.STATES.SELECTING_HAND or G.STATE == G.STATES.ROUND_EVAL then
         blind_index = G.current_blind_index or blind_index
     end
     local blind_name = (G.get_blind_display_name and G:get_blind_display_name(blind_index)) or ((blind_def and blind_def.name) or (G.current_blind_name or "Blind"))
@@ -95,6 +95,13 @@ function TopUI.draw()
     
     if is_blind_select then
         TopUI.center_text("Choose blind", ix, iy -2, iw, ih)
+
+    elseif G.STATE == G.STATES.ROUND_EVAL then
+        love.graphics.setColor(G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        TopUI.center_text("Round won!", ix, iy - 6, iw, math.floor(ih * 0.55))
+        local bi = G.current_blind_index or 1
+        G:draw_blind_chip_anim(bi, ix + math.floor(iw / 2), iy + math.floor(ih * 0.72), 1.05)
 
     elseif G.STATE == G.STATES.SHOP then
         local cell_w = 113
@@ -225,40 +232,38 @@ function TopUI.draw()
 
     -- Joker panel behind owned jokers only (top screen); width matches fanned row from `Game`.
     local n = G and G.jokers and #G.jokers or 0
+    local slot_w, slot_h = G.joker_slot_w or 71, G.joker_slot_h or 95
+    local slot_gap = G.joker_slot_gap or 8
+    local slot_y = G.joker_slot_y_top or (panelY + panelHeight + 6)
+    local total_w = tonumber(G.joker_row_span_top)
+        or select(2, G:_compute_fanned_joker_row(n, 400, slot_w, slot_gap, 8))
+    local start_x = G.joker_slot_start_x or math.floor((400 - total_w) * 0.5 + 0.5)
+
+    -- Extra padding so jokers don't touch the panel edges.
+    local panel_pad = 4
+    total_w = total_w + (panel_pad * 2)
+    start_x = start_x - panel_pad
+    slot_y = slot_y - panel_pad
+    slot_h = slot_h + (panel_pad * 2)
+
+    -- Dark panel background.
+    if _G.draw_rect_with_shadow then
+        draw_rect_with_shadow(
+            start_x,
+            slot_y,
+            total_w,
+            slot_h,
+            4,
+            2,
+            G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
+            G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
+            2
+        )
+    else
+        love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
+        love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
+    end
     if G and G.jokers_on_bottom ~= true and n > 0 then
-        local slot_w, slot_h = G.joker_slot_w or 71, G.joker_slot_h or 95
-        local slot_gap = G.joker_slot_gap or 8
-        local slot_y = G.joker_slot_y_top or (panelY + panelHeight + 6)
-        local total_w = tonumber(G.joker_row_span_top)
-            or select(2, G:_compute_fanned_joker_row(n, 400, slot_w, slot_gap, 8))
-        local start_x = G.joker_slot_start_x or math.floor((400 - total_w) * 0.5 + 0.5)
-
-        -- Extra padding so jokers don't touch the panel edges.
-        local panel_pad = 4
-        total_w = total_w + (panel_pad * 2)
-        start_x = start_x - panel_pad
-        slot_y = slot_y - panel_pad
-        slot_h = slot_h + (panel_pad * 2)
-
-        -- Dark panel background.
-        local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-        if _G.draw_rect_with_shadow then
-            draw_rect_with_shadow(
-                start_x,
-                slot_y,
-                total_w,
-                slot_h,
-                4,
-                2,
-                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
-                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
-                2
-            )
-        else
-            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
-            love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
-        end
-        love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 
         love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
         love.graphics.setColor(G.C.WHITE)

@@ -18,8 +18,10 @@ require "deck"
 require "hand"
 require "joker"
 require "joker_catalog"
+require "consumable"
 require "game"
 require "globals"
+require "consumable_catalog"
 require "topUI"
 Sfx = require "sfx"
 
@@ -32,7 +34,7 @@ function love.load()
     G = Game()
     G:initialize_run_loop()
 
-    --G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
+    G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
     if G.music then
         G.music:setLooping(true)
         G.music:play()
@@ -119,6 +121,12 @@ function love.gamepadpressed(_, button)
         if button == "dpright" then G:move_blind_select_cursor(1) end
         if button == "y" or button == "a" then
             G:start_selected_blind()
+        end
+        return
+    end
+    if G.STATE == G.STATES.ROUND_EVAL then
+        if button == "y" or button == "a" then
+            G:continue_from_round_win()
         end
         return
     end

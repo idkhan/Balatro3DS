@@ -910,7 +910,7 @@ function Joker:apply_effect(ctx)
         local target_index = self_index and (self_index + 1) or nil
         if target_index and joker_list[target_index] then
             local victim = joker_list[target_index]
-            local gained = tonumber(victim and victim.cost) or 0
+            local gained = tonumber(victim and victim.sell_cost) or 0
             self.stored_mult = (tonumber(self.stored_mult) or 0) + (gained * 2)
             if G and G.remove_owned_joker_at then
                 G:remove_owned_joker_at(target_index)

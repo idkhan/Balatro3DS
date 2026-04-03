@@ -17,8 +17,11 @@ function Game:init(seed)
     self.selectedHandMult = 0
     self.active_tooltip_card = nil
     self.active_tooltip_joker = nil
+    self.active_tooltip_consumable_index = nil
     --- Hit rect + payload for the optional Sell control (`draw_sell_button` / `try_sell_button_press`).
     self._sell_button_hit = nil
+    --- Hit rect + payload for the optional Use control (`draw_use_button` / `try_use_button_press`).
+    self._use_button_hit = nil
     self.round_score = 0
     self.last_hand_score = 0
     --- Run currency
@@ -50,6 +53,12 @@ function Game:init(seed)
     self._joker_emit_next = 1
     self._joker_emit_timer = 0
     self.JOKER_EMIT_INTERVAL = 0.5
+
+    -- Run Consumables (Tarot / Planet cards held outside the deck).
+    self.consumables = {}
+    self.consumable_capacity = 2
+    self._consumable_rects = {}
+    self.consumable_nodes = {}
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
@@ -302,6 +311,8 @@ end
 function Game:draw()
     if self.STATE == self.STATES.BLIND_SELECT then
         self:draw_bottom_blind_select()
+    elseif self.STATE == self.STATES.ROUND_EVAL then
+        self:draw_bottom_round_win()
     elseif self.STATE == self.STATES.SHOP then
         self:draw_bottom_shop()
     end
@@ -332,34 +343,246 @@ function Game:draw()
         panel_h = panel_h + (panel_pad_scaled * 2)
 
         local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-        if _G.draw_rect_with_shadow then
-            draw_rect_with_shadow(
-                panel_x, panel_y, panel_w, panel_h,
-                4, 2,
-                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
-                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
-                2
-            )
-        else
-            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
-            love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
-        end
+        
         love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
     end
 
-    -- Ensure node sprites (especially jokers/cards) are not tinted by prior UI draws.
+    -- Hide consumables during blind select + round eval.
+    local show_consumables = not (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.ROUND_EVAL)
+    if not show_consumables then
+        self._consumable_rects = {}
+        self.active_tooltip_consumable_index = nil
+        if self.consumable_nodes then
+            for _, node in ipairs(self.consumable_nodes) do
+                if node and node.states then
+                    node.states.visible = false
+                end
+            end
+        end
+    else
+        if self.consumable_nodes then
+            for _, node in ipairs(self.consumable_nodes) do
+                if node and node.states then
+                    node.states.visible = true
+                end
+            end
+        end
+        -- Layout consumable nodes (top-right) before drawing.
+        self:draw_consumables_row()
+    end
+
+    -- Ensure node sprites (especially jokers/cards/consumables) are not tinted by prior UI draws.
     love.graphics.setColor(1, 1, 1, 1)
+    -- Draw consumables first, so jokers (and other nodes) stack above them.
+    local cons_set = {}
+    if self.consumable_nodes then
+        for _, cn in ipairs(self.consumable_nodes) do
+            cons_set[cn] = true
+        end
+        for _, cn in ipairs(self.consumable_nodes) do
+            if cn and cn.draw then cn:draw() end
+        end
+    end
     for _, node in ipairs(self.nodes) do
-        node:draw()
+        if not cons_set[node] then
+            node:draw()
+        end
     end
 
     self._sell_button_hit = nil
     self:draw_sell_button()
+
+    self._use_button_hit = nil
+    self:draw_use_button()
+end
+
+--- Add a Consumable by definition id (see `CONSUMABLE_DEFS` in `consumable_catalog.lua`).
+---@param def_id string
+---@return boolean
+function Game:add_consumable(def_id)
+    if type(def_id) ~= "string" or def_id == "" then return false end
+    if not CONSUMABLE_DEFS or type(CONSUMABLE_DEFS) ~= "table" then return false end
+    local def = CONSUMABLE_DEFS[def_id]
+    if type(def) ~= "table" then return false end
+
+    if not self.consumables then self.consumables = {} end
+    if not self.consumable_nodes then self.consumable_nodes = {} end
+    local cap = tonumber(self.consumable_capacity) or 3
+    if #self.consumables >= cap then return false end
+
+    local copy = copy_table(def)
+    table.insert(self.consumables, copy)
+
+    local idx = #self.consumables
+    local node = Consumable(0, 0, copy)
+    self.consumable_nodes[idx] = node
+    self:add(node)
+
+    self:draw_consumables_row()
+    return true
+end
+
+---@param index integer
+---@return table|nil
+function Game:remove_consumable_at(index)
+    if type(index) ~= "number" or index < 1 then return nil end
+    if not self.consumables or type(self.consumables) ~= "table" then return nil end
+    local c = self.consumables[index]
+    if not c then return nil end
+    table.remove(self.consumables, index)
+
+    if self.consumable_nodes and self.consumable_nodes[index] then
+        local node = self.consumable_nodes[index]
+        self:remove(node)
+        table.remove(self.consumable_nodes, index)
+    end
+
+    if self.active_tooltip_consumable_index and
+       self.active_tooltip_consumable_index >= index then
+        self.active_tooltip_consumable_index =
+            math.min(#self.consumables, self.active_tooltip_consumable_index)
+    end
+
+    self:draw_consumables_row()
+    return c
+end
+
+--- Apply the runtime effect for a Consumable and play a simple SFX where appropriate.
+---@param c table
+function Game:apply_consumable_effect(c)
+    if type(c) ~= "table" then return end
+    local kind = c.kind
+    local id = c.id
+
+    if kind == "tarot" then
+        if id == "tarot_fool" then
+            -- Simple money boost.
+            self.money = (tonumber(self.money) or 0) + 5
+            if Sfx and Sfx.play_money then Sfx.play_money() end
+        elseif id == "tarot_magician" then
+            -- Basic hand level up.
+            self.selectedHandLevel = (tonumber(self.selectedHandLevel) or 1) + 1
+            if Sfx and Sfx.play_mult then Sfx.play_mult() end
+        end
+    elseif kind == "planet" then
+        -- Planet cards upgrade their mapped hand (see `hand` field in `consumable_catalog.lua`).
+        -- Only the `hand_stats[idx].level` needs to increase; chips/mult are derived from that.
+        local target_hand_name = c.hand
+        if target_hand_name and self.handlist and self.hand_stats then
+            local target_idx = nil
+            for i, name in ipairs(self.handlist) do
+                if name == target_hand_name then
+                    target_idx = i
+                    break
+                end
+            end
+
+            if target_idx then
+                local stats = self.hand_stats[target_idx]
+                if stats then
+                    local next_level = (tonumber(stats.level) or 1) + 1
+                    stats.level = next_level
+
+                    -- If the player currently has this hand selected,
+                    -- update displayed chips/mult immediately.
+                    if self.selectedHand == target_idx then
+                        local level = tonumber(stats.level) or 1
+                        local chips = (tonumber(stats.base_chips) or 0) + ((level - 1) * (tonumber(stats.chips_per_level) or 0))
+                        local mult = (tonumber(stats.base_mult) or 0) + ((level - 1) * (tonumber(stats.mult_per_level) or 0))
+                        self.selectedHandLevel = level
+                        self.selectedHandChips = chips
+                        self.selectedHandMult = mult
+                    end
+                end
+            end
+        end
+    end
+end
+
+--- Use (consume) a Consumable at the given index.
+---@param index integer
+---@return boolean
+function Game:use_consumable(index)
+    local c = self:remove_consumable_at(index)
+    if not c then return false end
+    self:apply_consumable_effect(c)
+    return true
+end
+
+--- Draw Consumable cards (Tarot / Planet) as small sprites in the top-right area of the bottom screen.
+function Game:draw_consumables_row()
+    local list = self.consumables or {}
+    local nodes = self.consumable_nodes or {}
+    self._consumable_rects = {}
+    if #list == 0 then return end
+
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+    end
+    if not sw or sw <= 0 then sw = 320 end
+
+    local card_w, card_h = 72, 95
+    local gap = -4
+    local right_margin = 0
+    local y = 0
+
+    local n = #list
+    local max_span = math.max(card_w, sw - right_margin)
+
+    local step, span
+    if n <= 1 then
+        step = 0
+        span = card_w
+    else
+        local natural_span = n * card_w + (n - 1) * gap
+        if natural_span <= max_span then
+            step = card_w + gap
+            span = natural_span
+        else
+            step = (max_span - card_w) / (n - 1)
+            span = (n - 1) * step + card_w
+        end
+    end
+
+    -- Right-align the row so it's always in the top-right corner.
+    local start_x = (sw - right_margin) - span
+
+    for i = 1, n do
+        local node = nodes[i]
+        local x = start_x + (i - 1) * step
+        if node then
+            node.T.x = x
+            node.T.y = y
+            node.T.r = 0
+            node.T.scale = 1
+            if node.VT then
+                -- Snap VT when not being dragged so layout updates immediately.
+                if self.dragging ~= node then
+                    node.VT.x = x
+                    node.VT.y = y
+                    node.VT.r = 0
+                    node.VT.scale = 1
+                end
+            end
+        end
+
+        self._consumable_rects[i] = { x = x, y = y, w = card_w, h = card_h }
+    end
+
 end
 
 --- What can be sold this frame (extend with new `kind` values later).
 ---@return { kind: string, index: number, node: Joker|nil }|nil
 function Game:get_active_sell_target()
+    -- Consumable sell button (enabled whenever a consumable is selected).
+    local idx = self.active_tooltip_consumable_index
+    local c = idx and self.consumables and self.consumables[idx]
+    if c then
+        return { kind = "consumable", index = idx, node = nil }
+    end
+
     if self.jokers_on_bottom ~= true then return nil end
     local j = self.active_tooltip_joker
     if j then
@@ -379,8 +602,12 @@ function Game:get_sell_anchor_rect(sell_target)
         if node and node.get_collision_rect then
             return node:get_collision_rect()
         end
+    elseif sell_target.kind == "consumable" then
+        local idx = sell_target.index
+        if self._consumable_rects and self._consumable_rects[idx] then
+            return self._consumable_rects[idx]
+        end
     end
-    -- Future: elseif sell_target.kind == "consumable" then return ...
     return nil
 end
 
@@ -388,6 +615,16 @@ function Game:perform_sell_for_target(sell_target)
     if not sell_target then return false end
     if sell_target.kind == "joker" then
         return self:sell_owned_joker(sell_target.index)
+    elseif sell_target.kind == "consumable" then
+        local idx = sell_target.index
+        local c = self:remove_consumable_at(idx)
+        if not c then return false end
+        local value = tonumber(c.sell_cost) or 0
+        self.money = (tonumber(self.money) or 0) + value
+        if self.active_tooltip_consumable_index == idx then
+            self.active_tooltip_consumable_index = nil
+        end
+        return true
     end
     -- Future kinds: vouchers, boosters, etc.
     return false
@@ -408,11 +645,14 @@ function Game:draw_sell_button()
     if target.kind == "joker" and target.node then
         local n = target.node
         sell_cost = math.max(0, math.floor(tonumber(n.sell_cost) or tonumber(n.def and n.def.sell_cost) or 0))
+    elseif target.kind == "consumable" then
+        local c = self.consumables and self.consumables[target.index]
+        sell_cost = math.max(0, math.floor(tonumber(c and c.sell_cost) or 0))
     end
     local label = string.format("Sell $%d", sell_cost)
     local btn_w = math.max(34, font:getWidth(label) + 10)
     local btn_h = math.max(14, font:getHeight() + 4)
-    local fill_c = self.C and self.C.BLOCK and self.C.BLOCK.BACK
+    local fill_c = self.C and self.C.PALE_GREEN
     local shadow_c = self.C and self.C.BLOCK and self.C.BLOCK.SHADOW
     local text_c = self.C and self.C.WHITE or { 1, 1, 1, 1 }
 
@@ -433,6 +673,11 @@ function Game:draw_sell_button()
     if bx < margin then bx = margin end
 
     local by = anchor.y + math.floor((anchor.h - btn_h) * 0.5 + 0.5)
+    if target.kind == "consumable" then
+        -- Place Sell below the consumable
+        local by_use = by
+        by = by_use + btn_h + 2
+    end
     if by < margin then by = margin end
     if _G.draw_rect_with_shadow and fill_c and shadow_c then
         draw_rect_with_shadow(bx, by, btn_w, btn_h, 3, 2, fill_c, shadow_c, 1)
@@ -444,10 +689,7 @@ function Game:draw_sell_button()
         end
         love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
     end
-    love.graphics.setColor(self.C and self.C.RED or { 0.9, 0.25, 0.2, 1 })
-    love.graphics.setLineWidth(1)
-    love.graphics.rectangle("line", bx, by, btn_w, btn_h, 3, 3)
-    love.graphics.setColor(text_c[1], text_c[2], text_c[3], text_c[4] or 1)
+    love.graphics.setColor(self.C.WHITE)
     love.graphics.print(label, bx + math.floor((btn_w - font:getWidth(label)) * 0.5 + 0.5), by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5))
 
     self._sell_button_hit = {
@@ -459,13 +701,98 @@ function Game:draw_sell_button()
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 end
 
+--- One Use control under the currently selected consumable.
+function Game:draw_use_button()
+    if not self.active_tooltip_consumable_index then return end
+    if not self.consumables or type(self.consumables) ~= "table" then return end
+    local c = self.consumables[self.active_tooltip_consumable_index]
+    if not c then return end
+    if not self._consumable_rects or not self._consumable_rects[self.active_tooltip_consumable_index] then return end
+
+    local anchor = self._consumable_rects[self.active_tooltip_consumable_index]
+
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local prev_font = love.graphics.getFont()
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setFont(font)
+
+    local label = "Use"
+    local btn_w = math.max(34, font:getWidth(label) + 10)
+    local btn_h = math.max(14, font:getHeight() + 4)
+    local fill_c = self.C and self.C.ORANGE
+    local shadow_c = self.C and self.C.BLOCK and self.C.BLOCK.SHADOW
+
+    local gap = 4
+    local margin = 2
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+    end
+    if not sw or sw <= 0 then sw = 320 end
+
+    -- Prefer placing Use on the right side of selected item; fallback to left.
+    local bx = anchor.x + anchor.w + gap
+    if bx + btn_w > (sw - margin) then
+        bx = anchor.x - btn_w - gap
+    end
+    if bx < margin then bx = margin end
+
+    local by = anchor.y + math.floor((anchor.h - btn_h) * 0.5 + 0.5)
+    if by < margin then by = margin end
+
+    if _G.draw_rect_with_shadow and fill_c and shadow_c then
+        draw_rect_with_shadow(bx, by, btn_w, btn_h, 3, 2, fill_c, shadow_c, 1)
+    else
+        if type(fill_c) == "table" then
+            love.graphics.setColor(fill_c[1], fill_c[2], fill_c[3], fill_c[4] or 1)
+        else
+            love.graphics.setColor(0.15, 0.15, 0.18, 1)
+        end
+        love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
+    end
+
+    love.graphics.setColor(self.C.WHITE)
+    love.graphics.print(label, bx + math.floor((btn_w - font:getWidth(label)) * 0.5 + 0.5), by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5))
+
+    self._use_button_hit = {
+        x = bx, y = by, w = btn_w, h = btn_h,
+        target = { kind = "consumable", index = self.active_tooltip_consumable_index },
+    }
+
+    love.graphics.setFont(prev_font)
+    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+end
+
 function Game:try_sell_button_press(x, y)
     local hit = self._sell_button_hit
     if not hit or not hit.target then return false end
     if not self:_point_in_rect_simple(x, y, hit) then return false end
+    -- Consumables become non-interactive when jokers are on bottom.
+    if hit.target.kind == "consumable" and self.jokers_on_bottom == true then
+        return false
+    end
     self.touch_start_x = x
     self.touch_start_y = y
     return self:perform_sell_for_target(hit.target)
+end
+
+function Game:try_use_button_press(x, y)
+    local hit = self._use_button_hit
+    if not hit or not hit.target then return false end
+    if not self:_point_in_rect_simple(x, y, hit) then return false end
+    -- Consumables become non-interactive when jokers are on bottom.
+    if self.jokers_on_bottom == true then
+        return false
+    end
+    local idx = hit.target.index
+    local ok = self:use_consumable(idx)
+    if ok and self.active_tooltip_consumable_index == idx then
+        self.active_tooltip_consumable_index = nil
+    end
+    self.active_tooltip_card = nil
+    self.active_tooltip_joker = nil
+    return ok
 end
 
 function Game:_point_in_rect_simple(px, py, r)
@@ -708,6 +1035,51 @@ function Game:handle_blind_select_touch(x, y)
             end
             return true
         end
+    end
+    return false
+end
+
+function Game:draw_bottom_round_win()
+    local panel_x, panel_y, panel_w, panel_h = 8, 8, 304, 124
+    if _G.draw_rect_with_shadow then
+        draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 4, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
+    else
+        love.graphics.setColor(self.C.PANEL)
+        love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
+    end
+
+    local blind_idx = tonumber(self.current_blind_index) or 1
+    local blind_label = self:get_blind_display_name(blind_idx) or "Blind"
+    local target = tonumber(self.current_blind_target) or 0
+    local final_score = tonumber(self.round_score) or 0
+    local reward = tonumber(self.current_blind_reward) or 0
+
+    love.graphics.setColor(self.C.WHITE)
+    love.graphics.setFont(self.FONTS.PIXEL.MEDIUM)
+    love.graphics.print("Round won!", panel_x + 8, panel_y + 4)
+    love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+    love.graphics.print(blind_label, panel_x + 8, panel_y + 22)
+
+    love.graphics.setColor(self.C.GREY)
+    love.graphics.print(string.format("Score %d / %d", final_score, target), panel_x + 8, panel_y + 38)
+
+    love.graphics.setColor(self.C.MONEY)
+    love.graphics.print(string.format("+%d added to account", reward), panel_x + 8, panel_y + 54)
+
+    self._round_win_continue_rect = { x = panel_x + panel_w - 84, y = panel_y + panel_h - 24, w = 74, h = 18 }
+    love.graphics.setColor(self.C.ORANGE)
+    love.graphics.rectangle("fill", self._round_win_continue_rect.x, self._round_win_continue_rect.y, self._round_win_continue_rect.w, self._round_win_continue_rect.h, 3, 3)
+    love.graphics.setColor(self.C.WHITE)
+    love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+    love.graphics.rectangle("line", self._round_win_continue_rect.x, self._round_win_continue_rect.y, self._round_win_continue_rect.w, self._round_win_continue_rect.h, 3, 3)
+    love.graphics.print("Continue", self._round_win_continue_rect.x + 10, self._round_win_continue_rect.y + 4)
+end
+
+function Game:handle_round_win_touch(x, y)
+    if not self._round_win_continue_rect then return false end
+    if self:_point_in_rect_simple(x, y, self._round_win_continue_rect) then
+        self:continue_from_round_win()
+        return true
     end
     return false
 end
@@ -1360,7 +1732,7 @@ function Game:initialize_run_loop()
     self.STAGE = self.STAGES.RUN
     self.ante = 1
     self.round = 1
-    self.money = 100
+    self.money = 0
     self.hands = 5
     self.discards = 5
     self.round_score = 0
@@ -1377,6 +1749,10 @@ function Game:initialize_run_loop()
     if self.hand and self.hand.clear then
         self.hand:clear()
     end
+    -- Start each run with a couple of simple Consumables for testing.
+    self.consumables = {}
+    self:add_consumable("tarot_fool")
+    self:add_consumable("planet_mercury")
     self:set_state(self.STATES.BLIND_SELECT)
 end
 
@@ -1496,11 +1872,20 @@ function Game:roll_shop_offers()
     self.shop_sell_cursor = math.min(1, #self.jokers or 0)
 end
 
-function Game:enter_shop_after_blind()
+--- Blind just beaten: recycle deck, pay reward, show round-win screen (then shop).
+function Game:enter_round_win_after_blind()
     self:recycle_full_deck_after_blind_win()
     self.money = (tonumber(self.money) or 0) + (tonumber(self.current_blind_reward) or 0)
+    self:set_state(self.STATES.ROUND_EVAL)
+end
+
+function Game:enter_shop_after_blind()
     self:set_state(self.STATES.SHOP)
     self:roll_shop_offers()
+end
+
+function Game:continue_from_round_win()
+    self:enter_shop_after_blind()
 end
 
 function Game:remove_owned_joker_at(index)
@@ -1567,7 +1952,7 @@ function Game:evaluate_blind_progress()
     if score >= target and target > 0 then
         self._blind_resolution_pending = true
         self._last_completed_blind_was_boss = (self.current_blind_index == 3)
-        self:enter_shop_after_blind()
+        self:enter_round_win_after_blind()
         return
     end
     if (tonumber(self.hands) or 0) <= 0 and score < target then
@@ -1589,6 +1974,9 @@ function Game:set_jokers_location(on_bottom)
     self.jokers_on_bottom = to_bottom
     if not to_bottom then
         self.active_tooltip_joker = nil
+    else
+        -- When jokers are on bottom, consumables become non-interactive (no Use/Sell).
+        self.active_tooltip_consumable_index = nil
     end
     self:sync_jokers_interactivity()
 
@@ -1732,12 +2120,53 @@ local function node_is_owned_joker(self, node)
     return false
 end
 
+local function node_is_owned_consumable(self, node)
+    if not node or not self or not self.consumable_nodes then return false end
+    for idx, cnode in ipairs(self.consumable_nodes) do
+        if cnode == node then return true, idx end
+    end
+    return false, nil
+end
+
 function Game:touchpressed(id, x, y)
+    if self:try_use_button_press(x, y) then
+        return
+    end
     if self:try_sell_button_press(x, y) then
         return
     end
     if self.STATE == self.STATES.BLIND_SELECT then
+        -- When jokers are at the bottom, prioritize joker input over blind-select panel taps.
+        if self.jokers_on_bottom == true then
+            local node = self:get_node_at(x, y)
+            if node and node_is_owned_joker(self, node) then
+                self.touch_start_x = x
+                self.touch_start_y = y
+                if node.touchpressed then
+                    node:touchpressed(id, x, y)
+                    self.dragging = node
+                    self:move_to_front(node)
+                end
+                return
+            end
+        end
         if self:handle_blind_select_touch(x, y) then return end
+    end
+    if self.STATE == self.STATES.ROUND_EVAL then
+        if self.jokers_on_bottom == true then
+            local node = self:get_node_at(x, y)
+            if node and node_is_owned_joker(self, node) then
+                self.touch_start_x = x
+                self.touch_start_y = y
+                if node.touchpressed then
+                    node:touchpressed(id, x, y)
+                    self.dragging = node
+                    self:move_to_front(node)
+                end
+                return
+            end
+        end
+        if self:handle_round_win_touch(x, y) then return end
     end
     if self.STATE == self.STATES.SHOP then
         -- In shop, prioritize dragging/tapping an actual joker node over panel taps.
@@ -1757,28 +2186,52 @@ function Game:touchpressed(id, x, y)
         if self:handle_shop_touch(x, y) then return end
     end
     local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND)
-    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP) and self.jokers_on_bottom == true
-    if not selecting_hand and not joker_touch_state then return end
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local consumable_touch_state = (self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL) and self.jokers_on_bottom ~= true
+    if not selecting_hand and not joker_touch_state and not consumable_touch_state then return end
     if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
     self.touch_start_x = x
     self.touch_start_y = y
     local node = self:get_node_at(x, y)
-    if joker_touch_state and node and not node_is_owned_joker(self, node) then
+    if node and joker_touch_state and (not node_is_owned_joker(self, node)) and (not node_is_owned_consumable(self, node)) then
         node = nil
     end
+    if node and consumable_touch_state then
+        local is_cons = select(1, node_is_owned_consumable(self, node))
+        if is_cons then
+            -- Allow dragging consumables even when jokers are not on bottom.
+            self.touch_start_x = x
+            self.touch_start_y = y
+        end
+    end
     if node and node.touchpressed then
-        node:touchpressed(id, x, y)
-        self.dragging = node
-        self:move_to_front(node)
+        local is_c = select(1, node_is_owned_consumable(self, node))
+        if not (is_c and self.jokers_on_bottom == true) then
+            node:touchpressed(id, x, y)
+            self.dragging = node
+            self:move_to_front(node)
+        end
     end
 end
 
 function Game:touchmoved(id, x, y, dx, dy)
     local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND)
-    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP) and self.jokers_on_bottom == true
-    if not selecting_hand and not joker_touch_state then return end
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local consumable_touch_state = (self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL)
+    if not selecting_hand and not joker_touch_state and not consumable_touch_state then return end
     if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
-    if joker_touch_state and self.dragging and not node_is_owned_joker(self, self.dragging) then return end
+    if self.dragging and (joker_touch_state or consumable_touch_state) then
+        local is_j = node_is_owned_joker(self, self.dragging)
+        local is_c = select(1, node_is_owned_consumable(self, self.dragging))
+        if not is_j and not is_c then return end
+    end
+    if self.dragging and self.jokers_on_bottom == true then
+        local is_c = select(1, node_is_owned_consumable(self, self.dragging))
+        if is_c then
+            -- Consumables are non-interactive while jokers are on bottom.
+            return
+        end
+    end
     if self.dragging and self.dragging.touchmoved then
         self.dragging:touchmoved(id, x, y, dx, dy)
     end
@@ -1786,8 +2239,14 @@ end
 
 function Game:touchreleased(id, x, y)
     local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND)
-    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP) and self.jokers_on_bottom == true
-    if not selecting_hand and not joker_touch_state then
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local tapped_consumable = false
+    if self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL and self.jokers_on_bottom ~= true then
+        local node_at = self:get_node_at(x, y)
+        local is_c = select(1, node_is_owned_consumable(self, node_at))
+        tapped_consumable = is_c == true
+    end
+    if not selecting_hand and not joker_touch_state and not tapped_consumable then
         self.dragging = nil
         return
     end
@@ -1832,26 +2291,49 @@ function Game:touchreleased(id, x, y)
             end
         end
     end
+    -- Tap on hand cards toggles selection.
     if released and self.hand and not reordered and dist < TAP_THRESHOLD then
         for _, node in ipairs(self.hand.card_nodes) do
             if node == released then
                 self.hand:toggle_selection(node)
+                self.active_tooltip_consumable_index = nil
                 break
             end
         end
     end
+    -- Tap on owned Jokers toggles tooltip.
     if released and self.jokers_on_bottom and node_is_owned_joker(self, released) and not reordered and dist < TAP_THRESHOLD then
         if self.active_tooltip_joker == released then
             self.active_tooltip_joker = nil
         else
             self.active_tooltip_joker = released
             self.active_tooltip_card = nil
+            self.active_tooltip_consumable_index = nil
             self:move_to_front(released)
         end
     end
+    -- Tap on a Consumable node (Tarot / Planet) in the top-right of the bottom screen.
+    -- Selecting shows the Use/Sell buttons; the button performs the action.
+    if dist < TAP_THRESHOLD and self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL and self.jokers_on_bottom ~= true then
+        local node_at = self:get_node_at(x, y)
+        local is_c, idx = node_is_owned_consumable(self, node_at)
+        if is_c and idx then
+            if self.active_tooltip_consumable_index == idx then
+                self.active_tooltip_consumable_index = nil
+            else
+                self.active_tooltip_consumable_index = idx
+            end
+            self.active_tooltip_card = nil
+            self.active_tooltip_joker = nil
+            self.dragging = nil
+            return
+        end
+    end
+
     if not released and dist < TAP_THRESHOLD then
         self.active_tooltip_card = nil
         self.active_tooltip_joker = nil
+        self.active_tooltip_consumable_index = nil
     end
     self.dragging = nil
     if released and self.hand then
