@@ -2220,10 +2220,8 @@ function Game:touchmoved(id, x, y, dx, dy)
     local consumable_touch_state = (self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL)
     if not selecting_hand and not joker_touch_state and not consumable_touch_state then return end
     if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
-    if self.dragging and (joker_touch_state or consumable_touch_state) then
-        local is_j = node_is_owned_joker(self, self.dragging)
-        local is_c = select(1, node_is_owned_consumable(self, self.dragging))
-        if not is_j and not is_c then return end
+    if self.dragging and joker_touch_state then
+        if not node_is_owned_joker(self, self.dragging) then return end
     end
     if self.dragging and self.jokers_on_bottom == true then
         local is_c = select(1, node_is_owned_consumable(self, self.dragging))
