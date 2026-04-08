@@ -579,14 +579,12 @@ function Joker:draw_tooltip(draw_x, draw_y)
 end
 
 
-function Joker:draw()
-    if not self.states.visible then return end
-
-    local prev_draw_r, prev_draw_g, prev_draw_b, prev_draw_a = love.graphics.getColor()
-    love.graphics.setColor(1, 1, 1, 1)
-
+function Joker:get_layout_draw_xy()
     local draw_x = self.VT.x + self.collision_offset.x
     local draw_y = self.VT.y + self.collision_offset.y
+    if G and G.active_tooltip_joker == self and self.shop_offer_slot == nil then
+        draw_y = draw_y - 8
+    end
 
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         local mag = SHAKE_MAGNITUDE * (self.scoring_shake_timer / SHAKE_MAX_DURATION)
@@ -597,6 +595,27 @@ function Joker:draw()
         draw_x = draw_x + math.sin(t * 85) * mag
         draw_y = draw_y + math.cos(t * 73) * mag * 0.65
     end
+    return draw_x, draw_y
+end
+
+function Joker:should_draw_tooltip()
+    return self.face_up and G and G.active_tooltip_joker == self
+        and (G.jokers_on_bottom == true or self.shop_offer_slot ~= nil)
+end
+
+function Joker:draw_tooltip_overlay()
+    if not self.states.visible or not self:should_draw_tooltip() then return end
+    local draw_x, draw_y = self:get_layout_draw_xy()
+    self:draw_tooltip(draw_x, draw_y)
+end
+
+function Joker:draw()
+    if not self.states.visible then return end
+
+    local prev_draw_r, prev_draw_g, prev_draw_b, prev_draw_a = love.graphics.getColor()
+    love.graphics.setColor(1, 1, 1, 1)
+
+    local draw_x, draw_y = self:get_layout_draw_xy()
 
     love.graphics.push()
 
@@ -638,10 +657,6 @@ function Joker:draw()
     love.graphics.pop()
 
     love.graphics.setColor(prev_draw_r, prev_draw_g, prev_draw_b, prev_draw_a)
-
-    if self.face_up and G and G.jokers_on_bottom == true and G.active_tooltip_joker == self then
-        self:draw_tooltip(draw_x, draw_y)
-    end
 
     -- Debug bounding box.
     self:draw_boundingrect()

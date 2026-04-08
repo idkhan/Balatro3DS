@@ -264,6 +264,20 @@ function Hand:has_selection()
     return #self.selected > 0
 end
 
+function Hand:clear_selection()
+    for _, n in ipairs(self.selected) do
+        if n then n.selected = false end
+    end
+    self.selected = {}
+    if self.game then
+        self.game.active_tooltip_card = nil
+    end
+    if self.game and self.game.move_selected_hand_cards_to_front then
+        self.game:move_selected_hand_cards_to_front()
+    end
+    self:calculate_play()
+end
+
 function Hand:discard_selected()
     if self._play_sequence then return end
     if #self.selected == 0 or not self.game or G.discards <= 0 then return end

@@ -179,6 +179,44 @@ local function apply_seal_indices(self)
     end
 end
 
+--- Recompute `rank_index` and enhancement visuals from `card_data` / instance fields (after rank/suit/editing).
+function Card:sync_visual_from_card_data()
+    local data = self.card_data or {}
+    local rank = data.rank or (self.params and self.params.rank)
+    local suit = data.suit or (self.params and self.params.suit)
+
+    local function suit_offset(s)
+        if not s then return 0 end
+        if type(s) == "string" then
+            s = s:lower()
+            if s == "hearts" then return 0 end
+            if s == "clubs" then return 13 end
+            if s == "diamonds" then return 26 end
+            if s == "spades" then return 39 end
+        elseif type(s) == "number" then
+            if s == 1 then return 0 end
+            if s == 2 then return 13 end
+            if s == 3 then return 26 end
+            if s == 4 then return 39 end
+        end
+        return 0
+    end
+
+    if rank then
+        self.rank_index = math.max(0, (rank - 2) + suit_offset(suit))
+    end
+
+    local enh = data.enhancement
+    if enh == "none" or enh == "" then enh = nil end
+    self.enhancement = enh
+
+    local seal = data.seal
+    if seal == "none" or seal == "" then seal = nil end
+    self.seal = seal
+
+    self:refresh_quads()
+end
+
 function Card:refresh_quads()
     apply_enhancement_center_indices(self)
     apply_seal_indices(self)
@@ -571,12 +609,8 @@ function Card:update(dt)
     end
 end
 
-function Card:draw()
-    if not self.states.visible then return end
-
-    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-    love.graphics.setColor(1, 1, 1, 1)
-
+--- World draw position for sprite and tooltip (selected lift + scoring shake).
+function Card:get_layout_draw_xy()
     local draw_x = self.VT.x + self.collision_offset.x
     local draw_y = self.VT.y + self.collision_offset.y
     if self.selected and not self.scoring_center then draw_y = draw_y - SELECTED_LIFT end
@@ -590,6 +624,27 @@ function Card:draw()
         draw_x = draw_x + math.sin(t * 85) * mag
         draw_y = draw_y + math.cos(t * 73) * mag * 0.65
     end
+    return draw_x, draw_y
+end
+
+function Card:should_draw_tooltip()
+    if not self.face_up then return false end
+    return self.states.drag.is or (G and G.active_tooltip_card == self)
+end
+
+function Card:draw_tooltip_overlay()
+    if not self.states.visible or not self:should_draw_tooltip() then return end
+    local draw_x, draw_y = self:get_layout_draw_xy()
+    self:draw_tooltip(draw_x, draw_y)
+end
+
+function Card:draw()
+    if not self.states.visible then return end
+
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setColor(1, 1, 1, 1)
+
+    local draw_x, draw_y = self:get_layout_draw_xy()
 
     love.graphics.push()
 
@@ -625,14 +680,6 @@ function Card:draw()
     end
 
     love.graphics.pop()
-
-    local show_tooltip = false
-    if self.face_up then
-        show_tooltip = self.states.drag.is or (G and G.active_tooltip_card == self)
-    end
-    if show_tooltip then
-        self:draw_tooltip(draw_x, draw_y)
-    end
 
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 

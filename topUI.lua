@@ -102,7 +102,7 @@ function TopUI.draw()
         TopUI.center_text("Round won!", ix, iy - 6, iw, math.floor(ih * 0.55))
         local bi = G.current_blind_index or 1
         G:draw_blind_chip_anim(bi, ix + math.floor(iw / 2), iy + math.floor(ih * 0.72), 1.05)
-
+        
     elseif G.STATE == G.STATES.SHOP then
         local cell_w = 113
         local cell_h = 60
