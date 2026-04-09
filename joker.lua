@@ -1,11 +1,43 @@
 ---@class Joker : Moveable
 Joker = Moveable:extend()
+require "joker_effects"
 
 -- Basic 2-layer joker: back sprite and front sprite.
 -- Rendering logic is similar to `Card:draw()` but uses atlas cell indices instead of rank/suit.
 
 local SHAKE_MAGNITUDE = 8
 local SHAKE_MAX_DURATION = 0.22
+
+local function lower(s)
+    return string.lower(tostring(s or ""))
+end
+
+local function parse_first_number(s, fallback)
+    local n = tonumber((tostring(s or "")):match("([%d%.]+)"))
+    if n == nil then return fallback end
+    return n
+end
+
+local function text_has(s, needle)
+    return lower(s):find(lower(needle), 1, true) ~= nil
+end
+
+local function is_face_rank(rank)
+    rank = tonumber(rank)
+    return rank == 11 or rank == 12 or rank == 13
+end
+
+local function rank_is_even(rank)
+    rank = tonumber(rank)
+    if rank == nil then return false end
+    return rank ~= 14 and rank % 2 == 0
+end
+
+local function rank_is_odd(rank)
+    rank = tonumber(rank)
+    if rank == nil then return false end
+    return rank == 14 or rank % 2 == 1
+end
 
 ---@param raw string|nil
 ---@return "base"|"foil"|"holo"|"polychrome"|"negative"
@@ -118,6 +150,9 @@ function Joker:init(X, Y, W, H, def, params)
 
     -- Runtime accumulator for effects that grow over time (e.g. Ceremonial Dagger).
     self.stored_mult = tonumber(self.effect_config.mult) or 0
+    self.stored_chips = tonumber(self.effect_config.chips) or 0
+    self.stored_xmult = tonumber(self.effect_config.Xmult) or 1
+    self.runtime_counter = 0
     self.loyalty_remaining = nil
     self.free_joker_slots = nil
 
@@ -167,6 +202,8 @@ function Joker:init(X, Y, W, H, def, params)
         end
         self.loyalty_remaining = remaining
     end
+
+    self.effect_impl = JokerEffects.get(self)
 
     local cw = W or 71
     local ch = H or 95
@@ -392,6 +429,7 @@ end
 function Joker:get_tooltip_body_lines()
     local def = self.def or {}
     local edition_lines = self:get_edition_tooltip_lines()
+    local impl = self.effect_impl
     local function append_edition(lines)
         for _, el in ipairs(edition_lines) do
             table.insert(lines, el)
@@ -409,7 +447,18 @@ function Joker:get_tooltip_body_lines()
         local lines = split_tooltip_override(def.tooltip)
         if lines then return append_edition(lines) end
     end
-    return append_edition(describe_joker_effect_lines(self))
+    local base_lines = describe_joker_effect_lines(self)
+    if impl and type(impl.tooltip_lines) == "function" then
+        local extra = impl.tooltip_lines(self)
+        if type(extra) == "table" then
+            for _, line in ipairs(extra) do
+                if type(line) == "string" then
+                    table.insert(base_lines, line)
+                end
+            end
+        end
+    end
+    return append_edition(base_lines)
 end
 
 function Joker:draw_tooltip(draw_x, draw_y)
@@ -680,127 +729,10 @@ end
 -- `event_name` is something like: "on_hand_scored"
 -- `ctx` is the runtime scoring context.
 function Joker:matches_trigger(event_name, ctx)
-    -- Passive, do nothing
-    if self.effect_type == "Hand card double" then
-        return false
+    if self.effect_impl and type(self.effect_impl.matches_trigger) == "function" then
+        return self.effect_impl.matches_trigger(self, event_name, ctx) == true
     end
-
-    -- Unknown effect types are non-triggering.
-    if self.effect_type == nil then
-        return false
-    end
-
-    -- Determine event mapping for the data-driven effect.
-    local default_event = nil
-    if self.effect_type == "Mult" or self.effect_type == "Chips" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Suit Mult" or self.effect_type == "Suit Chips" then
-        default_event = "card_played"
-    elseif self.effect_type == "Type Mult" or self.effect_type == "Type Chips" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Hand Size Mult" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Stencil Mult" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Discard Chips" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "No Discard Mult" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Stone card hands" then
-        default_event = "on_blind_selected"
-    elseif self.effect_type == "1 in 6 mult" or self.effect_type == "1 in 10 mult" then
-        default_event = "on_hand_scored"
-    end
-
-    local expected_event = default_event
-    if expected_event and expected_event ~= event_name then
-        return false
-    end
-
-    -- Apply effect-specific conditions.
-    local cfg = self.effect_config or {}
-    if self.effect_type == "Suit Mult" or self.effect_type == "Suit Chips" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        if extra.suit ~= nil then
-            if ctx == nil or ctx.suit ~= extra.suit then return false end
-        end
-    elseif self.effect_type == "Type Mult" or self.effect_type == "Type Chips" then
-        if ctx == nil then return false end
-
-        if ctx.hand_type ~= cfg.type then
-            local contains = ctx.contains_hand_types
-            if type(contains) ~= "table" or contains[cfg.type] ~= true then
-                return false
-            end
-        end
-    elseif self.effect_type == "Hand Size Mult" then
-        if ctx == nil then return false end
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local max_size = tonumber(extra.size) or 3
-        local cards = ctx.cards
-        if type(cards) ~= "table" or #cards > max_size then
-            return false
-        end
-    elseif self.effect_type == "Stencil Mult" then
-        if ctx == nil then return false end
-        if tonumber(ctx.free_joker_slots) == nil then
-            return false
-        end
-        self.free_joker_slots = tonumber(ctx.free_joker_slots)
-    elseif self.effect_type == "No Discard Mult" then
-        -- Mystic Summit: only active when no discards remain.
-        local d_remaining = tonumber((type(cfg.extra) == "table" and cfg.extra.d_remaining)) or 0
-        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
-        if discards_left ~= d_remaining then
-            return false
-        end
-    elseif self.effect_type == "Destroy Joker" then
-        -- Ceremonial Dagger behavior:
-        -- - on_blind_selected: only trigger if there is a joker immediately to the right
-        -- - on_hand_scored: trigger when we have stored mult to apply
-        if event_name == "on_blind_selected" then
-            local joker_list = G and type(G.jokers) == "table" and G.jokers
-            if not joker_list then
-                return false
-            end
-            local self_index = nil
-            for i, joker in ipairs(joker_list) do
-                if joker == self then
-                    self_index = i
-                    break
-                end
-            end
-            local target_index = self_index and (self_index + 1) or nil
-            if not (target_index and joker_list[target_index]) then
-                return false
-            end
-        elseif event_name == "on_hand_scored" then
-            if (tonumber(self.stored_mult) or 0) <= 0 then
-                return false
-            end
-        else
-            return false
-        end
-    elseif self.effect_type == "1 in 6 mult" or self.effect_type == "1 in 10 mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local every = math.max(1, tonumber(extra.every) or 6)
-        local remaining = tonumber(self.loyalty_remaining)
-        if remaining == nil then
-            remaining = tonumber(extra.remaining) or every
-        end
-        if remaining < 1 or remaining > every then
-            remaining = every
-        end
-        remaining = remaining - 1
-        if remaining <= 0 then
-            self.loyalty_remaining = every
-            return true
-        end
-        self.loyalty_remaining = remaining
-        return false
-    end
-
-    return true
+    return false
 end
 
 --- Foil / Holo / Polychrome modify chips or mult when the scored hand is finalized (not Negative).
@@ -831,113 +763,8 @@ end
 
 function Joker:apply_effect(ctx)
     ctx = ctx or {}
-    local cfg = self.effect_config or {}
-
-    -- Visual feedback: shake when this joker actually triggers.
-    self.scoring_shake_timer = SHAKE_MAX_DURATION
-    self.scoring_shake_t0 = love.timer.getTime()
-
-    if self.effect_type == "Mult" then
-        local amount = tonumber(cfg.mult) or 0
-        ctx.mult = (tonumber(ctx.mult) or 0) + amount
-        Sfx.play_mult()
-    elseif self.effect_type == "Chips" then
-        local amount = tonumber(cfg.chips) or 0
-        ctx.chips = (tonumber(ctx.chips) or 0) + amount
-    elseif self.effect_type == "Suit Mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local amount = tonumber(extra.s_mult) or 0
-        ctx.mult = (tonumber(ctx.mult) or 0) + amount
-        Sfx.play_mult()
-    elseif self.effect_type == "Suit Chips" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local amount = tonumber(extra.s_chips) or 0
-        ctx.chips = (tonumber(ctx.chips) or 0) + amount
-    elseif self.effect_type == "Type Mult" then
-        local amount = tonumber(cfg.t_mult) or 0
-        ctx.mult = (tonumber(ctx.mult) or 0) + amount
-        Sfx.play_mult()
-    elseif self.effect_type == "Type Chips" then
-        local amount = tonumber(cfg.t_chips) or 0
-        ctx.chips = (tonumber(ctx.chips) or 0) + amount
-    elseif self.effect_type == "Hand Size Mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local amount = tonumber(extra.mult) or tonumber(cfg.mult) or 0
-        ctx.mult = (tonumber(ctx.mult) or 0) + amount
-        Sfx.play_mult()
-    elseif self.effect_type == "Stencil Mult" then
-        local free_slots = tonumber(ctx.free_joker_slots) or 0
-        local factor = free_slots + 1
-        ctx.mult = (tonumber(ctx.mult) or 0) * factor
-        Sfx.play_mult2()
-    elseif self.effect_type == "Discard Chips" then
-        -- Banner: +X chips for each remaining discard.
-        local extra = tonumber(cfg.extra) or 0
-        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
-        ctx.chips = (tonumber(ctx.chips) or 0) + (extra * math.max(0, discards_left))
-    elseif self.effect_type == "No Discard Mult" then
-        -- Mystic Summit: +mult only when no discards remain (condition also gated in matches_trigger).
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local amount = tonumber(extra.mult) or tonumber(cfg.mult) or 0
-        ctx.mult = (tonumber(ctx.mult) or 0) + amount
-        Sfx.play_mult()
-    elseif self.effect_type == "Stone card hands" then
-        -- Add a card with a random rank and suit to the deck
-        local deck = (ctx and ctx.deck) or (G and G.deck)
-        if not (deck and deck.cards) then
-            return
-        end
-        local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
-        local MIN_RANK = 2
-        local MAX_RANK = 14
-        local suit = suits[math.random(1, #suits)]
-        local rank = math.random(MIN_RANK, MAX_RANK)
-        table.insert(deck.cards, { rank = rank, suit = suit, enhancement = "stone" })
-    elseif self.effect_type == "1 in 6 mult" or self.effect_type == "1 in 10 mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local factor = tonumber(extra.Xmult) or tonumber(cfg.Xmult) or 1
-        ctx.mult = (tonumber(ctx.mult) or 0) * factor
-        Sfx.play_mult2()
-
-    elseif self.effect_type == "Destroy Joker" then
-        if ctx.event_name == "on_hand_scored" then
-            local amount = tonumber(self.stored_mult) or 0
-            if amount > 0 then
-                ctx.mult = (tonumber(ctx.mult) or 0) + amount
-                Sfx.play_mult()
-            end
-            return
-        end
-
-        local joker_list = G and type(G.jokers) == "table" and G.jokers
-        if not joker_list then
-            return
-        end
-
-        local self_index = nil
-        for i, joker in ipairs(joker_list) do
-            if joker == self then
-                self_index = i
-                break
-            end
-        end
-
-        local target_index = self_index and (self_index + 1) or nil
-        if target_index and joker_list[target_index] then
-            local victim = joker_list[target_index]
-            local gained = tonumber(victim and victim.sell_cost) or 0
-            self.stored_mult = (tonumber(self.stored_mult) or 0) + (gained * 2)
-            if G and G.remove_owned_joker_at then
-                G:remove_owned_joker_at(target_index)
-            else
-                victim = table.remove(joker_list, target_index)
-                if victim and G and G.remove then
-                    G:remove(victim)
-                end
-            end
-            Sfx.play("resources/sounds/slice1.ogg")
-
-        end
+    if self.effect_impl and type(self.effect_impl.apply_effect) == "function" then
+        self.effect_impl.apply_effect(self, ctx)
     end
 end
 

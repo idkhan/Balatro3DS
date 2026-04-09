@@ -12,6 +12,7 @@ function Game:init(seed)
     self.pending_discard = {}
     self.discard_timer = 0
     self.selectedHand = -1
+    self.selectedHandHidden = false
     self.selectedHandLevel = 1
     self.selectedHandChips = 0
     self.selectedHandMult = 0
@@ -49,7 +50,10 @@ function Game:init(seed)
     self.shop_reroll_base_cost = 5
     self.shop_reroll_count = 0
     self.hand_play_counts = {}
+    self._ante_played_card_uids = {}
     self.current_boss_blind_id = nil
+    self.boss_runtime = {}
+    self._next_card_uid = 1
     self._collidables_buf = {}
     self._gc_timer = 0
     self._gc_discarded_nodes = 0
@@ -98,6 +102,338 @@ function Game:increment_hand_play_count(hand_index)
     if hi < 1 then return end
     self.hand_play_counts = self.hand_play_counts or {}
     self.hand_play_counts[hi] = (tonumber(self.hand_play_counts[hi]) or 0) + 1
+end
+
+function Game:ensure_card_uid(card_data, force_new)
+    if type(card_data) ~= "table" then return nil end
+    if force_new == true or card_data.uid == nil then
+        local n = math.floor(tonumber(self._next_card_uid) or 1)
+        if n < 1 then n = 1 end
+        card_data.uid = n
+        self._next_card_uid = n + 1
+    end
+    return card_data.uid
+end
+
+function Game:get_active_boss_blind_id()
+    if tonumber(self.current_blind_index) ~= 3 then return nil end
+    local proto = self:get_boss_blind_prototype()
+    if not proto then return nil end
+    return self.current_boss_blind_id
+end
+
+function Game:get_effective_hand_size_limit()
+    local limit = 8
+    for _, j in ipairs(self.jokers or {}) do
+        local id = j and j.def and j.def.id
+        if id == "j_juggler" then limit = limit + 1 end
+        if id == "j_turtle_bean" then limit = limit + 5 end
+        if id == "j_troubadour" then limit = limit + 2 end
+        if id == "j_stuntman" then limit = limit - 2 end
+        if id == "j_merry_andy" then limit = limit - 1 end
+    end
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id == "bl_manacle" then
+        limit = limit - 1
+    end
+    return math.max(1, limit)
+end
+
+function Game:get_effective_hands_per_round()
+    local hands = 5
+    for _, j in ipairs(self.jokers or {}) do
+        local id = j and j.def and j.def.id
+        if id == "j_burglar" then hands = hands + 3 end
+        if id == "j_troubadour" then hands = hands - 1 end
+    end
+    return math.max(1, hands)
+end
+
+function Game:get_effective_discards_per_round()
+    local discards = 5
+    for _, j in ipairs(self.jokers or {}) do
+        local id = j and j.def and j.def.id
+        if id == "j_drunkard" then discards = discards + 1 end
+        if id == "j_merry_andy" then discards = discards + 3 end
+        if id == "j_burglar" then discards = 0 end
+    end
+    return math.max(0, discards)
+end
+
+function Game:_boss_pick_random_hand_card_uid()
+    local cards = self.hand and self.hand.cards or nil
+    if type(cards) ~= "table" or #cards <= 0 then return nil end
+    local i = math.random(1, #cards)
+    local c = cards[i]
+    return c and c.uid or nil
+end
+
+function Game:_boss_find_hand_node_by_uid(uid)
+    if uid == nil or not self.hand or not self.hand.card_nodes then return nil end
+    for _, node in ipairs(self.hand.card_nodes) do
+        local d = node and node.card_data
+        if d and d.uid == uid then return node end
+    end
+    return nil
+end
+
+function Game:_boss_select_forced_card_if_needed()
+    if self:get_active_boss_blind_id() ~= "bl_final_bell" then return end
+    if not self.hand or not self.hand.cards then return end
+    self.boss_runtime = self.boss_runtime or {}
+    local uid = self.boss_runtime.forced_card_uid
+    if uid == nil or self:_boss_find_hand_node_by_uid(uid) == nil then
+        uid = self:_boss_pick_random_hand_card_uid()
+        self.boss_runtime.forced_card_uid = uid
+    end
+    local forced = self:_boss_find_hand_node_by_uid(uid)
+    if forced and self.hand and self.hand.is_selected and not self.hand:is_selected(forced) then
+        self.hand:toggle_selection(forced)
+    end
+end
+
+function Game:boss_reset_for_new_blind()
+    self.boss_runtime = {
+        hand_count = 0,
+        seen_hand_types = {},
+        locked_hand_type = nil,
+        mouth_void_play = false,
+        eye_void_play = false,
+        forced_card_uid = nil,
+        house_face_down_draws = 0,
+        fish_face_down_draws = 0,
+        serpent_draws_pending = 0,
+        sold_joker_this_blind = false,
+        crimson_disabled_joker = nil,
+    }
+    local boss_id = self:get_active_boss_blind_id()
+    if type(self.jokers) == "table" then
+        for _, j in ipairs(self.jokers) do
+            if j and j.set_face_up then
+                j:set_face_up(true)
+            end
+        end
+    end
+    if not boss_id then return end
+
+    if boss_id == "bl_needle" then
+        self.hands = 1
+    end
+    if boss_id == "bl_water" then
+        self.discards = 0
+    end
+    if boss_id == "bl_final_leaf" then
+        self.boss_runtime.verdant_leaf_active = true
+    end
+    if boss_id == "bl_house" then
+        self.boss_runtime.house_face_down_draws = self:get_effective_hand_size_limit()
+    end
+    if boss_id == "bl_final_acorn" and type(self.jokers) == "table" and #self.jokers > 1 then
+        for i = #self.jokers, 2, -1 do
+            local j = math.random(1, i)
+            self.jokers[i], self.jokers[j] = self.jokers[j], self.jokers[i]
+        end
+        for _, j in ipairs(self.jokers) do
+            if j and j.set_face_up then
+                j:set_face_up(false)
+            end
+        end
+        self:_apply_joker_layout()
+    end
+end
+
+function Game:boss_on_hand_refilled(is_new_blind)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id or not self.hand or not self.hand.card_nodes then return end
+    if boss_id == "bl_final_heart" then
+        local count = #self.jokers
+        if count > 0 then
+            self.boss_runtime.crimson_disabled_joker = math.random(1, count)
+        else
+            self.boss_runtime.crimson_disabled_joker = nil
+        end
+    end
+    self:_boss_select_forced_card_if_needed()
+end
+
+function Game:boss_on_card_drawn(card_node)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id or not card_node then return end
+    local data = card_node.card_data or {}
+    local force_down = false
+
+    if boss_id == "bl_mark" then
+        local r = tonumber(data.rank) or 0
+        if r >= 11 and r <= 13 then force_down = true end
+    end
+    if boss_id == "bl_house" and (tonumber(self.boss_runtime.house_face_down_draws) or 0) > 0 then
+        force_down = true
+        self.boss_runtime.house_face_down_draws = math.max(0, (tonumber(self.boss_runtime.house_face_down_draws) or 0) - 1)
+    end
+    if boss_id == "bl_wheel" and math.random(1, 7) == 1 then
+        force_down = true
+    end
+    if boss_id == "bl_fish" and (tonumber(self.boss_runtime.fish_face_down_draws) or 0) > 0 then
+        force_down = true
+        self.boss_runtime.fish_face_down_draws = math.max(0, (tonumber(self.boss_runtime.fish_face_down_draws) or 0) - 1)
+    end
+    if force_down and card_node.set_face_up then
+        card_node:set_face_up(false)
+    end
+end
+
+function Game:boss_consume_serpent_draws(default_limit, current_count)
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id ~= "bl_serpent" then return default_limit end
+    local pending = math.max(0, math.floor(tonumber(self.boss_runtime.serpent_draws_pending) or 0))
+    if pending <= 0 then return default_limit end
+    self.boss_runtime.serpent_draws_pending = 0
+    return math.max(default_limit, current_count + pending)
+end
+
+function Game:boss_after_discard_or_play(reason)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id then return end
+    if boss_id == "bl_serpent" then
+        self.boss_runtime.serpent_draws_pending = 3
+    end
+    if reason == "play" and boss_id == "bl_fish" then
+        self.boss_runtime.fish_face_down_draws = self:get_effective_hand_size_limit()
+    end
+end
+
+function Game:boss_after_play_before_draw()
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id ~= "bl_hook" then return end
+    local hand = self.hand
+    if not hand or not hand.cards then return end
+    for _ = 1, 2 do
+        if #hand.cards <= 0 then break end
+        local i = math.random(1, #hand.cards)
+        if hand.discard_card_at_index then
+            hand:discard_card_at_index(i)
+        end
+    end
+end
+
+function Game:boss_before_play_selected(selected_nodes)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id then return true end
+    local n = type(selected_nodes) == "table" and #selected_nodes or 0
+    local hand_idx = tonumber(self.selectedHand) or -1
+    local hand_name = self.handlist and self.handlist[hand_idx] or tostring(hand_idx)
+    self.boss_runtime.hand_count = (tonumber(self.boss_runtime.hand_count) or 0) + 1
+    self.boss_runtime.mouth_void_play = false
+    self.boss_runtime.eye_void_play = false
+    if boss_id == "bl_mouth" then
+        if self.boss_runtime.locked_hand_type == nil then
+            self.boss_runtime.locked_hand_type = hand_name
+        elseif self.boss_runtime.locked_hand_type ~= hand_name then
+            self.boss_runtime.mouth_void_play = true
+        end
+    end
+    if boss_id == "bl_eye" then
+        if self.boss_runtime.seen_hand_types[hand_name] then
+            self.boss_runtime.eye_void_play = true
+        end
+        self.boss_runtime.seen_hand_types[hand_name] = true
+    end
+    if boss_id == "bl_final_bell" then
+        local forced_uid = self.boss_runtime.forced_card_uid
+        if forced_uid ~= nil then
+            local has_forced = false
+            for _, node in ipairs(selected_nodes or {}) do
+                local d = node and node.card_data
+                if d and d.uid == forced_uid then
+                    has_forced = true
+                    break
+                end
+            end
+            if not has_forced then return false end
+        end
+    end
+    return true
+end
+
+function Game:boss_should_void_current_play()
+    if not self.boss_runtime then return false end
+    return self.boss_runtime.mouth_void_play == true or self.boss_runtime.eye_void_play == true
+end
+
+function Game:boss_apply_on_hand_submitted(selected_nodes)
+    local boss_id = self:get_active_boss_blind_id()
+    local hand_idx = tonumber(self.selectedHand) or -1
+
+    if type(selected_nodes) == "table" and tonumber(self.current_blind_index) ~= 3 then
+        for _, node in ipairs(selected_nodes) do
+            local d = node and node.card_data
+            if d and d.uid then
+                self._ante_played_card_uids[d.uid] = true
+            end
+        end
+    end
+    if not boss_id then return end
+
+    if boss_id == "bl_tooth" then
+        local n = type(selected_nodes) == "table" and #selected_nodes or 0
+        self.money = math.max(0, (tonumber(self.money) or 0) - n)
+    elseif boss_id == "bl_ox" then
+        local target_idx, target_count = -1, -1
+        for k, v in pairs(self.hand_play_counts or {}) do
+            local c = tonumber(v) or 0
+            if c > target_count then
+                target_count = c
+                target_idx = tonumber(k) or -1
+            end
+        end
+        if target_idx > 0 and hand_idx == target_idx then
+            self.money = 0
+        end
+    elseif boss_id == "bl_arm" then
+        local hs = self.hand_stats and self.hand_stats[hand_idx]
+        if hs then
+            hs.level = math.max(1, (tonumber(hs.level) or 1) - 1)
+            local level = tonumber(hs.level) or 1
+            self.selectedHandLevel = level
+            self.selectedHandChips = (tonumber(hs.base_chips) or 0) + ((level - 1) * (tonumber(hs.chips_per_level) or 0))
+            self.selectedHandMult = (tonumber(hs.base_mult) or 0) + ((level - 1) * (tonumber(hs.mult_per_level) or 0))
+        end
+    end
+
+end
+
+function Game:boss_is_card_debuffed_for_scoring(node)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id or not node then return false end
+    local d = node.card_data or {}
+    local rank = tonumber(d.rank) or 0
+    local suit = d.suit
+    if boss_id == "bl_club" and suit == "Clubs" then return true end
+    if boss_id == "bl_goad" and suit == "Spades" then return true end
+    if boss_id == "bl_window" and suit == "Diamonds" then return true end
+    if boss_id == "bl_head" and suit == "Hearts" then return true end
+    if boss_id == "bl_plant" and rank >= 11 and rank <= 13 then return true end
+    if boss_id == "bl_pillar" and d.uid and self._ante_played_card_uids[d.uid] then return true end
+    if boss_id == "bl_final_leaf" and self.boss_runtime.verdant_leaf_active == true then return true end
+    return false
+end
+
+function Game:boss_apply_hand_base_modifiers(chips, mult)
+    local boss_id = self:get_active_boss_blind_id()
+    chips = tonumber(chips) or 0
+    mult = tonumber(mult) or 0
+    if boss_id == "bl_flint" then
+        chips = math.floor(chips * 0.5)
+        mult = math.max(1, math.floor(mult * 0.5))
+    end
+    return chips, mult
+end
+
+function Game:boss_on_joker_sold()
+    if self:get_active_boss_blind_id() == "bl_final_leaf" then
+        self.boss_runtime.verdant_leaf_active = false
+        self.boss_runtime.sold_joker_this_blind = true
+    end
 end
 
 function Game:clear_shop_offer_nodes()
@@ -282,7 +618,7 @@ function Game:draw_shop_offer_price_tags()
             end
             love.graphics.setFont(font)
             love.graphics.setColor(self.C.MONEY)
-            love.graphics.print(label, tx + 6, ty + 2)
+            love.graphics.printf(label, tx, ty + 2, tag_w, "center")
         end
     end
 end
@@ -345,7 +681,8 @@ function Game:draw_shop_offer_buy_button()
         love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
     end
     love.graphics.setColor(self.C.WHITE)
-    love.graphics.print(label, bx + math.floor((btn_w - font:getWidth(label)) * 0.5 + 0.5), by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5))
+    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
+    love.graphics.printf(label, bx, text_y, btn_w, "center")
 
     if can_buy then
         self._shop_buy_button_hit = { x = bx, y = by, w = btn_w, h = btn_h, slot_index = slot }
@@ -427,8 +764,12 @@ function Game:get_boss_blind_prototype()
     else
         local proto = self.P_BLINDS[key]
         local boss = type(proto) == "table" and proto.boss
-        if type(boss) == "table" and boss.showdown == true and not self:is_showdown_ante() then
-            key = self:roll_boss_blind()
+        if type(boss) == "table" then
+            local is_showdown_ante = self:is_showdown_ante()
+            local is_showdown_boss = (boss.showdown == true)
+            if is_showdown_ante ~= is_showdown_boss then
+                key = self:roll_boss_blind()
+            end
         end
     end
     return key and self.P_BLINDS and self.P_BLINDS[key] or nil
@@ -442,6 +783,45 @@ function Game:get_blind_display_name(index)
         if proto and proto.name then return proto.name end
     end
     return def.name or "Blind"
+end
+
+function Game:get_boss_effect_text()
+    local boss_id = self.current_boss_blind_id
+    if not boss_id then
+        local p = self:get_boss_blind_prototype()
+        if p then boss_id = self.current_boss_blind_id end
+    end
+    local t = {
+        bl_hook = "After each hand, discard 2 random held cards.",
+        bl_ox = "Playing your most played hand sets money to $0.",
+        bl_house = "First hand is drawn face down.",
+        bl_wall = "Extra large blind.",
+        bl_wheel = "1 in 7 drawn cards are face down.",
+        bl_arm = "Decrease level of played poker hand by 1.",
+        bl_club = "All Club cards are debuffed.",
+        bl_fish = "Cards drawn after each hand are face down.",
+        bl_psychic = "Must play 5 cards.",
+        bl_goad = "All Spade cards are debuffed.",
+        bl_water = "Start with 0 discards.",
+        bl_window = "All Diamond cards are debuffed.",
+        bl_manacle = "-1 hand size.",
+        bl_eye = "No repeat hand types this round.",
+        bl_mouth = "Can only score one hand type this round.",
+        bl_plant = "All face cards are debuffed.",
+        bl_serpent = "After play/discard, always draw 3 cards.",
+        bl_pillar = "Cards played this Ante are debuffed.",
+        bl_needle = "Play only 1 hand.",
+        bl_head = "All Heart cards are debuffed.",
+        bl_tooth = "Lose $1 per card played.",
+        bl_flint = "Base chips and mult are halved.",
+        bl_mark = "All face cards are drawn face down.",
+        bl_final_acorn = "Flips and shuffles all Jokers.",
+        bl_final_leaf = "All cards debuffed until 1 Joker sold.",
+        bl_final_vessel = "Very large blind.",
+        bl_final_heart = "One random Joker disabled each hand.",
+        bl_final_bell = "Forces 1 selected card each hand.",
+    }
+    return t[boss_id] or ""
 end
 
 function Game:get_blind_color(index)
@@ -662,12 +1042,18 @@ function Game:draw()
             hand_set[hn] = true
         end
     end
+    local draw_consumables_first = (self.jokers_on_bottom == true)
+    if draw_consumables_first and self.consumable_nodes then
+        for _, cn in ipairs(self.consumable_nodes) do
+            if cn and cn.draw then cn:draw() end
+        end
+    end
     for _, node in ipairs(self.nodes) do
         if not cons_set[node] and not hand_set[node] then
             node:draw()
         end
     end
-    if self.consumable_nodes then
+    if (not draw_consumables_first) and self.consumable_nodes then
         for _, cn in ipairs(self.consumable_nodes) do
             if cn and cn.draw then cn:draw() end
         end
@@ -1006,7 +1392,7 @@ function Game:apply_consumable_effect(c)
         local free = math.max(0, (tonumber(self.consumable_capacity) or 2) - #(self.consumables or {}))
         local k = math.min(2, free)
         for _ = 1, k do
-            local tid = self:random_non_fool_tarot_id()
+            local tid = self:random_consumable_id_of_kind("tarot")
             if tid then self:add_consumable(tid) end
         end
     elseif id == "tarot_hierophant" then
@@ -1124,6 +1510,11 @@ function Game:use_consumable(index)
     if not self:consumable_use_enabled(index) then return false end
     local c = self:remove_consumable_at(index)
     if not c then return false end
+    self:emit_joker_event("on_consumable_used", {
+        consumable = c,
+        consumable_id = c.id,
+        consumable_kind = c.kind,
+    })
     self:apply_consumable_effect(c)
     return true
 end
@@ -1311,7 +1702,8 @@ function Game:draw_sell_button()
         love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
     end
     love.graphics.setColor(self.C.WHITE)
-    love.graphics.print(label, bx + math.floor((btn_w - font:getWidth(label)) * 0.5 + 0.5), by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5))
+    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
+    love.graphics.printf(label, bx, text_y, btn_w, "center")
 
     self._sell_button_hit = {
         x = bx, y = by, w = btn_w, h = btn_h,
@@ -1377,7 +1769,8 @@ function Game:draw_use_button()
 
     local text_c = enabled and (self.C and self.C.WHITE) or (self.C and self.C.DARK_WHITE)
     love.graphics.setColor(text_c or { 0.85, 0.85, 0.85, 1 })
-    love.graphics.print(label, bx + math.floor((btn_w - font:getWidth(label)) * 0.5 + 0.5), by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5))
+    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
+    love.graphics.printf(label, bx, text_y, btn_w, "center")
 
     if enabled then
         self._use_button_hit = {
@@ -1517,7 +1910,30 @@ function Game:draw_bottom_blind_select()
         local padding = 16
         love.graphics.setLineWidth(2)
         love.graphics.setColor(self.C.GREY)
-        love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142, 4, 4)
+
+        local scorePosY = 105
+        local addedHeight = 0
+        if def and def.id == "boss" then
+            local effect = self:get_boss_effect_text()
+            if effect ~= "" then
+                local info_w = card_w - 10
+                local info_h = 118
+                local info_x = x + 5
+                local info_y = y + 105
+                love.graphics.setColor(self.C.WHITE)
+                love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+                local num_lines = select(2, string.gsub(effect, "\n", "")) + 1
+                love.graphics.printf(effect, info_x + 4, info_y + 4, info_w - 8, "center")
+                addedHeight = love.graphics.getFont():getHeight() * num_lines + 2 * padding
+            end
+            scorePosY = 105 + addedHeight
+        end
+
+        if def and def.id == "boss" then
+            love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142 + addedHeight, 4, 4)
+        else 
+            love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142, 4, 4)
+        end
         love.graphics.setLineWidth(1)
 
 
@@ -1539,8 +1955,8 @@ function Game:draw_bottom_blind_select()
 
         love.graphics.setColor(self.C.WHITE)
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
-        local tx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(selectText) / 2)
-        love.graphics.print(selectText, tx, btn_y + 2)
+        local tx = x + math.floor(card_w / 2) - math.floor(selectWidth / 2)
+        love.graphics.printf(selectText, tx, btn_y + 2, selectWidth, "center")
 
         local blindWidth = 70
         local label = self:get_blind_display_name(i)
@@ -1548,9 +1964,9 @@ function Game:draw_bottom_blind_select()
         tx = x + math.floor(card_w / 2) - math.floor(blindWidth / 2)
         love.graphics.rectangle("fill", tx, btn_y + selectHeight + 8, blindWidth, selectHeight, 4, 4)
 
-        tx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(label) / 2)
+        tx = x + math.floor(card_w / 2) - math.floor(blindWidth / 2)
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.print(label, tx, btn_y + selectHeight + 8 + 2)
+        love.graphics.printf(label, tx, btn_y + selectHeight + 8 + 2, blindWidth, "center")
         self:draw_blind_chip_anim(i, x + math.floor(card_w / 2), y + 80, 1.1)
 
         local scoreWidth = 78
@@ -1563,15 +1979,15 @@ function Game:draw_bottom_blind_select()
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
         love.graphics.setColor(self.C.BLOCK.BACK)
         tx = x + math.floor(card_w / 2) - math.floor(scoreWidth / 2)
-        love.graphics.rectangle("fill", tx, y + 105, scoreWidth, scoreHeight, 4, 4)
+        love.graphics.rectangle("fill", tx, y + scorePosY, scoreWidth, scoreHeight, 4, 4)
 
         love.graphics.setColor(self.C.WHITE)
-        ty = y + 108
+        ty = y + scorePosY + 3
         love.graphics.print("Score at Least", tx + 6, ty)
         love.graphics.setColor(self.C.RED)
         local req = tostring(target)
-        local rx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(req) / 2)
-        love.graphics.print(req, rx, ty + 12)
+        local rx = x + math.floor(card_w / 2) - math.floor(scoreWidth / 2)
+        love.graphics.printf(req, rx, ty + 12, scoreWidth, "center")
         
         love.graphics.setColor(self.C.WHITE)
         req = "Reward: "..string.rep("$", reward).."+"
@@ -1581,23 +1997,6 @@ function Game:draw_bottom_blind_select()
         love.graphics.setColor(self.C.MONEY)
         love.graphics.print("$"..string.rep("$", reward).."+", rx + love.graphics.getFont():getWidth("Reward: "), ty + 24)
         
-
-        --[[ if not selectable then
-            local grey = self.C.GREY
-            local premultiplied_grey = {
-                grey[1] * grey[4],
-                grey[2] * grey[4],
-                grey[3] * grey[4],
-                grey[4] or 1
-            }
-            love.graphics.setBlendMode("multiply", "premultiplied")
-            love.graphics.setColor(premultiplied_grey)
-            love.graphics.setLineWidth(3)
-            love.graphics.rectangle("fill", x, y, card_w, card_h, 4, 4)
-            love.graphics.setBlendMode("alpha")
-            love.graphics.setLineWidth(1)
-
-        end ]]
     end
 end
 
@@ -1619,9 +2018,9 @@ function Game:draw_shop_button(param)
         local ix, iy, iw, ih = draw_rect_with_shadow(x, y, w, h, 4, 2, color, self.C.BLOCK.SHADOW, 2)
         love.graphics.setColor(self.C.WHITE)
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
-        local textWidth = love.graphics.getFont():getWidth(text)
         local textHeight = love.graphics.getFont():getHeight()
-        love.graphics.print(text, ix + math.floor(iw / 2) - math.floor(textWidth / 2), iy + math.floor(ih / 2) - math.floor((textHeight / 2) * lines))
+        local textY = iy + math.floor(ih / 2) - math.floor((textHeight / 2) * lines)
+        love.graphics.printf(text, ix, textY, iw, "center")
     else
         love.graphics.setColor(color)
         love.graphics.rectangle("fill", x, y, w, h, 4, 4)
@@ -1726,7 +2125,8 @@ function Game:draw_bottom_round_win()
     love.graphics.setColor(self.C.WHITE)
     love.graphics.setFont(self.FONTS.PIXEL.SMALL)
     love.graphics.rectangle("line", self._round_win_continue_rect.x, self._round_win_continue_rect.y, self._round_win_continue_rect.w, self._round_win_continue_rect.h, 3, 3)
-    love.graphics.print("Continue", self._round_win_continue_rect.x + 10, self._round_win_continue_rect.y + 4)
+    local cty = self._round_win_continue_rect.y + math.floor((self._round_win_continue_rect.h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
+    love.graphics.printf("Continue", self._round_win_continue_rect.x, cty, self._round_win_continue_rect.w, "center")
 end
 
 function Game:handle_round_win_touch(x, y)
@@ -2033,11 +2433,11 @@ function Game:init_jokers()
     -- for i = 1, want do
     --     self:add_joker_by_def(pool[i])
     -- end
-    self:add_joker_by_def("j_loyalty_card")
-    self:add_joker_by_def("j_four_fingers")
-    self:add_joker_by_def("j_mystic_summit")
-    self:add_joker_by_def("j_ceremonial")
-    self:add_joker_by_def("j_stencil")
+    self:add_joker_by_def("j_photograph")
+    self:add_joker_by_def("j_hanging_chad")
+    self:add_joker_by_def("j_hanging_chad")
+    self:add_joker_by_def("j_photograph")
+    self:add_joker_by_def("j_blueprint")
     self.jokers[1].edition = "holo"
     self.jokers[2].edition = "foil"
     self.jokers[3].edition = "polychrome"
@@ -2100,14 +2500,44 @@ function Game:add_joker_by_def(def_id, create_params)
 end
 
 function Game:hasJoker(joker_id)
-    if type(self.jokers) ~= "table" then return false end
+    return self:count_jokers_with_id(joker_id) > 0
+end
+
+---@param joker_id string
+---@return integer
+function Game:count_jokers_with_id(joker_id)
+    if type(self.jokers) ~= "table" or type(joker_id) ~= "string" or joker_id == "" then return 0 end
+    local n = 0
     for _, j in ipairs(self.jokers) do
         local def = j and j.def
         if type(def) == "table" and def.id == joker_id then
-            return true
+            n = n + 1
         end
     end
-    return false
+    return n
+end
+
+function Game:count_cards_in_full_deck(predicate)
+    local total = 0
+    local function count_in(list)
+        if type(list) ~= "table" then return end
+        for _, card in ipairs(list) do
+            if type(card) == "table" then
+                if not predicate or predicate(card) then
+                    total = total + 1
+                end
+            end
+        end
+    end
+    local deck = self.deck
+    if deck then
+        count_in(deck.cards)
+        count_in(deck.discard_pile)
+    end
+    if self.hand and type(self.hand.cards) == "table" then
+        count_in(self.hand.cards)
+    end
+    return total
 end
 
 function Game:_apply_joker_layout()
@@ -2194,6 +2624,13 @@ function Game:collect_all_jokers_sorted()
         local bx = (b.T and b.T.x) or (b.VT and b.VT.x) or 0
         return ax < bx
     end)
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id == "bl_final_heart" then
+        local blocked = tonumber(self.boss_runtime and self.boss_runtime.crimson_disabled_joker) or -1
+        if blocked >= 1 and blocked <= #out then
+            table.remove(out, blocked)
+        end
+    end
     return out
 end
 
@@ -2218,6 +2655,13 @@ function Game:collect_matching_jokers(event_name, ctx)
         local bx = (b.T and b.T.x) or (b.VT and b.VT.x) or 0
         return ax < bx
     end)
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id == "bl_final_heart" then
+        local blocked = tonumber(self.boss_runtime and self.boss_runtime.crimson_disabled_joker) or -1
+        if blocked >= 1 and blocked <= #out then
+            table.remove(out, blocked)
+        end
+    end
     return out
 end
 
@@ -2378,6 +2822,9 @@ function Game:prepare_hand_for_new_blind()
     if self.hand and self.hand.fill_from_deck then
         self.hand:fill_from_deck()
     end
+    self:boss_on_hand_refilled(true)
+
+    self:emit_joker_event("on_round_begin", {})
 end
 
 function Game:initialize_run_loop()
@@ -2385,10 +2832,11 @@ function Game:initialize_run_loop()
     self.ante = 1
     self.round = 1
     self.money = 10
-    self.hands = 5
-    self.discards = 5
+    self.hands = self:get_effective_hands_per_round()
+    self.discards = self:get_effective_discards_per_round()
     self.round_score = 0
     self.last_hand_score = 0
+    self.selectedHandHidden = false
     self.current_blind_index = 1
     self.selected_blind_index = 1
     self._blind_resolution_pending = false
@@ -2405,7 +2853,7 @@ function Game:initialize_run_loop()
     self.consumables = {}
     self.last_consumable_use_id = nil
     self:add_consumable("tarot_death")
-    self:add_consumable("tarot_devil")
+    self:add_consumable("planet_pluto")
     self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
 end
@@ -2414,7 +2862,9 @@ function Game:enter_blind_select()
     self:set_state(self.STATES.BLIND_SELECT)
     self.selected_blind_index = self.current_blind_index or 1
     if self.selected_blind_index == 3 then
-        self:roll_boss_blind()
+        if not self.current_boss_blind_id then
+            self:roll_boss_blind()
+        end
     end
     self.round_score = 0
     self.last_hand_score = 0
@@ -2450,6 +2900,7 @@ function Game:start_selected_blind()
     self.round_score = 0
     self.last_hand_score = 0
     self._blind_resolution_pending = false
+    self:boss_reset_for_new_blind()
     self:prepare_hand_for_new_blind()
 
     return true
@@ -2458,6 +2909,8 @@ end
 function Game:advance_after_shop()
     if self._last_completed_blind_was_boss then
         self.ante = (tonumber(self.ante) or 1) + 1
+        self._ante_played_card_uids = {}
+        self.current_boss_blind_id = nil
         self.current_blind_index = 1
     else
         self.current_blind_index = math.min(3, (tonumber(self.current_blind_index) or 1) + 1)
@@ -2723,6 +3176,10 @@ function Game:reroll_shop_offers()
     end
     self.money = (tonumber(self.money) or 0) - cost
     self.shop_reroll_count = (tonumber(self.shop_reroll_count) or 0) + 1
+    self:emit_joker_event("on_shop_reroll", {
+        reroll_cost = cost,
+        reroll_count = self.shop_reroll_count,
+    })
     self.active_tooltip_joker = nil
     self:roll_shop_offers()
     return true
@@ -2733,6 +3190,12 @@ end
 function Game:enter_round_win_after_blind()
     local hands_left = math.max(0, math.floor(tonumber(self.hands) or 0))
     self._round_win_hands_bonus = hands_left
+    self:emit_joker_event("on_round_end", {
+        hands_left = hands_left,
+        is_boss_blind = (tonumber(self.current_blind_index) == 3),
+        round_score = tonumber(self.round_score) or 0,
+        blind_name = self.current_blind_name,
+    })
     self:recycle_full_deck_after_blind_win()
     local interest_count_cap = 25
     local interest = math.floor(math.min(math.max(0, self.money), interest_count_cap) / 5)
@@ -2746,6 +3209,10 @@ function Game:enter_shop_after_blind()
     self:set_state(self.STATES.SHOP)
     self.shop_reroll_count = 0
     self:roll_shop_offers()
+    self:emit_joker_event("on_shop_enter", {
+        offers = self.shop_offers,
+        reroll_count = self.shop_reroll_count,
+    })
 end
 
 function Game:continue_from_round_win()
@@ -2801,6 +3268,12 @@ function Game:buy_shop_joker(slot_index)
     if not ok then return false end
 
     self.money = (tonumber(self.money) or 0) - (tonumber(offer.price) or 0)
+    self:emit_joker_event("on_shop_buy", {
+        offer = offer,
+        offer_kind = offer.kind or "joker",
+        offer_id = offer.id,
+        offer_price = tonumber(offer.price) or 0,
+    })
     table.remove(self.shop_offers, slot_index)
     if self.shop_offer_nodes and self.shop_offer_nodes[slot_index] then
         local removed = self.shop_offer_nodes[slot_index]
@@ -2821,6 +3294,11 @@ function Game:sell_owned_joker(index)
     if not joker then return false end
     local value = tonumber(joker.sell_cost) or 0
     self.money = (tonumber(self.money) or 0) + value
+    self:emit_joker_event("on_joker_sold", {
+        joker = joker,
+        sold_value = value,
+    })
+    self:boss_on_joker_sold()
     return true
 end
 
@@ -3304,10 +3782,13 @@ function Game:ensure_asset_atlas_loaded(name)
     if not atlas.path then return atlas end
 
     local ok, img = pcall(love.graphics.newImage, atlas.path, { dpiscale = atlas.dpiscale or self.SETTINGS.GRAPHICS.texture_scaling })
+    local err = ok and nil or img
     if not ok then
         ok, img = pcall(love.graphics.newImage, atlas.path, {})
+        if not ok then err = img end
     end
     atlas.image = ok and img or nil
+    atlas.load_error = ok and nil or tostring(err)
     return atlas
 end
 
@@ -3322,80 +3803,80 @@ function Game:set_render_settings()
 
         --spritesheets
         self.animation_atli = {
-            {name = "blind_chips", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/BlindChips.png",px=36,py=36, frames = 21},
-            {name = "shop_sign", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/ShopSignAnimation.png",px=113,py=60, frames = 4}
+            {name = "blind_chips", path = "resources/textures/1x/BlindChips.png",px=36,py=36, frames = 21},
+            {name = "shop_sign", path = "resources/textures/1x/ShopSignAnimation.png",px=113,py=60, frames = 4}
         }
         self.asset_atli = {
-            {name = "cards_1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/8BitDeck.png",px=72,py=95},
-            {name = "cards_2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/8BitDeck_opt2.png",px=72,py=95},
-            {name = "centers", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Enhancers.png",px=72,py=95},
-            {name = "Joker1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers1.png",px=71,py=95},
-            {name = "Joker2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers2.png",px=71,py=95},
-            {name = "Joker1_negative", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers1_negative.png",px=71,py=95},
-            {name = "Joker2_negative", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers2_negative.png",px=71,py=95},
-            {name = "Tarot", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Tarots.png",px=72,py=95},
-            {name = "Voucher", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Vouchers.png",px=72,py=95},
-            {name = "Booster", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/boosters.png",px=72,py=95},
-            {name = "ui_1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/ui_assets.png",px=18,py=18},
-            {name = "ui_2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/ui_assets_opt2.png",px=18,py=18},
-            {name = "balatro", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/balatro.png",px=336,py=216},        
-            {name = 'gamepad_ui', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/gamepad_ui.png",px=32,py=32},
-            {name = 'icons', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/icons.png",px=66,py=66},
-            {name = 'tags', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/tags.png",px=34,py=34},
-            {name = 'stickers', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/stickers.png",px=72,py=95},
-            {name = 'chips', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/chips.png",px=30,py=30},
+            {name = "cards_1", path = "resources/textures/1x/8BitDeck.png",px=72,py=95},
+            {name = "cards_2", path = "resources/textures/1x/8BitDeck_opt2.png",px=72,py=95},
+            {name = "centers", path = "resources/textures/1x/Enhancers.png",px=72,py=95},
+            {name = "Joker1", path = "resources/textures/1x/Jokers1.png",px=71,py=95},
+            {name = "Joker2", path = "resources/textures/1x/Jokers2.png",px=71,py=95},
+            {name = "Joker1_negative", path = "resources/textures/1x/Jokers1_negative.png",px=71,py=95},
+            {name = "Joker2_negative", path = "resources/textures/1x/Jokers2_negative.png",px=71,py=95},
+            {name = "Tarot", path = "resources/textures/1x/Tarots.png",px=71,py=95},
+            {name = "Voucher", path = "resources/textures/1x/Vouchers.png",px=72,py=95},
+            {name = "Booster", path = "resources/textures/1x/boosters.png",px=72,py=95},
+            {name = "ui_1", path = "resources/textures/1x/ui_assets.png",px=18,py=18},
+            {name = "ui_2", path = "resources/textures/1x/ui_assets_opt2.png",px=18,py=18},
+            {name = "balatro", path = "resources/textures/1x/balatro.png",px=336,py=216},        
+            {name = 'gamepad_ui', path = "resources/textures/1x/gamepad_ui.png",px=32,py=32},
+            {name = 'icons', path = "resources/textures/1x/icons.png",px=66,py=66},
+            {name = 'tags', path = "resources/textures/1x/tags.png",px=34,py=34},
+            {name = 'stickers', path = "resources/textures/1x/stickers.png",px=72,py=95},
+            {name = 'chips', path = "resources/textures/1x/chips.png",px=30,py=30},
     
-            --[[ {name = 'collab_AU_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AU_1.png",px=71,py=95},
-            {name = 'collab_AU_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AU_2.png",px=71,py=95},
-            {name = 'collab_TW_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TW_1.png",px=71,py=95},
-            {name = 'collab_TW_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TW_2.png",px=71,py=95},
-            {name = 'collab_VS_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_VS_1.png",px=71,py=95},
-            {name = 'collab_VS_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_VS_2.png",px=71,py=95},
-            {name = 'collab_DTD_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DTD_1.png",px=71,py=95},
-            {name = 'collab_DTD_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DTD_2.png",px=71,py=95},
+            --[[ {name = 'collab_AU_1', path = "resources/textures/1x/collabs/collab_AU_1.png",px=71,py=95},
+            {name = 'collab_AU_2', path = "resources/textures/1x/collabs/collab_AU_2.png",px=71,py=95},
+            {name = 'collab_TW_1', path = "resources/textures/1x/collabs/collab_TW_1.png",px=71,py=95},
+            {name = 'collab_TW_2', path = "resources/textures/1x/collabs/collab_TW_2.png",px=71,py=95},
+            {name = 'collab_VS_1', path = "resources/textures/1x/collabs/collab_VS_1.png",px=71,py=95},
+            {name = 'collab_VS_2', path = "resources/textures/1x/collabs/collab_VS_2.png",px=71,py=95},
+            {name = 'collab_DTD_1', path = "resources/textures/1x/collabs/collab_DTD_1.png",px=71,py=95},
+            {name = 'collab_DTD_2', path = "resources/textures/1x/collabs/collab_DTD_2.png",px=71,py=95},
     
-            {name = 'collab_CYP_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CYP_1.png",px=71,py=95},
-            {name = 'collab_CYP_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CYP_2.png",px=71,py=95},
-            {name = 'collab_STS_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STS_1.png",px=71,py=95},
-            {name = 'collab_STS_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STS_2.png",px=71,py=95},
-            {name = 'collab_TBoI_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TBoI_1.png",px=71,py=95},
-            {name = 'collab_TBoI_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TBoI_2.png",px=71,py=95},
-            {name = 'collab_SV_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SV_1.png",px=71,py=95},
-            {name = 'collab_SV_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SV_2.png",px=71,py=95},
+            {name = 'collab_CYP_1', path = "resources/textures/1x/collabs/collab_CYP_1.png",px=71,py=95},
+            {name = 'collab_CYP_2', path = "resources/textures/1x/collabs/collab_CYP_2.png",px=71,py=95},
+            {name = 'collab_STS_1', path = "resources/textures/1x/collabs/collab_STS_1.png",px=71,py=95},
+            {name = 'collab_STS_2', path = "resources/textures/1x/collabs/collab_STS_2.png",px=71,py=95},
+            {name = 'collab_TBoI_1', path = "resources/textures/1x/collabs/collab_TBoI_1.png",px=71,py=95},
+            {name = 'collab_TBoI_2', path = "resources/textures/1x/collabs/collab_TBoI_2.png",px=71,py=95},
+            {name = 'collab_SV_1', path = "resources/textures/1x/collabs/collab_SV_1.png",px=71,py=95},
+            {name = 'collab_SV_2', path = "resources/textures/1x/collabs/collab_SV_2.png",px=71,py=95},
             
-            {name = 'collab_SK_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SK_1.png",px=71,py=95},
-            {name = 'collab_SK_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SK_2.png",px=71,py=95},
-            {name = 'collab_DS_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DS_1.png",px=71,py=95},
-            {name = 'collab_DS_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DS_2.png",px=71,py=95},
-            {name = 'collab_CL_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CL_1.png",px=71,py=95},
-            {name = 'collab_CL_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CL_2.png",px=71,py=95},
-            {name = 'collab_D2_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_D2_1.png",px=71,py=95},
-            {name = 'collab_D2_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_D2_2.png",px=71,py=95},
-            {name = 'collab_PC_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_PC_1.png",px=71,py=95},
-            {name = 'collab_PC_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_PC_2.png",px=71,py=95},
-            {name = 'collab_WF_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_WF_1.png",px=71,py=95},
-            {name = 'collab_WF_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_WF_2.png",px=71,py=95},
-            {name = 'collab_EG_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_EG_1.png",px=71,py=95},
-            {name = 'collab_EG_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_EG_2.png",px=71,py=95},
-            {name = 'collab_XR_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_XR_1.png",px=71,py=95},
-            {name = 'collab_XR_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_XR_2.png",px=71,py=95},
+            {name = 'collab_SK_1', path = "resources/textures/1x/collabs/collab_SK_1.png",px=71,py=95},
+            {name = 'collab_SK_2', path = "resources/textures/1x/collabs/collab_SK_2.png",px=71,py=95},
+            {name = 'collab_DS_1', path = "resources/textures/1x/collabs/collab_DS_1.png",px=71,py=95},
+            {name = 'collab_DS_2', path = "resources/textures/1x/collabs/collab_DS_2.png",px=71,py=95},
+            {name = 'collab_CL_1', path = "resources/textures/1x/collabs/collab_CL_1.png",px=71,py=95},
+            {name = 'collab_CL_2', path = "resources/textures/1x/collabs/collab_CL_2.png",px=71,py=95},
+            {name = 'collab_D2_1', path = "resources/textures/1x/collabs/collab_D2_1.png",px=71,py=95},
+            {name = 'collab_D2_2', path = "resources/textures/1x/collabs/collab_D2_2.png",px=71,py=95},
+            {name = 'collab_PC_1', path = "resources/textures/1x/collabs/collab_PC_1.png",px=71,py=95},
+            {name = 'collab_PC_2', path = "resources/textures/1x/collabs/collab_PC_2.png",px=71,py=95},
+            {name = 'collab_WF_1', path = "resources/textures/1x/collabs/collab_WF_1.png",px=71,py=95},
+            {name = 'collab_WF_2', path = "resources/textures/1x/collabs/collab_WF_2.png",px=71,py=95},
+            {name = 'collab_EG_1', path = "resources/textures/1x/collabs/collab_EG_1.png",px=71,py=95},
+            {name = 'collab_EG_2', path = "resources/textures/1x/collabs/collab_EG_2.png",px=71,py=95},
+            {name = 'collab_XR_1', path = "resources/textures/1x/collabs/collab_XR_1.png",px=71,py=95},
+            {name = 'collab_XR_2', path = "resources/textures/1x/collabs/collab_XR_2.png",px=71,py=95},
     
-            {name = 'collab_CR_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CR_1.png",px=71,py=95},
-            {name = 'collab_CR_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CR_2.png",px=71,py=95},
-            {name = 'collab_BUG_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_BUG_1.png",px=71,py=95},
-            {name = 'collab_BUG_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_BUG_2.png",px=71,py=95},
-            {name = 'collab_FO_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_FO_1.png",px=71,py=95},
-            {name = 'collab_FO_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_FO_2.png",px=71,py=95},
-            {name = 'collab_DBD_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DBD_1.png",px=71,py=95},
-            {name = 'collab_DBD_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DBD_2.png",px=71,py=95},
-            {name = 'collab_C7_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_C7_1.png",px=71,py=95},
-            {name = 'collab_C7_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_C7_2.png",px=71,py=95},
-            {name = 'collab_R_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_R_1.png",px=71,py=95},
-            {name = 'collab_R_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_R_2.png",px=71,py=95},
-            {name = 'collab_AC_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AC_1.png",px=71,py=95},
-            {name = 'collab_AC_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AC_2.png",px=71,py=95},
-            {name = 'collab_STP_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STP_1.png",px=71,py=95},
-            {name = 'collab_STP_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STP_2.png",px=71,py=95}, ]]
+            {name = 'collab_CR_1', path = "resources/textures/1x/collabs/collab_CR_1.png",px=71,py=95},
+            {name = 'collab_CR_2', path = "resources/textures/1x/collabs/collab_CR_2.png",px=71,py=95},
+            {name = 'collab_BUG_1', path = "resources/textures/1x/collabs/collab_BUG_1.png",px=71,py=95},
+            {name = 'collab_BUG_2', path = "resources/textures/1x/collabs/collab_BUG_2.png",px=71,py=95},
+            {name = 'collab_FO_1', path = "resources/textures/1x/collabs/collab_FO_1.png",px=71,py=95},
+            {name = 'collab_FO_2', path = "resources/textures/1x/collabs/collab_FO_2.png",px=71,py=95},
+            {name = 'collab_DBD_1', path = "resources/textures/1x/collabs/collab_DBD_1.png",px=71,py=95},
+            {name = 'collab_DBD_2', path = "resources/textures/1x/collabs/collab_DBD_2.png",px=71,py=95},
+            {name = 'collab_C7_1', path = "resources/textures/1x/collabs/collab_C7_1.png",px=71,py=95},
+            {name = 'collab_C7_2', path = "resources/textures/1x/collabs/collab_C7_2.png",px=71,py=95},
+            {name = 'collab_R_1', path = "resources/textures/1x/collabs/collab_R_1.png",px=71,py=95},
+            {name = 'collab_R_2', path = "resources/textures/1x/collabs/collab_R_2.png",px=71,py=95},
+            {name = 'collab_AC_1', path = "resources/textures/1x/collabs/collab_AC_1.png",px=71,py=95},
+            {name = 'collab_AC_2', path = "resources/textures/1x/collabs/collab_AC_2.png",px=71,py=95},
+            {name = 'collab_STP_1', path = "resources/textures/1x/collabs/collab_STP_1.png",px=71,py=95},
+            {name = 'collab_STP_2', path = "resources/textures/1x/collabs/collab_STP_2.png",px=71,py=95}, ]]
         }
         self.asset_images = {
             {name = "playstack_logo", path = "resources/textures/1x/playstack-logo.png", px=1416,py=1416},
@@ -3444,15 +3925,6 @@ function Game:set_render_settings()
             self.ASSET_ATLAS[self.asset_images[i].name].py = self.asset_images[i].py
         end
 
-        -- Preload only the atlases needed for the current core gameplay path.
-        local preload_atlases = {
-            "cards_1", "cards_2", "centers", "ui_1", "ui_2", "chips", "balatro"
-        }
-        for i = 1, #preload_atlases do
-            self:ensure_asset_atlas_loaded(preload_atlases[i])
-        end
-
-        -- Aliases (point at same table; lazy loading still applies).
         self.ASSET_ATLAS.Planet = self.ASSET_ATLAS.Tarot
         self.ASSET_ATLAS.Spectral = self.ASSET_ATLAS.Tarot
 

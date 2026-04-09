@@ -1,9 +1,9 @@
 [metadata]
 title = "Balatro3DS" # title of the game
-author = "idkhan" # author(s) of the game
+author = "Gazpacho" # author(s) of the game
 description = "A Remake of Balatro for the 3DS" # description of the game
 version = "0.1.0" # current version, obeying semver
-icons = { ctr = "resources/textures/1x/icon.png"} # custom icon paths
+icons = { ctr = "game/resources/textures/1x/icon.png"} # custom icon paths
 
 [build]
 targets = ["ctr"]

@@ -692,6 +692,30 @@ function Card:draw()
     end
 end
 
+--- How many times this card runs the played-card trigger (base 1 + `card_data.retrigger_play` + red seal + Hanging Chad).
+---@param seq table|nil play sequence; first scoring card gets `seq.hanging_chad_extra_play` extra passes (2 per Chad owned)
+function Card:play_trigger_total(seq)
+    local cd = self.card_data or {}
+    local extra = math.max(0, tonumber(cd.retrigger_play) or 0)
+    if type(seq) == "table" and seq.hanging_chad_node == self then
+        extra = extra + math.max(0, tonumber(seq.hanging_chad_extra_play) or 0)
+    end
+    local n = 1 + extra
+    if self.seal == "red" then n = n + 1 end
+    return math.max(1, n)
+end
+
+--- How many times this card runs the in-hand trigger (Mime adds `mime_held_bonus` to every held card).
+---@param mime_held_bonus number|nil usually 0 or 1 when Mime is owned
+function Card:held_trigger_total(mime_held_bonus)
+    mime_held_bonus = math.max(0, tonumber(mime_held_bonus) or 0)
+    local cd = self.card_data or {}
+    local extra = math.max(0, tonumber(cd.retrigger_held) or 0)
+    local n = 1 + extra + mime_held_bonus
+    if self.seal == "red" then n = n + 1 end
+    return math.max(1, n)
+end
+
 function Card:matches_trigger(event_name)
     if event_name == "held_in_hand" then    
         if self.enhancement == "gold" or self.enhancement == "steel" or self.seal == "blue" then
@@ -700,7 +724,7 @@ function Card:matches_trigger(event_name)
             return false
         end
     elseif event_name == "card_played" then
-        if self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone" or self.seal == "gold" then
+        if self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone" or self.seal == "gold" or self.seal == "red" then
             return true
         else
             return false
@@ -785,8 +809,7 @@ function Card:do_seal(ctx)
         end
         if Sfx and Sfx.play_money then Sfx.play_money() end
     elseif self.seal == "red" then
-        -- Retrigger (hand / scoring integration TBD)
-        ctx._red_seal_retriggered = true
+        -- Retrigger count is handled in `Hand` via `play_trigger_total` / `held_trigger_total`.
     elseif self.seal == "blue" then
         -- Planet card, when held in hand
     elseif self.seal == "purple" then

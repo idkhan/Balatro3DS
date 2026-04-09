@@ -142,7 +142,8 @@ function TopUI.draw()
         love.graphics.setColor(G.C.RED)
         love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
         local scoreReq = tostring(math.floor(blind_target))
-        love.graphics.print(scoreReq, ix + math.floor(iw/2) - math.floor(love.graphics.getFont():getWidth(scoreReq)/2) + 5, iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 5)
+        local scoreReqY = iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 5
+        love.graphics.printf(scoreReq, ix, scoreReqY, iw, "center")
 
         love.graphics.setColor(G.C.WHITE)
         love.graphics.setFont(G.FONTS.PIXEL.SMALL)
@@ -150,8 +151,9 @@ function TopUI.draw()
         local rewardY = iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 6 + G.FONTS.PIXEL.MEDIUM_HEIGHT
         love.graphics.print(rewardText, ix, rewardY)
         love.graphics.setColor(G.C.MONEY)
-        local moneyText = "$" .. tostring(blind_reward)
-        love.graphics.print(moneyText, ix + love.graphics.getFont():getWidth(rewardText) + math.floor((iw - math.floor(love.graphics.getFont():getWidth(rewardText)))/2) - math.floor(love.graphics.getFont():getWidth(moneyText)/2), rewardY)
+        local moneyText = "$"..string.rep("$", blind_reward).."+"
+        local rewardLabelW = love.graphics.getFont():getWidth(rewardText)
+        love.graphics.print(moneyText, ix + rewardLabelW, rewardY)
     end
 
     -- Round Score, Chips and Mult
@@ -180,20 +182,24 @@ function TopUI.draw()
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
     local handSelected = ""
+    local handHidden = (G.selectedHandHidden == true)
     if G.selectedHand and G.selectedHand ~= -1 then
         handSelected = G.handlist[G.selectedHand]
     end
-    if(love.graphics.getFont():getWidth(handSelected) > iw) then
+    if handHidden then
+        handSelected = "???"
+    end
+    if(love.graphics.getFont():getWidth(handSelected) > (iw - 20)) then
         love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     end
-    local posX, posY = TopUI.center_text(handSelected, ix, iy -2, iw -20, math.floor(ih/3))
-
-    posX = posX + love.graphics.getFont():getWidth(handSelected) + 6
+    local _, posY = TopUI.center_text(handSelected, ix, iy -2, iw -20, math.floor(ih/3))
     posY = posY + math.floor(G.FONTS.PIXEL.MEDIUM_HEIGHT/6)
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     local handLevel = G.selectedHandLevel or 1
-    if(handSelected ~= "") then
-        love.graphics.print("lvl." .. handLevel, posX, posY)
+    if(handSelected ~= "" and not handHidden) then
+        love.graphics.printf("lvl." .. handLevel, ix, posY, iw, "right")
+    elseif handSelected ~= "" then
+        love.graphics.printf("lvl.?", ix, posY, iw, "right")
     end
 
     -- X
@@ -305,8 +311,10 @@ function TopUI.LabeledField(string, value, x, y, iw, ih, fieldColor)
 end
 
 function TopUI.center_text(string, x, y, iw, ih)
-    xval = x + math.floor(iw/2) - math.floor(love.graphics.getFont():getWidth(string)/2)
-    yval = y + math.floor(ih/2) - math.floor(love.graphics.getFont():getHeight()/2)
-    love.graphics.print(string, xval, yval)
+    local s = tostring(string or "")
+    local font = love.graphics.getFont()
+    local yval = y + math.floor(ih/2) - math.floor(font:getHeight()/2)
+    love.graphics.printf(s, x, yval, iw, "center")
+    local xval = x
     return xval, yval
 end

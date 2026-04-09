@@ -1886,4 +1886,416 @@ JOKER_DEFS = {
     },
 
 }
+-- Missing jokers that were previously injected from CSV metadata are now explicit.
+local MISSING_JOKERS = {
+    j_fortune_teller = { name = "Fortune Teller", rarity = 1, cost = 6, pos = { atlas = "Joker1", index = 57 } },
+    j_juggler = { name = "Juggler", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 63 } },
+    j_drunkard = { name = "Drunkard", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 9 } },
+    j_stone_joker = { name = "Stone Joker", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 11 } },
+    j_golden_joker = { name = "Golden Joker", rarity = 1, cost = 6, pos = { atlas = "Joker1", index = 10 } },
+    j_lucky_cat = { name = "Lucky Cat", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 22 } },
+    j_baseball_card = { name = "Baseball Card", rarity = 3, cost = 8, pos = { atlas = "Joker1", index = 23 } },
+    j_bull = { name = "Bull", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 24 } },
+    j_diet_cola = { name = "Diet Cola", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 26 } },
+    j_trading_card = { name = "Trading Card", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 29 } },
+    j_flash_card = { name = "Flash Card", rarity = 2, cost = 5, pos = { atlas = "Joker1", index = 34 } },
+    j_popcorn = { name = "Popcorn", rarity = 1, cost = 5, pos = { atlas = "Joker1", index = 39 } },
+    j_spare_trousers = { name = "Spare Trousers", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 40 } },
+    j_ancient_joker = { name = "Ancient Joker", rarity = 3, cost = 8, pos = { atlas = "Joker1", index = 41 } },
+    j_ramen = { name = "Ramen", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 42 } },
+    j_walkie_talkie = { name = "Walkie Talkie", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 52 } },
+    j_seltzer = { name = "Seltzer", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 61 } },
+    j_castle = { name = "Castle", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 62 } },
+    j_smiley_face = { name = "Smiley Face", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 90 } },
+    j_campfire = { name = "Campfire", rarity = 3, cost = 9, pos = { atlas = "Joker1", index = 91 } },
+}
 
+for id, data in pairs(MISSING_JOKERS) do
+    if type(JOKER_DEFS[id]) ~= "table" then
+        JOKER_DEFS[id] = {
+            id = id,
+            name = data.name,
+            rarity = data.rarity,
+            cost = data.cost,
+            sell_cost = math.max(1, math.floor(data.cost / 2)),
+            config = {},
+            pos = data.pos,
+        }
+    end
+end
+
+-- Catalog-owned tooltip text (Balatro-style; *word* used for emphasis in UI).
+local TOOLTIP_BY_ID = {
+    j_joker = { "+4 Mult" },
+    j_greedy_joker = { "Played cards with *Diamond* suit give +3 Mult when scored" },
+    j_lusty_joker = { "Played cards with *Heart* suit give +3 Mult when scored" },
+    j_wrathful_joker = { "Played cards with *Spade* suit give +3 Mult when scored" },
+    j_gluttenous_joker = { "Played cards with *Club* suit give +3 Mult when scored" },
+    j_jolly = { "+8 Mult if played hand contains a *Pair*" },
+    j_zany = { "+12 Mult if played hand contains a *Three of a Kind*" },
+    j_mad = { "+10 Mult if played hand contains a *Two Pair*" },
+    j_crazy = { "+12 Mult if played hand contains a *Straight*" },
+    j_droll = { "+10 Mult if played hand contains a *Flush*" },
+    j_sly = { "+50 Chips if played hand contains a *Pair*" },
+    j_wily = { "+100 Chips if played hand contains a *Three of a Kind*" },
+    j_clever = { "+80 Chips if played hand contains a *Two Pair*" },
+    j_devious = { "+100 Chips if played hand contains a *Straight*" },
+    j_crafty = { "+80 Chips if played hand contains a *Flush*" },
+    j_half = { "+20 Mult if played hand contains 3 or fewer cards" },
+    j_stencil = {
+        "*X1 Mult* for each empty Joker slot",
+        "Joker Stencil included",
+        "(Currently *X1*)",
+    },
+    j_four_fingers = { "All *Flushes* and *Straights* can be made with 4 cards" },
+    j_mime = { "Retrigger all card held in hand abilities" },
+    j_credit_card = { "Go up to -$20 in debt" },
+    j_ceremonial = {
+        "When Blind is selected, destroy Joker to the right and permanently add",
+        "double its sell value to this Mult",
+        "(Currently +0 Mult)",
+    },
+    j_banner = { "+30 Chips for each remaining discard" },
+    j_mystic_summit = { "+15 Mult when 0 discards remaining" },
+    j_marble = { "Adds one Stone card to the deck when Blind is selected" },
+    j_loyalty_card = {
+        "*X4 Mult* every 6 hands played",
+        "5 remaining",
+    },
+    j_8_ball = {
+        "1 in 4 chance for each played 8 to create a Tarot card when scored",
+        "(Must have room)",
+    },
+    j_misprint = { "+0-23 Mult" },
+    j_dusk = { "Retrigger all played cards in final hand of the round" },
+    j_raised_fist = { "Adds double the rank of lowest ranked card held in hand to Mult" },
+    j_chaos = { "1 free Reroll per shop" },
+    j_fibonacci = { "Each played Ace, 2, 3, 5, or 8 gives +8 Mult when scored" },
+    j_steel_joker = {
+        "Gives *X0.2 Mult* for each Steel Card in your full deck",
+        "(Currently *X1 Mult*)",
+    },
+    j_scary_face = { "Played face cards give +30 Chips when scored" },
+    j_abstract = {
+        "+3 Mult for each Joker card",
+        "(Currently +0 Mult)",
+    },
+    j_delayed_grat = { "Earn *$2* per discard if no discards are used by end of the round" },
+    j_hack = { "Retrigger each played 2, 3, 4, or 5" },
+    j_pareidolia = { "All cards are considered face cards" },
+    j_gros_michel = {
+        "+15 Mult",
+        "1 in 6 chance this is destroyed at the end of round.",
+    },
+    j_even_steven = {
+        "Played cards with even rank give +4 Mult when scored",
+        "(10, 8, 6, 4, 2)",
+    },
+    j_odd_todd = {
+        "Played cards with odd rank give +31 Chips when scored",
+        "(A, 9, 7, 5, 3)",
+    },
+    j_scholar = { "Played Aces give +20 Chips and +4 Mult when scored" },
+    j_business = { "Played face cards have a 1 in 2 chance to give *$2* when scored" },
+    j_supernova = { "Adds the number of times poker hand has been played this run to Mult" },
+    j_ride_the_bus = {
+        "This Joker gains +1 Mult per consecutive hand played without a scoring face",
+        "card",
+        "(Currently +0 Mult)",
+    },
+    j_space = { "1 in 4 chance to upgrade level of played poker hand" },
+    j_egg = { "Gains *$3* of sell value at end of round" },
+    j_burglar = { "When Blind is selected, gain +3 Hands and lose all discards" },
+    j_blackboard = { "*X3 Mult* if all cards held in hand are * Spades* or * Clubs*" },
+    j_runner = {
+        "Gains +15 Chips if played hand contains a *Straight*",
+        "(Currently +0 Chips)",
+    },
+    j_ice_cream = {
+        "+100 Chips",
+        "-5 Chips for every hand played",
+    },
+    j_dna = {
+        "If first hand of round has only 1 card, add a permanent copy to deck and",
+        "draw it to hand",
+    },
+    j_splash = { "Every played card counts in scoring" },
+    j_blue_joker = {
+        "+2 Chips for each remaining card in deck",
+        "(Currently +104 Chips)",
+    },
+    j_sixth_sense = {
+        "If first hand of round is a single 6, destroy it and create a Spectral card",
+        "(Must have room)",
+    },
+    j_constellation = {
+        "This Joker gains *X0.1 Mult* every time a Planet card is used",
+        "(Currently *X1 Mult*)",
+    },
+    j_hiker = { "Every played card permanently gains +5 Chips when scored" },
+    j_faceless = { "Earn *$5* if 3 or more face cards are discarded at the same time" },
+    j_green_joker = {
+        "+1 Mult per hand played",
+        "-1 Mult per discard",
+        "(Currently +0 Mult)",
+    },
+    j_superposition = {
+        "Create a Tarot card if poker hand contains an Ace and a *Straight*",
+        "(Must have room)",
+    },
+    j_todo_list = {
+        "Earn *$4* if poker hand is a [Poker Hand], poker hand changes at end of",
+        "round",
+    },
+    j_cavendish = {
+        "*X3 Mult*",
+        "1 in 1000 chance this card is destroyed at the end of round",
+    },
+    j_card_sharp = { "*X3 Mult* if played poker hand has already been played this round" },
+    j_red_card = {
+        "This Joker gains +3 Mult when any Booster Pack is skipped",
+        "(Currently +0 Mult)",
+    },
+    j_madness = {
+        "When Small Blind or Big Blind is selected, gain *X0.5 Mult* and destroy a",
+        "random Joker",
+        "(Currently *X1 Mult*)",
+    },
+    j_square = {
+        "This Joker gains +4 Chips if played hand has exactly 4 cards",
+        "(Currently 0 Chips)",
+    },
+    j_seance = {
+        "If poker hand is a *Straight Flush*, create a random Spectral card",
+        "(Must have room)",
+    },
+    j_riff_raff = {
+        "When Blind is selected, create 2 Common Jokers",
+        "(Must have room)",
+    },
+    j_vampire = {
+        "This Joker gains *X0.1 Mult* per scoring Enhanced card played, removes card",
+        "Enhancement",
+        "(Currently *X1 Mult*)",
+    },
+    j_shortcut = {
+        "Allows *Straights* to be made with gaps of 1 rank",
+        "(ex: 10 8 6 5 3)",
+    },
+    j_hologram = {
+        "This Joker gains *X0.25 Mult* every time a playing card is added to your",
+        "deck",
+        "(Currently *X1 Mult*)",
+    },
+    j_vagabond = { "Create a Tarot card if hand is played with *$4* or less" },
+    j_baron = { "Each King held in hand gives *X1.5 Mult*" },
+    j_cloud_9 = {
+        "Earn *$1* for each 9 in your full deck at end of round",
+        "(Currently *$4*)",
+    },
+    j_rocket = {
+        "Earn *$1* at end of round. Payout increases by *$2* when Boss Blind is",
+        "defeated",
+    },
+    j_obelisk = {
+        "This Joker gains *X0.2 Mult* per consecutive hand played without playing",
+        "your most played poker hand",
+        "(Currently *X1 Mult*)",
+    },
+    j_midas_mask = { "All played face cards become Gold cards when scored" },
+    j_luchador = { "Sell this card to disable the current Boss Blind" },
+    j_photograph = { "First played face card gives *X2 Mult* when scored" },
+    j_gift = { "Add *$1* of sell value to every Joker and Consumable card at end of round" },
+    j_turtle_bean = { "+5 hand size, reduces by 1 each round" },
+    j_erosion = {
+        "+4 Mult for each card below [the deck's starting size] in your full deck",
+        "(Currently +0 Mult)",
+    },
+    j_reserved_parking = { "Each face card held in hand has a 1 in 2 chance to give *$1*" },
+    j_mail = { "Earn *$5* for each discarded [rank], rank changes every round" },
+    j_to_the_moon = { "Earn an extra *$1* of interest for every *$5* you have at end of round" },
+    j_hallucination = {
+        "1 in 2 chance to create a Tarot card when any Booster Pack is opened",
+        "(Must have room)",
+    },
+    j_ticket = { "Played Gold cards earn *$4* when scored" },
+    j_mr_bones = {
+        "Prevents Death if chips scored are at least 25% of required chips",
+        "self destructs",
+    },
+    j_acrobat = { "*X3 Mult* on final hand of round" },
+    j_sock_and_buskin = { "Retrigger all played face cards" },
+    j_swashbuckler = {
+        "Adds the sell value of all other owned Jokers to Mult",
+        "(Currently +1 Mult)",
+    },
+    j_troubadour = {
+        "+2 hand size,",
+        "-1 hand each round",
+    },
+    j_certificate = {
+        "When round begins, add a random playing card with a random seal to your",
+        "hand",
+    },
+    j_smeared = {
+        "* Hearts* and * Diamonds* count as the same suit, * Spades* and * Clubs*",
+        "count as the same suit",
+    },
+    j_throwback = {
+        "*X0.25 Mult* for each Blind skipped this run",
+        "(Currently *X1 Mult*)",
+    },
+    j_hanging_chad = { "Retrigger first played card used in scoring 2 additional times" },
+    j_rough_gem = { "Played cards with * Diamond* suit earn *$1* when scored" },
+    j_bloodstone = {
+        "1 in 2 chance for played cards with * Heart* suit to give *X1.5 Mult* when",
+        "scored",
+    },
+    j_arrowhead = { "Played cards with * Spade* suit give +50 Chips when scored" },
+    j_onyx_agate = { "Played cards with * Club* suit give +7 Mult when scored" },
+    j_glass = {
+        "This Joker gains *X0.75 Mult* for every Glass Card that is destroyed",
+        "(Currently *X1 Mult*)",
+    },
+    j_ring_master = { "Joker, Tarot, Planet, and Spectral cards may appear multiple times" },
+    j_flower_pot = {
+        "*X3 Mult* if poker hand contains a * Diamond* card, * Club* card, * Heart*",
+        "card, and * Spade* card",
+    },
+    j_blueprint = { "Copies ability of Joker to the right" },
+    j_wee = {
+        "This Joker gains +8 Chips when each played 2 is scored",
+        "(Currently +0 Chips)",
+    },
+    j_merry_andy = {
+        "+3 discards each round,",
+        "-1 hand size",
+    },
+    j_oops = {
+        "Doubles all listed probabilities",
+        "(ex: 1 in 3 -> 2 in 3)",
+    },
+    j_idol = {
+        "Each played [rank] of [suit] gives *X2 Mult* when scored",
+        "Card changes every round",
+    },
+    j_seeing_double = {
+        "*X2 Mult* if played hand has a scoring * Club* card and a scoring card of",
+        "any other suit",
+    },
+    j_matador = { "Earn *$8* if played hand triggers the Boss Blind ability" },
+    j_hit_the_road = {
+        "This Joker gains *X0.5 Mult* for every Jack discarded this round",
+        "(Currently *X1 Mult*)",
+    },
+    j_duo = { "*X2 Mult* if played hand contains a *Pair*" },
+    j_trio = { "*X3 Mult* if played hand contains a *Three of a Kind*" },
+    j_family = { "*X4 Mult* if played hand contains a *Four of a Kind*" },
+    j_order = { "*X3 Mult* if played hand contains a *Straight*" },
+    j_tribe = { "*X2 Mult* if played hand contains a *Flush*" },
+    j_stuntman = {
+        "+250 Chips,",
+        "-2 hand size",
+    },
+    j_invisible = {
+        "After 2 rounds, sell this card to Duplicate a random Joker",
+        "(Currently 0/2)",
+        "(Removes Negative from copy)",
+    },
+    j_brainstorm = { "Copies the ability of leftmost Joker" },
+    j_satellite = { "Earn *$1* at end of round per unique Planet card used this run" },
+    j_shoot_the_moon = { "Each Queen held in hand gives +13 Mult" },
+    j_drivers_license = {
+        "*X3 Mult* if you have at least 16 Enhanced cards in your full deck",
+        "(Currently 0)",
+    },
+    j_cartomancer = {
+        "Create a Tarot card when Blind is selected",
+        "(Must have room)",
+    },
+    j_astronomer = { "All Planet cards and Celestial Packs in the shop are free" },
+    j_burnt = { "Upgrade the level of the first discarded poker hand each round" },
+    j_bootstraps = {
+        "+2 Mult for every *$5* you have",
+        "(Currently +0 Mult)",
+    },
+    j_caino = {
+        "This Joker gains *X1 Mult* when a face card is destroyed",
+        "(Currently *X1 Mult*)",
+    },
+    j_triboulet = { "Played Kings and Queens each give *X2 Mult* when scored" },
+    j_yorick = {
+        "This Joker gains *X1 Mult* every 23 cards discarded",
+        "(Currently *X1 Mult*)",
+    },
+    j_chicot = { "Disables effect of every Boss Blind" },
+    j_perkeo = {
+        "Creates a Negative copy of 1 random consumable card in your possession at",
+        "the end of the shop",
+    },
+    j_fortune_teller = {
+        "+1 Mult per Tarot card used this run",
+        "(Currently +0)",
+    },
+    j_juggler = { "+1 hand size" },
+    j_drunkard = { "+1 discard each round" },
+    j_stone_joker = {
+        "Gives +25 Chips for each Stone Card in your full deck",
+        "(Currently +0 Chips)",
+    },
+    j_golden_joker = { "Earn *$4* at end of round" },
+    j_lucky_cat = {
+        "This Joker gains *X0.25 Mult* every time a Lucky card successfully triggers",
+        "(Currently *X1 Mult*)",
+    },
+    j_baseball_card = { "Uncommon Jokers each give *X1.5 Mult*" },
+    j_bull = {
+        "+2 Chips for each *$1* you have",
+        "(Currently +0 Chips)",
+    },
+    j_diet_cola = { "Sell this card to create a free Double Tag" },
+    j_trading_card = { "If first discard of round has only 1 card, destroy it and earn *$3*" },
+    j_flash_card = {
+        "This Joker gains +2 Mult per reroll in the shop",
+        "(Currently +0 Mult)",
+    },
+    j_popcorn = {
+        "+20 Mult",
+        "-4 Mult per round played",
+    },
+    j_spare_trousers = {
+        "This Joker gains +2 Mult if played hand contains a Two Pair",
+        "(Currently +0 Mult)",
+    },
+    j_ancient_joker = {
+        "Each played card with [suit] gives *X1.5 Mult* when scored,",
+        "suit changes at end of round",
+    },
+    j_ramen = { "*X2 Mult*, loses *X0.01 Mult* per card discarded" },
+    j_walkie_talkie = { "Each played 10 or 4 gives +10 Chips and +4 Mult when scored" },
+    j_seltzer = { "Retrigger all cards played for the next 10 hands" },
+    j_castle = {
+        "This Joker gains +3 Chips per discarded [suit] card, suit changes every",
+        "round",
+        "(Currently +0 Chips)",
+    },
+    j_smiley_face = { "Played face cards give +5 Mult when scored" },
+    j_campfire = {
+        "This Joker gains *X0.25 Mult* for each card sold, resets when Boss Blind is",
+        "defeated",
+        "(Currently *X1 Mult*)",
+    },
+}
+
+for id, def in pairs(JOKER_DEFS) do
+    if type(def.tooltip) ~= "table" then
+        local lines = TOOLTIP_BY_ID[id]
+        if lines then
+            def.tooltip = lines
+        elseif type(def.effect) == "string" then
+            def.tooltip = { def.effect }
+        else
+            def.tooltip = { def.name or id }
+        end
+    end
+end

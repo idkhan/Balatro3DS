@@ -34,7 +34,7 @@ function love.load()
     G = Game()
     G:initialize_run_loop()
 
-    --G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
+    G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
     if G.music then
         G.music:setLooping(true)
         G.music:play()
@@ -47,11 +47,6 @@ end
 
 function love.draw(screen)
     love.graphics.clear(unpack(G.C.BLIND.Big))
-
-    -- Jokers decide their own visibility based on `G.jokers_on_bottom`.
-    -- Top screen rendering is handled by `TopUI.draw()` which temporarily
-    -- forces visibility for the joker row.
-    
     if screen == "bottom" then
         love.graphics.setColor(1, 1, 1)
         G:draw()
