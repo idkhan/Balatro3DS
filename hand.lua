@@ -896,6 +896,9 @@ function Hand:play_selected()
     if self.game then self.game.active_tooltip_card = nil end
 
     self:calculate_play()
+    if self.game and self.game.increment_hand_play_count then
+        self.game:increment_hand_play_count(G and G.selectedHand)
+    end
 
     local cards = self:ordered_selected_nodes()
     for _, n in ipairs(cards) do

@@ -267,7 +267,7 @@ CONSUMABLE_DEFS = {
         sell_cost = 3,
         atlas = "Planet",
         hand = "High Card",
-        index = 29,
+        index = 38,
     },
     planet_mercury = {
         id = "planet_mercury",
@@ -348,7 +348,7 @@ CONSUMABLE_DEFS = {
         sell_cost = 3,
         atlas = "Planet",
         hand = "Flush House",
-        index = 38,
+        index = 28,
     },
     planet_x = {
         id = "planet_x",
@@ -357,7 +357,7 @@ CONSUMABLE_DEFS = {
         sell_cost = 3,
         atlas = "Planet",
         hand = "Five of a Kind",
-        index = 39,
+        index = 29,
     },
     planet_eris = {
         id = "planet_eris",

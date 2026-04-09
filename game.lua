@@ -45,6 +45,10 @@ function Game:init(seed)
     self._blind_resolution_pending = false
     self.shop_offers = {}
     self.shop_offer_nodes = {}
+    self.shop_offer_slots = 4
+    self.shop_reroll_base_cost = 5
+    self.shop_reroll_count = 0
+    self.hand_play_counts = {}
     self.current_boss_blind_id = nil
     self._collidables_buf = {}
     self._gc_timer = 0
@@ -87,6 +91,13 @@ function Game:init(seed)
     -- Create joker slots + initial joker instances.
     -- (Top-screen rendering is handled by `TopUI.draw()`)
     self:init_jokers()
+end
+
+function Game:increment_hand_play_count(hand_index)
+    local hi = math.floor(tonumber(hand_index) or -1)
+    if hi < 1 then return end
+    self.hand_play_counts = self.hand_play_counts or {}
+    self.hand_play_counts[hi] = (tonumber(self.hand_play_counts[hi]) or 0) + 1
 end
 
 function Game:clear_shop_offer_nodes()
@@ -180,27 +191,26 @@ function Game:sync_shop_offer_nodes()
     end
 end
 
-function Game:layout_shop_offer_nodes()
+function Game:layout_shop_offer_nodes(param)
     local nodes = self.shop_offer_nodes or {}
     local offers = self.shop_offers or {}
     local n = math.min(#nodes, #offers)
     self._shop_offer_rects = {}
     if n <= 0 then return end
 
-    local panel_x, panel_y, panel_w = 8, 65, 304
+    
+    local panel_x, panel_y, panel_w = param.x, param.y, param.w
     local padding = 4
-    local btn_w, btn_h = 74, 40
-    local area_x = panel_x + padding + btn_w + padding
-    local area_y = panel_y + padding
-    local area_w = panel_w - 3 * padding - btn_w
-    local area_h = (btn_h * 2) + padding
+    local area_x = param.x - padding
+    local area_y = param.y + padding
+    local area_w = param.w 
+    local area_h = param.h - padding
 
     local card_w = self.joker_slot_w or 71
     local card_h = self.joker_slot_h or 95
-    local scale = math.min(0.78, (area_h - 8) / card_h)
-    if scale < 0.62 then scale = 0.62 end
+    local scale = math.min(0.8, (area_h - 8) / card_h)
     local eff_w = card_w * scale
-    local gap = 8
+    local gap = 4
     local total_w = (n * eff_w) + ((n - 1) * gap)
     if total_w > (area_w - 8) and n > 1 then
         gap = math.max(2, ((area_w - 8) - (n * eff_w)) / (n - 1))
@@ -1620,7 +1630,7 @@ function Game:draw_shop_button(param)
 end
 
 function Game:draw_bottom_shop()
-    local panel_x, panel_y, panel_w, panel_h = 8, 65, 304, 200
+    local panel_x, panel_y, panel_w, panel_h = 4, 65, 312, 200
     if _G.draw_rect_with_shadow then
         draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 4, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
     else
@@ -1633,8 +1643,20 @@ function Game:draw_bottom_shop()
 
     local padding = 4
     local shop_continue_rect = { x = panel_x + padding, y = panel_y + padding, w = 74, h = 40, color = self.C.RED, text = "Next\nRound", lines = 2}
-    local shop_reroll_rect = { x = panel_x + padding, y = shop_continue_rect.y + shop_continue_rect.h + padding, w = shop_continue_rect.w, h = shop_continue_rect.h, color = self.C.GREEN, text = "Reroll", lines = 2}
+    local reroll_cost = self:shop_current_reroll_cost()
+    local can_reroll = (tonumber(self.money) or 0) >= reroll_cost
+    local reroll_color = can_reroll and self.C.GREEN or self.C.GREY
+    local shop_reroll_rect = {
+        x = panel_x + padding,
+        y = shop_continue_rect.y + shop_continue_rect.h + padding,
+        w = shop_continue_rect.w,
+        h = shop_continue_rect.h,
+        color = reroll_color,
+        text = "Reroll\n$" .. tostring(reroll_cost),
+        lines = 2
+    }
     self._shop_continue_rect = { x = shop_continue_rect.x, y = shop_continue_rect.y, w = shop_continue_rect.w, h = shop_continue_rect.h }
+    self._shop_reroll_rect = { x = shop_reroll_rect.x, y = shop_reroll_rect.y, w = shop_reroll_rect.w, h = shop_reroll_rect.h }
     if self.draw_shop_button then
         self:draw_shop_button(shop_continue_rect)
         self:draw_shop_button(shop_reroll_rect)
@@ -1642,9 +1664,10 @@ function Game:draw_bottom_shop()
 
     -- Joker Area
     love.graphics.setColor(self.C.PANEL)
-    love.graphics.rectangle("fill", shop_continue_rect.x + shop_continue_rect.w + padding, shop_continue_rect.y , panel_w - 3 * padding - shop_continue_rect.w, (shop_reroll_rect.y + shop_reroll_rect.h) - shop_continue_rect.y, 4, 4)
+    local jokerPanel = {x = shop_continue_rect.x + shop_continue_rect.w + padding, y = shop_continue_rect.y, w = panel_w - 3 * padding - shop_continue_rect.w, h = (shop_reroll_rect.y + shop_reroll_rect.h) - shop_continue_rect.y}
+    love.graphics.rectangle("fill", jokerPanel.x, jokerPanel.y, jokerPanel.w, jokerPanel.h, 4, 4)
 
-    self:layout_shop_offer_nodes()
+    self:layout_shop_offer_nodes(jokerPanel)
 end
 
 function Game:handle_blind_select_touch(x, y)
@@ -1724,6 +1747,10 @@ function Game:handle_shop_touch(x, y)
     end
     if self:_point_in_rect_simple(x, y, self._shop_continue_rect) then
         self:continue_from_shop()
+        return true
+    end
+    if self:_point_in_rect_simple(x, y, self._shop_reroll_rect) then
+        self:reroll_shop_offers()
         return true
     end
     return false
@@ -2357,7 +2384,7 @@ function Game:initialize_run_loop()
     self.STAGE = self.STAGES.RUN
     self.ante = 1
     self.round = 1
-    self.money = 0
+    self.money = 10
     self.hands = 5
     self.discards = 5
     self.round_score = 0
@@ -2369,6 +2396,8 @@ function Game:initialize_run_loop()
     self.current_blind_reward = 0
     self.current_blind_name = "Small Blind"
     self.shop_offers = {}
+    self.shop_reroll_count = 0
+    self.hand_play_counts = {}
     if self.hand and self.hand.clear then
         self.hand:clear()
     end
@@ -2603,7 +2632,21 @@ function Game:_roll_shop_queue_consumable_offer(wanted_kind)
     local ids = {}
     for id, def in pairs(CONSUMABLE_DEFS) do
         if type(def) == "table" and def.kind == wanted_kind and type(id) == "string" then
-            ids[#ids + 1] = id
+            if id == "planet_x" then
+                if self.hand_play_counts[3] and self.hand_play_counts[3] >= 1 then
+                    ids[#ids + 1] = id
+                end
+            elseif id == "planet_ceres" then
+                if self.hand_play_counts[2] and self.hand_play_counts[2] >= 1 then
+                    ids[#ids + 1] = id
+                end
+            elseif id == "planet_eris" then
+                if self.hand_play_counts[1] and self.hand_play_counts[1] >= 1 then
+                    ids[#ids + 1] = id
+                end
+            else
+                ids[#ids + 1] = id
+            end
         end
     end
     table.sort(ids)
@@ -2638,13 +2681,21 @@ function Game:shop_price_for_consumable_offer(def)
     return math.max(2, sc + 1)
 end
 
+function Game:shop_current_reroll_cost()
+    local base = tonumber(self.shop_reroll_base_cost) or 5
+    local n = math.max(0, math.floor(tonumber(self.shop_reroll_count) or 0))
+    return base + n
+end
+
 function Game:roll_shop_offers()
     if type(self.shop_offer_queue) ~= "table" then
         self:init_shop_offer_queue()
     end
     self.shop_offers = {}
+    local slots = math.max(1, math.floor(tonumber(self.shop_offer_slots) or 2))
     local guard = 0
-    while #self.shop_offers < 2 and guard < 250 do
+    local guard_limit = math.max(250, slots * 125)
+    while #self.shop_offers < slots and guard < guard_limit do
         guard = guard + 1
         local entry = self:_pop_shop_queue_entry()
         if not entry then break end
@@ -2664,6 +2715,19 @@ function Game:roll_shop_offers()
     self:sync_shop_offer_nodes()
 end
 
+function Game:reroll_shop_offers()
+    if self.STATE ~= self.STATES.SHOP then return false end
+    local cost = self:shop_current_reroll_cost()
+    if (tonumber(self.money) or 0) < cost then
+        return false
+    end
+    self.money = (tonumber(self.money) or 0) - cost
+    self.shop_reroll_count = (tonumber(self.shop_reroll_count) or 0) + 1
+    self.active_tooltip_joker = nil
+    self:roll_shop_offers()
+    return true
+end
+
 --- Blind just beaten: recycle deck, pay reward, show round-win screen (then shop).
 --- Interest: +$1 per full $5 held after blind + hands payout; only the first $25 counts (max +$5).
 function Game:enter_round_win_after_blind()
@@ -2680,6 +2744,7 @@ end
 
 function Game:enter_shop_after_blind()
     self:set_state(self.STATES.SHOP)
+    self.shop_reroll_count = 0
     self:roll_shop_offers()
 end
 
