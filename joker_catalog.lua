@@ -1238,6 +1238,19 @@ JOKER_DEFS = {
         }
     },
 
+    j_smiley_face = { 
+        id = "j_smiley_face",
+        name = "Smiley Face", 
+        rarity = 1, 
+        cost = 4, 
+        sell_cost = 2,
+
+        pos = { 
+            atlas = "Joker2", 
+            index = 66 
+        } 
+    },
+
     j_ticket = {
         id = "j_ticket",
         name = "Golden Ticket",
@@ -1885,15 +1898,83 @@ JOKER_DEFS = {
         }
     },
 
+    j_fortune_teller = { 
+        id = "j_fortune_teller",
+        name = "Fortune Teller", 
+        rarity = 1, 
+        cost = 6, 
+
+        sell_cost = 3,
+        pos = { 
+            atlas = "Joker1", 
+            index = 57 
+        } 
+    },
+    
+    j_juggler = { 
+        id = "j_juggler",
+        name = "Juggler", 
+        rarity = 1, 
+        cost = 4, 
+        sell_cost = 2,
+        pos = { 
+            atlas = "Joker1", 
+            index = 10 
+        } 
+    },
+
+    j_drunkard = { 
+        id = "j_drunkard",
+        name = "Drunkard",
+        rarity = 1,
+        cost = 4, 
+        sell_cost = 2,
+        pos = { 
+            atlas = "Joker1", 
+            index = 11 
+        } 
+    },
+
+    j_stone_joker = { 
+        id = "j_stone_joker",
+        name = "Stone Joker",
+        rarity = 2, 
+        cost = 6, 
+        sell_cost = 3,
+        pos = { 
+            atlas = "Joker1", 
+            index = 9 
+        } 
+    },
+    j_golden_joker = { 
+        id = "j_golden_joker",
+        name = "Golden Joker", 
+        rarity = 1, 
+        cost = 6, 
+        sell_cost = 3,
+        pos = { 
+            atlas = "Joker1", 
+            index = 29 
+        } 
+    },
+    
+    j_lucky_cat = { 
+        id = "j_lucky_cat",
+        name = "Lucky Cat", 
+        rarity = 2, 
+        cost = 6, 
+        sell_cost = 3,
+        pos = { 
+            atlas = "Joker2", 
+            index = 55 
+        } 
+    },
+    
+    
+
 }
 -- Missing jokers that were previously injected from CSV metadata are now explicit.
 local MISSING_JOKERS = {
-    j_fortune_teller = { name = "Fortune Teller", rarity = 1, cost = 6, pos = { atlas = "Joker1", index = 57 } },
-    j_juggler = { name = "Juggler", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 63 } },
-    j_drunkard = { name = "Drunkard", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 9 } },
-    j_stone_joker = { name = "Stone Joker", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 11 } },
-    j_golden_joker = { name = "Golden Joker", rarity = 1, cost = 6, pos = { atlas = "Joker1", index = 10 } },
-    j_lucky_cat = { name = "Lucky Cat", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 22 } },
     j_baseball_card = { name = "Baseball Card", rarity = 3, cost = 8, pos = { atlas = "Joker1", index = 23 } },
     j_bull = { name = "Bull", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 24 } },
     j_diet_cola = { name = "Diet Cola", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 26 } },
@@ -1906,7 +1987,7 @@ local MISSING_JOKERS = {
     j_walkie_talkie = { name = "Walkie Talkie", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 52 } },
     j_seltzer = { name = "Seltzer", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 61 } },
     j_castle = { name = "Castle", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 62 } },
-    j_smiley_face = { name = "Smiley Face", rarity = 1, cost = 4, pos = { atlas = "Joker1", index = 90 } },
+    
     j_campfire = { name = "Campfire", rarity = 3, cost = 9, pos = { atlas = "Joker1", index = 91 } },
 }
 

@@ -5,8 +5,8 @@ require "joker_effects"
 -- Basic 2-layer joker: back sprite and front sprite.
 -- Rendering logic is similar to `Card:draw()` but uses atlas cell indices instead of rank/suit.
 
-local SHAKE_MAGNITUDE = 8
-local SHAKE_MAX_DURATION = 0.22
+local SHAKE_MAGNITUDE = 10
+local SHAKE_MAX_DURATION = (JokerEffects and JokerEffects.SHAKE_MAX_DURATION) or 0.22
 
 local function lower(s)
     return string.lower(tostring(s or ""))
@@ -22,21 +22,46 @@ local function text_has(s, needle)
     return lower(s):find(lower(needle), 1, true) ~= nil
 end
 
-local function is_face_rank(rank)
-    rank = tonumber(rank)
-    return rank == 11 or rank == 12 or rank == 13
+local function capture_joker_runtime_snapshot(joker)
+    local hand_cards = (((G or {}).hand or {}).cards)
+    local deck_cards = (((G or {}).deck or {}).cards)
+    return {
+        stored_mult = tonumber(joker and joker.stored_mult) or 0,
+        stored_chips = tonumber(joker and joker.stored_chips) or 0,
+        stored_xmult = tonumber(joker and joker.stored_xmult) or 1,
+        runtime_counter = tonumber(joker and joker.runtime_counter) or 0,
+        sell_cost = tonumber(joker and joker.sell_cost) or 0,
+        loyalty_remaining = tonumber(joker and joker.loyalty_remaining) or 0,
+        free_joker_slots = tonumber(joker and joker.free_joker_slots) or 0,
+        money = tonumber((G or {}).money) or 0,
+        joker_count = (type((G or {}).jokers) == "table") and #G.jokers or 0,
+        consumable_count = (type((G or {}).consumables) == "table") and #G.consumables or 0,
+        hand_count = (type(hand_cards) == "table") and #hand_cards or 0,
+        deck_count = (type(deck_cards) == "table") and #deck_cards or 0,
+    }
 end
 
-local function rank_is_even(rank)
-    rank = tonumber(rank)
-    if rank == nil then return false end
-    return rank ~= 14 and rank % 2 == 0
-end
+local function runtime_snapshot_delta(before, after)
+    if not before or not after then return false, false end
+    local created = (after.joker_count > before.joker_count)
+        or (after.consumable_count > before.consumable_count)
+        or (after.hand_count > before.hand_count)
+        or (after.deck_count > before.deck_count)
 
-local function rank_is_odd(rank)
-    rank = tonumber(rank)
-    if rank == nil then return false end
-    return rank == 14 or rank % 2 == 1
+    local state_changed = created
+        or after.stored_mult ~= before.stored_mult
+        or after.stored_chips ~= before.stored_chips
+        or after.stored_xmult ~= before.stored_xmult
+        or after.runtime_counter ~= before.runtime_counter
+        or after.sell_cost ~= before.sell_cost
+        or after.loyalty_remaining ~= before.loyalty_remaining
+        or after.free_joker_slots ~= before.free_joker_slots
+        or after.money ~= before.money
+        or after.joker_count ~= before.joker_count
+        or after.consumable_count ~= before.consumable_count
+        or after.hand_count ~= before.hand_count
+        or after.deck_count ~= before.deck_count
+    return state_changed, created
 end
 
 ---@param raw string|nil
@@ -334,6 +359,12 @@ local function describe_joker_effect_lines(joker)
     end
     if et == "Hand card double" then
         return { "Retrigger all held in hand abilities" }
+    end
+    if et == "Low Card double" then
+        return { "Retrigger each played 2, 3, 4, and 5" }
+    end
+    if et == "Face card double" then
+        return { "Retrigger played face cards" }
     end
     if et == "Mult" then
         local n = tonumber(cfg.mult) or 0
@@ -742,10 +773,13 @@ function Joker:apply_edition_on_hand_scored(ctx)
     if ed == "base" or ed == "negative" then return end
     if ed == "foil" then
         ctx.chips = (tonumber(ctx.chips) or 0) + 50
+        Sfx.play("resources/sounds/foil2.ogg")
     elseif ed == "holo" then
         ctx.mult = (tonumber(ctx.mult) or 0) + 10
+        Sfx.play_mult()
     elseif ed == "polychrome" then
         ctx.mult = (tonumber(ctx.mult) or 0) * 1.5
+        Sfx.play("resources/sounds/polychrome.ogg")
     else
         return
     end
@@ -763,8 +797,39 @@ end
 
 function Joker:apply_effect(ctx)
     ctx = ctx or {}
+    local before = capture_joker_runtime_snapshot(self)
+    local before_chips = tonumber(ctx.chips)
+    local before_mult = tonumber(ctx.mult)
+    if JokerEffects and JokerEffects.begin_apply_context then
+        JokerEffects.begin_apply_context(ctx)
+    end
     if self.effect_impl and type(self.effect_impl.apply_effect) == "function" then
         self.effect_impl.apply_effect(self, ctx)
     end
+    local after = capture_joker_runtime_snapshot(self)
+    local state_changed, created = runtime_snapshot_delta(before, after)
+    local after_chips = tonumber(ctx.chips)
+    local after_mult = tonumber(ctx.mult)
+    if before_chips ~= after_chips or before_mult ~= after_mult or state_changed then
+        if JokerEffects and JokerEffects.mark_effect_applied then
+            JokerEffects.mark_effect_applied(ctx)
+        end
+    end
+    if created and JokerEffects and JokerEffects.mark_created_item then
+        JokerEffects.mark_created_item(ctx)
+    end
+    if JokerEffects and JokerEffects.apply_shake_if_needed then
+        JokerEffects.apply_shake_if_needed(self, ctx)
+    end
+end
+
+--- Extra scoring passes this joker contributes for the current card (used by `Game:sum_retrigger_extras`).
+---@param ctx table|nil
+---@return number
+function Joker:query_retrigger(ctx)
+    if self.effect_impl and type(self.effect_impl.query_retrigger) == "function" then
+        return tonumber(self.effect_impl.query_retrigger(self, ctx)) or 0
+    end
+    return 0
 end
 

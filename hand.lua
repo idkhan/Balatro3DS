@@ -333,6 +333,8 @@ function Hand:_discard_selected_impl(reason)
     for _, n in ipairs(self.selected) do selected_set[n] = true end
     if self.game and self.game.emit_joker_event then
         self.game:emit_joker_event("on_discard", {
+            event = "on_discard",
+            event_name = "on_discard",
             discarded_nodes = discarded_nodes,
             discarded_cards = discarded_cards,
             discard_reason = reason,
@@ -728,13 +730,12 @@ function Hand:_update_play_sequence(dt)
         end
     elseif seq.phase == "inhand_trigger" then
         -- After played cards finish triggering, notify cards still held (staggered like play triggers).
-        -- Queue is flattened: each entry is one in-hand trigger pass (repeats + Mime + red seal).
+        -- Queue is flattened: each entry is one in-hand trigger pass (retriggers from Mime, Red Seal, etc.).
         if not seq.inhand_queue then
             local played = {}
             for _, n in ipairs(seq.cards) do
                 played[n] = true
             end
-            local mime_bonus = tonumber(seq.inhand_mime_bonus) or 0
             local by_node = {}
             for _, node in ipairs(self.card_nodes or {}) do
                 if not played[node] and node.matches_trigger and node:matches_trigger("held_in_hand") then
@@ -748,7 +749,7 @@ function Hand:_update_play_sequence(dt)
             end)
             seq.inhand_queue = {}
             for _, node in ipairs(by_node) do
-                local tot = node.held_trigger_total and node:held_trigger_total(mime_bonus) or (1 + mime_bonus)
+                local tot = node.held_trigger_total and node:held_trigger_total(seq) or 1
                 for _ = 1, tot do
                     table.insert(seq.inhand_queue, node)
                 end
@@ -782,6 +783,8 @@ function Hand:_update_play_sequence(dt)
                 if G and G.emit_joker_event then
                     local data = (node and node.card_data) or {}
                     G:emit_joker_event("card_held", {
+                            event = "card_held",
+                            event_name = "card_held",
                         card_node = node,
                         rank = data.rank,
                         suit = data.suit,
@@ -825,6 +828,7 @@ function Hand:_update_play_sequence(dt)
             end
             local ctx = {
                 event = "on_hand_scored",
+                event_name = "on_hand_scored",
                 chips = chips,
                 mult = mult,
                 hand_index = G.selectedHand,
@@ -1024,6 +1028,8 @@ function Hand:play_selected()
     end
     if self.game and self.game.emit_joker_event then
         self.game:emit_joker_event("on_hand_played", {
+            event = "on_hand_played",
+            event_name = "on_hand_played",
             cards = cards,
             hand_index = G and G.selectedHand,
             hand_level = G and G.selectedHandLevel,
@@ -1074,11 +1080,6 @@ function Hand:play_selected()
         phase = "move_center",
         timer = 0,
         cards = cards,
-        -- Mime: +1 in-hand trigger pass for every eligible held card (`held_trigger_total`).
-        inhand_mime_bonus = self.game and self.game:hasJoker("j_mime") and 1 or 0,
-        -- Hanging Chad: first scoring card gets +2 `card_played` passes per copy owned.
-        hanging_chad_node = hanging_chad_first,
-        hanging_chad_extra_play = hanging_chad_first and (2 * chad_count) or 0,
         photograph_first_face_node = photograph_first_face,
         photograph_pareidolia = photograph_pareidolia and true or false,
     }

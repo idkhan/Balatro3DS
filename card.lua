@@ -692,28 +692,45 @@ function Card:draw()
     end
 end
 
---- How many times this card runs the played-card trigger (base 1 + `card_data.retrigger_play` + red seal + Hanging Chad).
----@param seq table|nil play sequence; first scoring card gets `seq.hanging_chad_extra_play` extra passes (2 per Chad owned)
+--- How many times this card runs the played-card trigger (base 1 + `card_data.retrigger_play` + `G:sum_retrigger_extras`).
+--- Red Seal, Hanging Chad, Hack, Sock and Buskin, etc. are summed in `Game:sum_retrigger_extras`.
+---@param seq table|nil play sequence (`cards`, Photograph fields for Sock/Buskin)
 function Card:play_trigger_total(seq)
     local cd = self.card_data or {}
     local extra = math.max(0, tonumber(cd.retrigger_play) or 0)
-    if type(seq) == "table" and seq.hanging_chad_node == self then
-        extra = extra + math.max(0, tonumber(seq.hanging_chad_extra_play) or 0)
+    local ctx = {
+        held = false,
+        card_node = self,
+        retrigger_card = self,
+        played_cards = type(seq) == "table" and seq.cards or nil,
+        photograph_first_face_node = type(seq) == "table" and seq.photograph_first_face_node or nil,
+        photograph_pareidolia = type(seq) == "table" and seq.photograph_pareidolia or false,
+    }
+    local R = 0
+    if G and G.sum_retrigger_extras then
+        R = tonumber(G:sum_retrigger_extras(false, ctx)) or 0
     end
-    local n = 1 + extra
-    if self.seal == "red" then n = n + 1 end
-    return math.max(1, n)
+    return math.max(1, 1 + extra + R)
 end
 
---- How many times this card runs the in-hand trigger (Mime adds `mime_held_bonus` to every held card).
----@param mime_held_bonus number|nil usually 0 or 1 when Mime is owned
-function Card:held_trigger_total(mime_held_bonus)
-    mime_held_bonus = math.max(0, tonumber(mime_held_bonus) or 0)
+--- How many times this card runs the in-hand trigger (Mime, Red Seal, `card_data.retrigger_held` via `G:sum_retrigger_extras`).
+---@param seq table|nil play sequence for context (`cards`, Photograph / Pareidolia flags)
+function Card:held_trigger_total(seq)
     local cd = self.card_data or {}
     local extra = math.max(0, tonumber(cd.retrigger_held) or 0)
-    local n = 1 + extra + mime_held_bonus
-    if self.seal == "red" then n = n + 1 end
-    return math.max(1, n)
+    local ctx = {
+        held = true,
+        card_node = self,
+        retrigger_card = self,
+        played_cards = type(seq) == "table" and seq.cards or nil,
+        photograph_first_face_node = type(seq) == "table" and seq.photograph_first_face_node or nil,
+        photograph_pareidolia = type(seq) == "table" and seq.photograph_pareidolia or false,
+    }
+    local R = 0
+    if G and G.sum_retrigger_extras then
+        R = tonumber(G:sum_retrigger_extras(true, ctx)) or 0
+    end
+    return math.max(1, 1 + extra + R)
 end
 
 function Card:matches_trigger(event_name)
