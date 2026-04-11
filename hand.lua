@@ -448,6 +448,12 @@ function Hand:remove_card_at_index(index)
     self.game:remove(node)
     table.remove(self.cards, index)
     table.remove(self.card_nodes, index)
+    if self.game.emit_on_destroy_cards and Deck and Deck.copy_card_data then
+        local snap = Deck.copy_card_data(cd)
+        if snap then
+            self.game:emit_on_destroy_cards({ snap })
+        end
+    end
     if self.game.active_tooltip_card == node then
         self.game.active_tooltip_card = nil
     end
@@ -552,7 +558,9 @@ function Hand:build_contained_hand_types(nodes)
     local flush = (suit_kinds == 1 and n > 0)
 
     if pairs_count >= 1 then contained["Pair"] = true end
-    if pairs_count >= 2 then contained["Two Pair"] = true end
+    if pairs_count >= 2 or (max_of_a_kind >= 3 and pairs_count >= 1) then
+        contained["Two Pair"] = true
+    end
     if max_of_a_kind >= 3 then contained["Three of a Kind"] = true end
     if max_of_a_kind >= 4 then contained["Four of a Kind"] = true end
     if flush then contained["Flush"] = true end

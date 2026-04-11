@@ -100,7 +100,7 @@ function ShopUI.draw_shop_offer_buy_button(game)
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
     love.graphics.setFont(font)
 
-    local can_afford = (tonumber(game.money) or 0) >= (tonumber(offer.price) or 0)
+    local can_afford = game:can_afford_price(tonumber(offer.price) or 0)
     local label = "Buy"
     local btn_w = math.max(32, font:getWidth(label) + 14)
     local btn_h = math.max(14, font:getHeight() + 4)
@@ -219,7 +219,7 @@ function ShopUI.draw_bottom_shop(game)
     local padding = 4
     local shop_continue_rect = { x = panel_x + padding, y = panel_y + padding, w = 74, h = 40, color = game.C.RED, text = "Next\nRound", lines = 2 }
     local reroll_cost = game:shop_current_reroll_cost()
-    local can_reroll = (tonumber(game.money) or 0) >= reroll_cost
+    local can_reroll = game:can_afford_price(reroll_cost)
     local reroll_color = can_reroll and game.C.GREEN or game.C.GREY
     local shop_reroll_rect = {
         x = panel_x + padding,

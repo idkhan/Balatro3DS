@@ -23,27 +23,35 @@ end
 
 local function add_mult(ctx, n)
     ctx.mult = (tonumber(ctx.mult) or 0) + (tonumber(n) or 0)
-    mark_effect_applied(ctx)
-    Sfx.play_mult()
+    if(n > 0) then 
+        mark_effect_applied(ctx)
+        Sfx.play_mult()
+    end
 end
 local function add_chips(ctx, n)
     ctx.chips = (tonumber(ctx.chips) or 0) + (tonumber(n) or 0)
-    mark_effect_applied(ctx)
-    Sfx.play_chips()
+    if(n > 0) then 
+        mark_effect_applied(ctx) 
+        Sfx.play_chips()
+    end
 end
 local function mul_mult(ctx, n)
     ctx.mult = (tonumber(ctx.mult) or 1) * (tonumber(n) or 1)
-    mark_effect_applied(ctx)
-    Sfx.play_mult2()
+    if(n > 1) then
+        mark_effect_applied(ctx)
+        Sfx.play_mult2()
+    end
 end
 local function add_money(ctx, n)
     if G and G.money ~= nil then
         G.money = (tonumber(G.money) or 0) + (tonumber(n) or 0)
-        mark_effect_applied(ctx)
-        Sfx.play_money()
+        if(n > 0) then 
+            mark_effect_applied(ctx) 
+            Sfx.play_money()
+        end
     end
 end
-local function rank_is_face(rank) rank = tonumber(rank); return rank == 11 or rank == 12 or rank == 13 end
+local function rank_is_face(rank) rank = tonumber(rank); return rank == 11 or rank == 12 or rank == 13 or G:hasJoker("j_pareidolia") end
 local function rank_is_even(rank) rank = tonumber(rank); return rank and rank ~= 14 and rank % 2 == 0 end
 local function rank_is_odd(rank) rank = tonumber(rank); return rank and (rank == 14 or rank % 2 == 1) end
 local function count_full_deck(pred)
@@ -373,7 +381,7 @@ local SPECIAL = {
             if ctx.held then return 0 end
             local node = ctx.card_node or ctx.retrigger_card
             local r = tonumber(node and node.card_data and node.card_data.rank)
-            if ctx.photograph_pareidolia or rank_is_face(r) then return 1 end
+            if rank_is_face(r) then return 1 end
             return 0
         end,
     },
@@ -456,7 +464,7 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_hand_played" or e == "on_discard" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
             if ctx.event_name == "on_hand_played" then j.stored_mult = (tonumber(j.stored_mult) or 0) + 1
-            elseif ctx.event_name == "on_discard" then j.stored_mult = (tonumber(j.stored_mult) or 0) - 1
+            elseif ctx.event_name == "on_discard" and ctx.discard_reason == "discard" then j.stored_mult = (tonumber(j.stored_mult) or 0) - 1
             else add_mult(ctx, tonumber(j.stored_mult) or 0) end
         end
     },
@@ -521,11 +529,11 @@ local SPECIAL = {
         end
     },
     j_lucky_cat = {
-        matches_trigger = function(_, e) return e == "card_played" or e == "on_hand_scored" end,
+        matches_trigger = function(_, e) return e == "lucky_trigger" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
-            if ctx.event_name == "card_played" and math.random(1, 5) == 1 then
+            if ctx.event_name == "lucky_trigger" then
                 j.stored_xmult = (tonumber(j.stored_xmult) or 1) + 0.25
-            elseif ctx.event_name == "on_hand_scored" then
+            elseif ctx.event_name == "on_hand_scored" and j.stored_xmult > 1 then
                 mul_mult(ctx, tonumber(j.stored_xmult) or 1)
             end
         end
@@ -569,12 +577,12 @@ local SPECIAL = {
     j_to_the_moon = { matches_trigger = function(_, e) return e == "on_round_end" end, apply_effect = function(_, ctx) add_money(ctx, math.floor((tonumber(G and G.money) or 0) / 5)) end },
     j_reserved_parking = {
         matches_trigger = function(_, e) return e == "card_held" end,
-        apply_effect = function(_, ctx) if (rank_is_face(ctx.rank) or ctx.photograph_pareidolia) and math.random(1, 2) == 1 then add_money(ctx, 1) end end
+        apply_effect = function(_, ctx) if rank_is_face(ctx.rank) and math.random(1, 2) == 1 then add_money(ctx, 1) end end
     },
     j_baron = { matches_trigger = function(_, e) return e == "card_held" end, apply_effect = function(_, ctx) if tonumber(ctx.rank) == 13 then mul_mult(ctx, 1.5) end end },
     j_shoot_the_moon = { matches_trigger = function(_, e) return e == "card_held" end, apply_effect = function(_, ctx) if tonumber(ctx.rank) == 12 then add_mult(ctx, 13) end end },
-    j_scary_face = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_face(ctx.rank) or ctx.photograph_pareidolia then add_chips(ctx, 30) end end },
-    j_smiley_face = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_face(ctx.rank) or ctx.photograph_pareidolia then add_mult(ctx, 5) end end },
+    j_scary_face = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_face(ctx.rank) then add_chips(ctx, 30) end end },
+    j_smiley_face = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_face(ctx.rank) then add_mult(ctx, 5) end end },
     j_even_steven = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_even(ctx.rank) then add_mult(ctx, 4) end end },
     j_odd_todd = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_odd(ctx.rank) then add_chips(ctx, 31) end end },
     j_scholar = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if tonumber(ctx.rank) == 14 then add_chips(ctx, 20); add_mult(ctx, 4) end end },
@@ -652,7 +660,7 @@ local SPECIAL = {
             end
         end
     },
-    j_business = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if (rank_is_face(ctx.rank) or ctx.photograph_pareidolia) and math.random(1, 2) == 1 then add_money(ctx, 2) end end },
+    j_business = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_face(ctx.rank) and math.random(1, 2) == 1 then add_money(ctx, 2) end end },
     j_ticket = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) local cd = ctx.card_node and ctx.card_node.card_data; if cd and cd.enhancement == "gold" then add_money(ctx, 4) end end },
     j_photograph = {
         matches_trigger = function(_, e) return e == "card_played" or e == "on_hand_played" end,
@@ -665,7 +673,7 @@ local SPECIAL = {
                 return
             end
             local r = tonumber(ctx.rank)
-            if ctx.photograph_pareidolia or rank_is_face(r) then
+            if rank_is_face(r) then
                 mul_mult(ctx, 2)
             end
         end
@@ -709,7 +717,7 @@ local SPECIAL = {
     j_yorick = {
         matches_trigger = function(_, e) return e == "on_discard" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
-            if ctx.event_name == "on_discard" then
+            if ctx.event_name == "on_discard" and ctx.discard_reason == "discard" then
                 local n = type(ctx.discarded_cards) == "table" and #ctx.discarded_cards or 0
                 j.runtime_counter = (tonumber(j.runtime_counter) or 0) + n
                 while (tonumber(j.runtime_counter) or 0) >= 23 do
@@ -725,11 +733,11 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "card_played" end,
         apply_effect = function(_, ctx) local r = tonumber(ctx.rank); if r == 12 or r == 13 then mul_mult(ctx, 2) end end
     },
-    j_caino = {
-        matches_trigger = function(_, e) return e == "on_discard" or e == "on_hand_scored" end,
+    j_canio = {
+        matches_trigger = function(_, e) return e == "on_destroy" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
-            if ctx.event_name == "on_discard" and type(ctx.discarded_cards) == "table" then
-                for _, c in ipairs(ctx.discarded_cards) do
+            if ctx.event_name == "on_destroy" and type(ctx.destroyed_cards) == "table" then
+                for _, c in ipairs(ctx.destroyed_cards) do
                     local r = tonumber(c and c.rank)
                     if r == 11 or r == 12 or r == 13 then
                         j.stored_xmult = (tonumber(j.stored_xmult) or 1) + 1
@@ -747,6 +755,240 @@ local SPECIAL = {
                 j.stored_mult = (tonumber(j.stored_mult) or 0) + 1
             elseif ctx.event_name == "on_hand_scored" and j.stored_mult ~= 0 then
                 add_mult(ctx, tonumber(j.stored_mult) or 0)
+            end
+        end
+    },
+    j_baseball_card = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx)
+            local list = G and G.jokers
+            if type(list) ~= "table" then return end
+            for _, jo in ipairs(list) do
+                local r = jo and (tonumber(jo.rarity) or (jo.def and tonumber(jo.def.rarity)))
+                if r == 2 then
+                    mul_mult(ctx, 1.5)
+                end
+            end
+        end,
+    },
+    j_trading_card = {
+        matches_trigger = function(_, e, ctx) return e == "on_discard" and ctx.discard_reason == "discard" end,
+        apply_effect = function(_, ctx)
+            local discardCount = G:get_effective_discards_per_round() - 1
+            local discarded = ctx.discarded_cards
+            if type(discarded) ~= "table" or #discarded ~= 1 or discardCount ~= G.discards then return end
+            local deck = G and G.deck
+            local pile = deck and deck.discard_pile
+            if type(pile) ~= "table" or #pile < 1 then return end
+            local destroyed = table.remove(pile, #pile)
+            if destroyed and G and G.emit_on_destroy_cards and Deck and Deck.copy_card_data then
+                local snap = Deck.copy_card_data(destroyed)
+                if snap then
+                    G:emit_on_destroy_cards({ snap })
+                end
+            end
+            add_money(ctx, 3)
+        end,
+    },
+
+    j_ancient_joker = {
+        matches_trigger = function(_,e) return e == "card_played" or e == "on_round_end" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "card_played" and ctx.suit == j.random_suit then
+                mul_mult(ctx, 1.5)
+            elseif ctx.event_name == "on_round_end" then
+                local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
+                j.random_suit = suits[math.random(1, #suits)]
+                mark_effect_applied(ctx)
+            end
+        end
+    },
+
+    j_ramen = {
+        matches_trigger = function(_, e, ctx)
+            if e == "on_hand_scored" then return true end
+            if e == "on_discard" and type(ctx) == "table" and ctx.discard_reason == "discard" then
+                return true
+            end
+            return false
+        end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                mul_mult(ctx, tonumber(j.runtime_counter) or 1)
+            elseif ctx.event_name == "on_discard" then
+                local discardCount = type(ctx.discarded_cards) == "table" and #ctx.discarded_cards or 0
+                if discardCount < 1 then return end
+                local x = tonumber(j.runtime_counter) or 0
+                j.runtime_counter = x - (0.01 * discardCount)
+                if j.runtime_counter < 1 then
+                    if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
+                        for i, jj in ipairs(G.jokers) do
+                            if jj == j then
+                                Sfx.play("resources/sounds/slice1.ogg")
+                                G:remove_owned_joker_at(i)
+                                break
+                            end
+                        end
+                    end
+                    return
+                end
+                mark_effect_applied(ctx)
+            end
+        end
+    },
+
+    j_walkie_talkie = {
+        matches_trigger = function(_, e) return e == "card_played" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "card_played" then
+                if ctx.rank == 10 or ctx.rank == 4 then
+                    add_chips(ctx, 10)
+                    add_mult(ctx, 4)
+                end
+            end
+        end
+    },
+
+    j_seltzer = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            j.runtime_counter = (tonumber(j.runtime_counter) or 0) - 1
+            if (tonumber(j.runtime_counter) or 0) < 1 then
+                if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
+                    for i, jj in ipairs(G.jokers) do
+                        if jj == j then
+                            Sfx.play("resources/sounds/slice1.ogg")
+                            G:remove_owned_joker_at(i)
+                            break
+                        end
+                    end
+                end
+            end
+        end,
+        query_retrigger = function(j, ctx)
+            if (tonumber(j.runtime_counter) or 0) > 0 then
+                return 1
+            end
+            return 0
+        end
+    },
+
+    j_castle = {
+        matches_trigger = function(_, e, ctx)
+            if e == "on_hand_scored" then return true end
+            if e == "on_discard" and type(ctx) == "table" and ctx.discard_reason == "discard" then
+                return true
+            end
+            return false
+        end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                add_chips(ctx, tonumber(j.runtime_counter) or 0)
+            elseif ctx.event_name == "on_discard" then
+                local discarded = ctx.discarded_cards
+                for n,c in ipairs(discarded) do
+                    if c.suit == j.random_suit then
+                        j.runtime_counter = (tonumber(j.runtime_counter) or 0) + 3
+                    end
+                end
+            end
+        end
+    },
+
+    j_midas_mask = {
+        matches_trigger = function(_, e) return e == "card_played" end,
+        apply_effect = function(_, ctx)
+            if rank_is_face(ctx.rank) then
+                local node = ctx.card_node
+                if node and type(node.set_enhancement) == "function" then
+                    node:set_enhancement("gold")
+                    mark_effect_applied(ctx)
+                end
+            end
+        end
+    },
+
+    j_dusk = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        query_retrigger = function(joker, ctx)
+            if G.hands == 0 then
+                return 1
+            end
+            return 0
+        end,
+    },
+
+    j_gros_michel = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" or e == "on_round_end" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                add_mult(ctx, 15)
+            else
+                if math.random(1, 6) == 1 then
+                    if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
+                        for i, jj in ipairs(G.jokers) do
+                            if jj == j then
+                                Sfx.play("resources/sounds/slice1.ogg")
+                                G:remove_owned_joker_at(i)
+                                break
+                            end
+                        end
+                    end
+                    return
+                end
+            end
+        end
+    },
+
+    j_ride_the_bus = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            local cards = (ctx and ctx.cards) or {}
+            local face = false
+            for _, node in ipairs(cards) do
+                local r = node and node.card_data and node.card_data.rank
+                if rank_is_face(r) then
+                    face = true
+                    break
+                end
+            end
+            if not face then
+                j.runtime_counter = (tonumber(j.runtime_counter) or 0) + 1
+            else
+                j.runtime_counter = 0
+            end
+            add_mult(ctx, tonumber(j.runtime_counter))
+        end
+    },
+
+    j_space = {
+        matches_trigger = function(_, e) return e == "on_hand_played" end,
+        apply_effect = function(_, ctx)
+            if math.random(1, 4) ~= 1 then return end
+            local idx = ctx and tonumber(ctx.hand_index)
+            if not G or not idx or not G.upgrade_hand_level_at_index then return end
+            if G:upgrade_hand_level_at_index(idx) then
+                mark_effect_applied(ctx)
+            end
+        end
+    },
+
+    j_ice_cream = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            add_chips(ctx, tonumber(j.runtime_counter) or 0)
+            j.runtime_counter = tonumber(j.runtime_counter) - 5
+            if tonumber(j.runtime_counter) <= 0 then
+                if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
+                    for i, jj in ipairs(G.jokers) do
+                        if jj == j then
+                            Sfx.play("resources/sounds/slice1.ogg")
+                            G:remove_owned_joker_at(i)
+                            break
+                        end
+                    end
+                end
+                return
             end
         end
     },

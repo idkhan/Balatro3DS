@@ -379,7 +379,8 @@ function Game:boss_apply_on_hand_submitted(selected_nodes)
 
     if boss_id == "bl_tooth" then
         local n = type(selected_nodes) == "table" and #selected_nodes or 0
-        self.money = math.max(0, (tonumber(self.money) or 0) - n)
+        local floor = self:get_money_loss_floor()
+        self.money = math.max(floor, (tonumber(self.money) or 0) - n)
     elseif boss_id == "bl_ox" then
         local target_idx, target_count = -1, -1
         for k, v in pairs(self.hand_play_counts or {}) do
@@ -1176,6 +1177,29 @@ function Game:random_joker_def_id()
     return pool[math.random(1, #pool)]
 end
 
+--- Increment stored level for poker hand index `idx` (1..12). If that hand is the current play, updates
+--- `selectedHandLevel`, `selectedHandChips`, and `selectedHandMult` (including boss hand modifiers).
+---@param idx integer
+---@return boolean
+function Game:upgrade_hand_level_at_index(idx)
+    idx = tonumber(idx)
+    if not idx or not self.hand_stats or not self.hand_stats[idx] then return false end
+    local stats = self.hand_stats[idx]
+    stats.level = (tonumber(stats.level) or 1) + 1
+    local level = math.max(1, tonumber(stats.level) or 1)
+    local chips = (tonumber(stats.base_chips) or 0) + ((level - 1) * (tonumber(stats.chips_per_level) or 0))
+    local mult = (tonumber(stats.base_mult) or 0) + ((level - 1) * (tonumber(stats.mult_per_level) or 0))
+    if self.boss_apply_hand_base_modifiers then
+        chips, mult = self:boss_apply_hand_base_modifiers(chips, mult)
+    end
+    if tonumber(self.selectedHand) == idx then
+        self.selectedHandLevel = level
+        self.selectedHandChips = chips
+        self.selectedHandMult = mult
+    end
+    return true
+end
+
 --- Apply the runtime effect for a Consumable and play a simple SFX where appropriate.
 ---@param c table
 function Game:apply_consumable_effect(c)
@@ -1195,19 +1219,7 @@ function Game:apply_consumable_effect(c)
             end
 
             if target_idx then
-                local stats = self.hand_stats[target_idx]
-                if stats then
-                    local next_level = (tonumber(stats.level) or 1) + 1
-                    stats.level = next_level
-                    if self.selectedHand == target_idx then
-                        local level = tonumber(stats.level) or 1
-                        local chips = (tonumber(stats.base_chips) or 0) + ((level - 1) * (tonumber(stats.chips_per_level) or 0))
-                        local mult = (tonumber(stats.base_mult) or 0) + ((level - 1) * (tonumber(stats.mult_per_level) or 0))
-                        self.selectedHandLevel = level
-                        self.selectedHandChips = chips
-                        self.selectedHandMult = mult
-                    end
-                end
+                self:upgrade_hand_level_at_index(target_idx)
             end
         end
         self:record_consumable_use_id(id)
@@ -2160,14 +2172,13 @@ function Game:init_jokers()
     -- for i = 1, want do
     --     self:add_joker_by_def(pool[i])
     -- end
-    self:add_joker_by_def("j_juggler")
-    self:add_joker_by_def("j_drunkard")
-    self:add_joker_by_def("j_stone_joker")
-    self:add_joker_by_def("j_golden_joker")
-    self:add_joker_by_def("j_lucky_cat")
-    for _, jj in ipairs(self.jokers) do
-        if jj and jj.refresh_quads then jj:refresh_quads() end
-    end
+    self:add_joker_by_def("j_pareidolia")
+    self:add_joker_by_def("j_smiley_face")
+    self:add_joker_by_def("j_space")
+    self:add_joker_by_def("j_ice_cream")
+    -- for _, jj in ipairs(self.jokers) do
+    --     if jj and jj.refresh_quads then jj:refresh_quads() end
+    -- end
 end
 
 ---Add an owned Joker by definition id.
@@ -2224,6 +2235,44 @@ end
 
 function Game:hasJoker(joker_id)
     return self:count_jokers_with_id(joker_id) > 0
+end
+
+--- Max debt while Credit Card is owned (from `JOKER_DEFS.j_credit_card.config.extra`, default 20).
+function Game:get_credit_card_debt_limit()
+    local d = JOKER_DEFS and JOKER_DEFS.j_credit_card
+    local c = type(d) == "table" and d.config and d.config.extra
+    return math.max(1, math.floor(tonumber(c) or 20))
+end
+
+function Game:has_credit_card()
+    return self:hasJoker("j_credit_card")
+end
+
+--- Whether the player can pay `cost` from the shop (buy / reroll). Free costs (0) always allowed.
+--- With Credit Card: may spend until money reaches -debt_limit.
+--- Without Credit Card: if money is negative (e.g. sold Credit Card while in debt), no paid purchases until money is >= 0.
+function Game:can_afford_price(cost)
+    cost = math.max(0, tonumber(cost) or 0)
+    if cost <= 0 then
+        return true
+    end
+    local m = tonumber(self.money) or 0
+    if self:has_credit_card() then
+        local lim = self:get_credit_card_debt_limit()
+        return (m - cost) >= -lim
+    end
+    if m < 0 then
+        return false
+    end
+    return m >= cost
+end
+
+--- Floor for money when losing it to bosses etc. (-debt_limit with Credit Card, else 0).
+function Game:get_money_loss_floor()
+    if self:has_credit_card() then
+        return -self:get_credit_card_debt_limit()
+    end
+    return 0
 end
 
 ---@param joker_id string
@@ -2461,6 +2510,15 @@ function Game:emit_joker_event(event_name, ctx)
             self:_sync_joker_ctx(ctx)
         end
     end
+end
+
+--- Playing cards removed from the run (destroyed, not sent to discard). `destroyed_cards` is an array of logical card data tables.
+---@param destroyed_cards table[]
+function Game:emit_on_destroy_cards(destroyed_cards)
+    if type(destroyed_cards) ~= "table" or #destroyed_cards == 0 then return end
+    self:emit_joker_event("on_destroy", {
+        destroyed_cards = destroyed_cards,
+    })
 end
 
 function Game:_sync_joker_ctx(ctx)
@@ -2901,6 +2959,7 @@ end
 function Game:shop_current_reroll_cost()
     local base = tonumber(self.shop_reroll_base_cost) or 5
     local n = math.max(0, math.floor(tonumber(self.shop_reroll_count) or 0))
+    if (self.shop_reroll_count == 0 and self:hasJoker("j_chaos")) then return 0 end 
     return base + n
 end
 
@@ -2935,7 +2994,7 @@ end
 function Game:reroll_shop_offers()
     if self.STATE ~= self.STATES.SHOP then return false end
     local cost = self:shop_current_reroll_cost()
-    if (tonumber(self.money) or 0) < cost then
+    if not self:can_afford_price(cost) then
         return false
     end
     self.money = (tonumber(self.money) or 0) - cost
@@ -2952,6 +3011,7 @@ end
 --- Blind just beaten: recycle deck, pay reward, show round-win screen (then shop).
 --- Interest: +$1 per full $5 held after blind + hands payout; only the first $25 counts (max +$5).
 function Game:enter_round_win_after_blind()
+    Sfx.play("resources/sounds/win.ogg")
     local hands_left = math.max(0, math.floor(tonumber(self.hands) or 0))
     self._round_win_hands_bonus = hands_left
     self:emit_joker_event("on_round_end", {
@@ -3001,7 +3061,7 @@ function Game:buy_shop_joker(slot_index)
     if type(slot_index) ~= "number" or slot_index < 1 then return false end
     local offer = self.shop_offers and self.shop_offers[slot_index]
     if not offer then return false end
-    if (tonumber(self.money) or 0) < (tonumber(offer.price) or 0) then return false end
+    if not self:can_afford_price(tonumber(offer.price) or 0) then return false end
 
     local ok = false
     local k = offer.kind

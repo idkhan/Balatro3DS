@@ -64,6 +64,13 @@ local function runtime_snapshot_delta(before, after)
     return state_changed, created
 end
 
+local function count_full_deck(pred)
+    if G and G.count_cards_in_full_deck then
+        return G:count_cards_in_full_deck(pred)
+    end
+    return 0
+end
+
 ---@param raw string|nil
 ---@return "base"|"foil"|"holo"|"polychrome"|"negative"
 function Joker.normalize_edition(raw)
@@ -230,6 +237,22 @@ function Joker:init(X, Y, W, H, def, params)
 
     self.effect_impl = JokerEffects.get(self)
 
+    if type(self.def) == "table" then
+        if (self.def.id == "j_ancient_joker" or self.def.id == "j_castle") then
+            local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
+            self.random_suit = suits[math.random(1, #suits)]
+        end
+        if self.def.id == "j_castle" then
+            self.runtime_counter = tonumber(self.runtime_counter) or 0
+        elseif self.def.id == "j_ramen" then
+            self.runtime_counter = self.def.config.Xmult or 2 -- Starts at 2
+        elseif self.def.id == "j_seltzer" then
+            self.runtime_counter = self.def.config.duration or 10 -- Starts at 10
+        elseif self.def.id == "j_ice_cream" then
+            self.runtime_counter = self.def.config.chips or 100 -- Starts at 100
+        end
+    end
+
     local cw = W or 71
     local ch = H or 95
     Moveable.init(self, X or 0, Y or 0, cw, ch)
@@ -336,19 +359,147 @@ end
 local TOOLTIP_PAD_X = 8
 local TOOLTIP_HEADER_PAD_Y = 3
 local TOOLTIP_BODY_PAD_Y = 10
+--- Tighter top inset when the first body line is the rarity pill (less gap under the header).
+local TOOLTIP_BODY_PAD_TOP_RARITY = 4
 local TOOLTIP_SPACING = 1
 local TOOLTIP_SECTION_GAP = 2
 local TOOLTIP_OUTER_PAD_X = 3
 local TOOLTIP_OUTER_PAD_Y = 3
+local RARITY_BADGE_PAD_X = 10
+local RARITY_BADGE_PAD_Y = 3
 
 local function split_tooltip_override(s)
     if type(s) ~= "string" or s == "" then return nil end
     local lines = {}
     for line in string.gmatch(s, "[^\r\n]+") do
-        table.insert(lines, line)
+        table.insert(lines, { kind = "text", text = line })
     end
-    if #lines == 0 then return { s } end
+    if #lines == 0 then return { { kind = "text", text = s } } end
     return lines
+end
+
+local HAND_NAME_PHRASES = {
+    "flush five",
+    "flush house",
+    "five of a kind",
+    "straight flush",
+    "four of a kind",
+    "two of a kind",
+    "full house",
+    "three of a kind",
+    "two pair",
+    "high card",
+    "straight",
+    "flush",
+    "pair",
+}
+
+local function fmt_runtime_number(n, decimals)
+    local d = tonumber(decimals) or 2
+    local s = string.format("%." .. d .. "f", tonumber(n) or 0)
+    s = s:gsub("%.?0+$", "")
+    return s
+end
+
+local function append_segment(segments, text, color_key)
+    if type(text) ~= "string" or text == "" then return end
+    local last = segments[#segments]
+    if last and last.color_key == color_key then
+        last.text = last.text .. text
+        return
+    end
+    table.insert(segments, { text = text, color_key = color_key })
+end
+
+local function apply_range(paints, priorities, s, e, color_key, prio)
+    if type(s) ~= "number" or type(e) ~= "number" then return end
+    s = math.max(1, math.floor(s))
+    e = math.max(s, math.floor(e))
+    prio = tonumber(prio) or 1
+    for i = s, e do
+        local old = priorities[i] or -1
+        if prio >= old then
+            priorities[i] = prio
+            paints[i] = color_key
+        end
+    end
+end
+
+local function paint_phrase_ranges(text, paints, priorities, phrase, color_key, prio)
+    local hay = string.lower(text)
+    local needle = string.lower(phrase)
+    local start_i = 1
+    while true do
+        local s, e = hay:find(needle, start_i, true)
+        if not s then break end
+        apply_range(paints, priorities, s, e, color_key, prio)
+        start_i = e + 1
+    end
+end
+
+local function paint_pattern_ranges(text, paints, priorities, pattern, color_key, prio)
+    local start_i = 1
+    while true do
+        local s, e = text:find(pattern, start_i)
+        if not s then break end
+        apply_range(paints, priorities, s, e, color_key, prio)
+        if e < start_i then
+            start_i = start_i + 1
+        else
+            start_i = e + 1
+        end
+    end
+end
+
+local function build_semantic_segments_from_text(raw_text)
+    local text = tostring(raw_text or "")
+    text = text:gsub("%*", "")
+    local len = #text
+    if len <= 0 then
+        return { { text = "", color_key = nil } }
+    end
+
+    local paints = {}
+    local priorities = {}
+
+    -- Requested semantic categories.
+    paint_phrase_ranges(text, paints, priorities, "tarot", "PURPLE", 50)
+    paint_phrase_ranges(text, paints, priorities, "hand size", "IMPORTANT", 55)
+    paint_phrase_ranges(text, paints, priorities, "discard", "RED", 56)
+    paint_phrase_ranges(text, paints, priorities, "discarded", "RED", 56)
+    paint_pattern_ranges(text, paints, priorities, "%$%d+", "MONEY", 57)
+    for _, hand_name in ipairs(HAND_NAME_PHRASES) do
+        paint_phrase_ranges(text, paints, priorities, hand_name, "IMPORTANT", 58)
+    end
+
+    -- Chance/probability.
+    paint_pattern_ranges(text, paints, priorities, "%d+/%d+:%s*", "CHANCE", 70)
+    paint_pattern_ranges(text, paints, priorities, "%d+%s+[Ii][Nn]%s+%d+", "CHANCE", 70)
+    paint_phrase_ranges(text, paints, priorities, "chance", "CHANCE", 70)
+    paint_phrase_ranges(text, paints, priorities, "probabilities", "CHANCE", 70)
+
+    -- Mult/chips requested styling.
+    paint_pattern_ranges(text, paints, priorities, "[Xx]%d+[%d%.]*%s*[Mm]ult", "MULT", 80)
+    paint_pattern_ranges(text, paints, priorities, "[%+%-]?%d+[%d%.]*%s*[Mm]ult", "MULT", 80)
+    paint_pattern_ranges(text, paints, priorities, "[Mm]ult", "MULT", 78)
+    paint_pattern_ranges(text, paints, priorities, "[%+%-]?%d+[%d%.]*%s*[Cc]hips", "CHIPS", 80)
+    paint_pattern_ranges(text, paints, priorities, "[Cc]hips", "CHIPS", 78)
+
+    local segments = {}
+    local current_color = paints[1]
+    local run_start = 1
+    for i = 2, len + 1 do
+        local next_color = paints[i]
+        if i == (len + 1) or next_color ~= current_color then
+            append_segment(segments, text:sub(run_start, i - 1), current_color)
+            run_start = i
+            current_color = next_color
+        end
+    end
+    if #segments <= 0 then
+        return { { text = text, color_key = nil } }
+    end
+    return segments
 end
 
 local function describe_joker_effect_lines(joker)
@@ -444,16 +595,151 @@ local function describe_joker_effect_lines(joker)
             string.format("Currently +%d mult", joker.stored_mult)
         }
     end
-    return { tostring(et) }
+    return { { kind = "text", text = tostring(et) } }
+end
+
+local function get_full_deck_starting_size()
+    if G and G.STARTING_DECK_SIZE then
+        return tonumber(G.STARTING_DECK_SIZE) or 52
+    end
+    return 52
+end
+
+function Joker:get_live_current_tooltip_text(base_text)
+    local id = self.def and self.def.id or nil
+    if type(id) ~= "string" then return base_text end
+
+    local multipliers = {
+        j_stencil = function(j)
+            local free = tonumber(j.free_joker_slots)
+            if free == nil and G then
+                local cap = tonumber(G.joker_capacity) or tonumber(G.joker_slot_count) or 0
+                local used = (type(G.jokers) == "table") and #G.jokers or 0
+                free = math.max(0, cap - used)
+            end
+            free = tonumber(free) or 0
+            return string.format("(Currently X%s)", fmt_runtime_number(free + 1, 2))
+        end,
+        j_steel_joker = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_constellation = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_madness = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_vampire = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_hologram = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_obelisk = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_throwback = function(j)
+            local skipped = tonumber(j.runtime_counter) or 0
+            local x = 1 + (0.25 * skipped)
+            return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
+        end,
+        j_glass = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_hit_the_road = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_canio = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_yorick = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_lucky_cat = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_campfire = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_ramen = function(j)
+            local x = tonumber(j.runtime_counter) or 2
+            return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
+        end,
+    }
+    if multipliers[id] then
+        return multipliers[id](self)
+    end
+
+    local mults = {
+        j_ceremonial = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+        j_abstract = function() return string.format("(Currently +%d Mult)", 3 * ((G and G.jokers and #G.jokers) or 0)) end,
+        j_ride_the_bus = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.runtime_counter) or 0)) end,
+        j_green_joker = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+        j_red_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+        j_erosion = function()
+            local cnt = count_full_deck()
+            local start_size = get_full_deck_starting_size()
+            return string.format("(Currently +%d Mult)", math.max(0, (start_size - cnt) * 4))
+        end,
+        j_swashbuckler = function(j)
+            local total = 0
+            for _, owned in ipairs((G and G.jokers) or {}) do
+                if owned and owned ~= j then
+                    total = total + (tonumber(owned.sell_cost) or 0)
+                end
+            end
+            return string.format("(Currently +%d Mult)", math.floor(total))
+        end,
+        j_bootstraps = function() return string.format("(Currently +%d Mult)", math.floor((tonumber(G and G.money) or 0) / 5) * 2) end,
+        j_flash_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+        j_spare_trousers = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+        j_fortune_teller = function(j) return string.format("(Currently +%d)", math.floor(tonumber(j.stored_mult) or 0)) end,
+    }
+    if mults[id] then
+        return mults[id](self)
+    end
+
+    local chips = {
+        j_ice_cream = function(j)
+            local n = math.max(0, math.floor(tonumber(j.runtime_counter) or 0))
+            return string.format("(Currently +%d Chips)", n)
+        end,
+        j_runner = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
+        j_blue_joker = function() return string.format("(Currently +%d Chips)", 2 * count_full_deck()) end,
+        j_square = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
+        j_wee = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
+        j_stone_joker = function() return string.format("(Currently +%d Chips)", 25 * count_full_deck(function(c) return c.enhancement == "stone" end)) end,
+        j_bull = function() return string.format("(Currently +%d Chips)", 2 * (tonumber(G and G.money) or 0)) end,
+    }
+    if chips[id] then
+        return chips[id](self)
+    end
+
+    if id == "j_cloud_9" then
+        return string.format("(Currently $%d)", count_full_deck(function(c) return tonumber(c.rank) == 9 end))
+    end
+    if id == "j_invisible" then
+        return string.format("(Currently %d/2)", math.floor(tonumber(self.runtime_counter) or 0))
+    end
+    if id == "j_drivers_license" then
+        local enhanced = count_full_deck(function(c) return c.enhancement ~= nil and c.enhancement ~= "" end)
+        return string.format("(Currently %d)", enhanced)
+    end
+    if id == "j_loyalty_card" then
+        local remaining = tonumber(self.loyalty_remaining) or 6
+        return string.format("%d remaining", math.floor(remaining))
+    end
+    if id == "j_ancient_joker" then
+        local s = self.random_suit
+        if type(s) ~= "string" or s == "" then
+            s = "—"
+        end
+        return string.format("Each played card with %s gives X1.5 Mult when scored", s)
+    end
+    if id == "j_seltzer" then
+        local n = math.max(0, math.floor(tonumber(self.runtime_counter) or 0))
+        if n == 1 then
+            return "(Currently 1 hand remaining)"
+        end
+        return string.format("(Currently %d hands remaining)", n)
+    end
+    if id == "j_castle" then
+        local bt = tostring(base_text or "")
+        if bt:find("(Currently", 1, true) then
+            return string.format("(Currently +%d Chips)", math.floor(tonumber(self.runtime_counter) or 0))
+        end
+        local s = self.random_suit
+        if type(s) ~= "string" or s == "" then
+            s = "—"
+        end
+        return string.format("This Joker gains +3 Chips per discarded %s", s)
+    end
+    return base_text
 end
 
 function Joker:get_edition_tooltip_lines()
     local ed = Joker.normalize_edition(self.edition)
     if ed == "base" then return {} end
-    if ed == "foil" then return { "Foil: +50 Chips when hand is scored" } end
-    if ed == "holo" then return { "Holographic: +10 Mult when hand is scored" } end
-    if ed == "polychrome" then return { "Polychrome: ×1.5 Mult when hand is scored" } end
-    if ed == "negative" then return { "Negative: +1 Joker slot" } end
+    if ed == "foil" then return { { kind = "text", text = "Foil: +50 Chips when hand is scored" } } end
+    if ed == "holo" then return { { kind = "text", text = "Holographic: +10 Mult when hand is scored" } } end
+    if ed == "polychrome" then return { { kind = "text", text = "Polychrome: ×1.5 Mult when hand is scored" } } end
+    if ed == "negative" then return { { kind = "text", text = "Negative: +1 Joker slot" } } end
     return {}
 end
 
@@ -470,7 +756,11 @@ function Joker:get_tooltip_body_lines()
     if type(def.tooltip) == "table" then
         local out = {}
         for _, l in ipairs(def.tooltip) do
-            if type(l) == "string" then table.insert(out, l) end
+            if type(l) == "string" then
+                table.insert(out, { kind = "text", text = l })
+            elseif type(l) == "table" then
+                table.insert(out, l)
+            end
         end
         if #out > 0 then return append_edition(out) end
     end
@@ -484,12 +774,64 @@ function Joker:get_tooltip_body_lines()
         if type(extra) == "table" then
             for _, line in ipairs(extra) do
                 if type(line) == "string" then
+                    table.insert(base_lines, { kind = "text", text = line })
+                elseif type(line) == "table" then
                     table.insert(base_lines, line)
                 end
             end
         end
     end
     return append_edition(base_lines)
+end
+
+local function tooltip_color_by_key(color_key)
+    if not color_key then
+        return { 0.22, 0.24, 0.26, 1 }
+    end
+    local C = (G and G.C) or {}
+    if color_key == "MULT" then return C.MULT or { 0.9, 0.3, 0.4, 1 } end
+    if color_key == "CHIPS" then return C.CHIPS or { 0.3, 0.7, 1, 1 } end
+    if color_key == "CHANCE" then return C.CHANCE or C.GREEN or { 0.2, 0.75, 0.55, 1 } end
+    if color_key == "PURPLE" then return C.PURPLE or { 0.66, 0.51, 0.82, 1 } end
+    if color_key == "IMPORTANT" then return C.IMPORTANT or { 1, 0.6, 0.0, 1 } end
+    if color_key == "MONEY" then return C.MONEY or { 0.9, 0.8, 0.2, 1 } end
+    if color_key == "RED" then return C.RED or { 0.996, 0.373, 0.333, 1 } end
+    if color_key == "MONEY" then return C.MONEY or { 0.996, 0.373, 0.333, 1 } end
+    return { 0.22, 0.24, 0.26, 1 }
+end
+
+function Joker:resolve_tooltip_line_segments(line_def)
+    if type(line_def) == "string" then
+        return build_semantic_segments_from_text(line_def)
+    end
+    if type(line_def) ~= "table" then
+        return { { text = tostring(line_def or ""), color_key = nil } }
+    end
+    if type(line_def.segments) == "table" then
+        local out = {}
+        for _, seg in ipairs(line_def.segments) do
+            if type(seg) == "table" then
+                local text = tostring(seg.text or seg[1] or "")
+                local color_key = seg.color_key or seg[2]
+                append_segment(out, text, color_key)
+            end
+        end
+        if #out > 0 then return out end
+    end
+
+    if line_def.kind == "rarity_badge" then
+        local r = tonumber(line_def.rarity) or 1
+        if r < 1 then r = 1 end
+        if r > 4 then r = 4 end
+        local text = tostring(line_def.text or "")
+        return { { text = text, rarity_badge = true, rarity_index = r } }
+    end
+
+    local text = tostring(line_def.text or "")
+    if line_def.kind == "current" then
+        text = self:get_live_current_tooltip_text(text)
+    end
+    return build_semantic_segments_from_text(text)
 end
 
 function Joker:draw_tooltip(draw_x, draw_y)
@@ -501,17 +843,44 @@ function Joker:draw_tooltip(draw_x, draw_y)
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
     love.graphics.setFont(font)
 
-    local header_w = font:getWidth(title)
-    local body_max_w = 0
+    local resolved_lines = {}
     for _, line in ipairs(lines) do
-        local w = font:getWidth(line)
+        table.insert(resolved_lines, self:resolve_tooltip_line_segments(line))
+    end
+
+    local header_w = font:getWidth(title)
+    local line_h = font:getHeight()
+    local body_line_heights = {}
+    local body_max_w = 0
+    for _, segments in ipairs(resolved_lines) do
+        local w = 0
+        if #segments == 1 and segments[1].rarity_badge then
+            local seg = segments[1]
+            w = font:getWidth(seg.text or "") + RARITY_BADGE_PAD_X * 2
+            body_line_heights[#body_line_heights + 1] = line_h + RARITY_BADGE_PAD_Y * 2
+        else
+            for _, seg in ipairs(segments) do
+                w = w + font:getWidth(seg.text or "")
+            end
+            body_line_heights[#body_line_heights + 1] = line_h
+        end
         if w > body_max_w then body_max_w = w end
     end
-    local line_h = font:getHeight()
+    local body_lines_total_h = 0
+    for i, h in ipairs(body_line_heights) do
+        body_lines_total_h = body_lines_total_h + h
+        if i < #body_line_heights then
+            body_lines_total_h = body_lines_total_h + TOOLTIP_SPACING
+        end
+    end
+    local first_is_rarity = #resolved_lines > 0
+        and resolved_lines[1][1]
+        and resolved_lines[1][1].rarity_badge == true
+    local body_pad_top = first_is_rarity and TOOLTIP_BODY_PAD_TOP_RARITY or TOOLTIP_BODY_PAD_Y
     local header_w_total = header_w + (TOOLTIP_PAD_X * 2)
     local header_h_total = line_h + (TOOLTIP_HEADER_PAD_Y * 2)
     local body_w_total = body_max_w + (TOOLTIP_PAD_X * 2)
-    local body_h_total = (#lines * line_h) + ((#lines - 1) * TOOLTIP_SPACING) + (TOOLTIP_BODY_PAD_Y * 2)
+    local body_h_total = body_lines_total_h + body_pad_top + TOOLTIP_BODY_PAD_Y
     local inner_w = math.max(header_w_total, body_w_total)
     local inner_h = header_h_total + TOOLTIP_SECTION_GAP + body_h_total
     local box_w = inner_w + (TOOLTIP_OUTER_PAD_X * 2)
@@ -570,88 +939,42 @@ function Joker:draw_tooltip(draw_x, draw_y)
     love.graphics.setColor(G.C.PANEL)
     love.graphics.print(title, header_text_x, header_text_y)
 
-    local text_y = body_y + TOOLTIP_BODY_PAD_Y
-    local gray = { 0.22, 0.24, 0.26, 1 }
-    local green = (G.C and G.C.GREEN) or { 0.2, 0.75, 0.55, 1 }
-
-    local function strip_prob_prefix(s)
-        local p = s:match("^(%d+/%d+:%s*)")
-        if p then
-            return p, s:sub(#p + 1)
-        end
-        return nil, s
-    end
-
+    local text_y = body_y + body_pad_top
     local function draw_segments_centered(segments, line_y)
         local total_w = 0
         for _, seg in ipairs(segments) do
-            total_w = total_w + font:getWidth(seg[1])
+            total_w = total_w + font:getWidth(seg.text or "")
         end
         local x = body_x + math.floor((inner_w - total_w) * 0.5 + 0.5)
         for _, seg in ipairs(segments) do
-            local t, col = seg[1], seg[2]
+            local t = seg.text or ""
+            local col = tooltip_color_by_key(seg.color_key)
             love.graphics.setColor(col[1], col[2], col[3], col[4])
             love.graphics.print(t, x, line_y)
             x = x + font:getWidth(t)
         end
     end
 
-    for _, line in ipairs(lines) do
-        local line_y = math.floor(text_y + 0.5)
-        local prob, rest = strip_prob_prefix(line)
-
-        local num_chips, suf_chips = rest:match("^(.-)( chips)$")
-        local num_mult, suf_mult = rest:match("^(.-)( mult)$")
-
-        if num_chips and suf_chips then
-            local segs = {}
-            if prob then
-                table.insert(segs, { prob, green })
-            end
-            table.insert(segs, { num_chips, G.C.CHIPS })
-            table.insert(segs, { suf_chips, G.C.CHIPS })
-            draw_segments_centered(segs, line_y)
-        elseif num_mult and suf_mult then
-            local segs = {}
-            if prob then
-                table.insert(segs, { prob, green })
-            end
-            table.insert(segs, { num_mult, G.C.MULT })
-            table.insert(segs, { suf_mult, G.C.MULT })
-            draw_segments_centered(segs, line_y)
+    for i, segments in ipairs(resolved_lines) do
+        local row_h = body_line_heights[i] or line_h
+        if #segments == 1 and segments[1].rarity_badge then
+            local seg = segments[1]
+            local label = seg.text or ""
+            local ri = tonumber(seg.rarity_index) or 1
+            local rc = (G and G.C and G.C.RARITY and G.C.RARITY[ri]) or { 0.035, 0.62, 1, 1 }
+            local bw = font:getWidth(label) + RARITY_BADGE_PAD_X * 2
+            local x0 = body_x + math.floor((inner_w - bw) * 0.5 + 0.5)
+            love.graphics.setColor(rc[1], rc[2], rc[3], rc[4] or 1)
+            draw_rounded_rect(x0, text_y, bw, row_h, 4, 0, "fill")
+            local text_x = x0 + RARITY_BADGE_PAD_X
+            local text_y_row = text_y + math.floor((row_h - line_h) * 0.5 + 0.5)
+            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.print(label, text_x, text_y_row)
         else
-            local left, mid, right = rest:match("^(.-)%s(mult)(.*)$")
-            if left and mid and right ~= nil then
-                local segs = {}
-                if prob then
-                    table.insert(segs, { prob, green })
-                end
-                table.insert(segs, { left .. " ", G.C.MULT })
-                table.insert(segs, { mid, G.C.MULT })
-                table.insert(segs, { right, gray })
-                draw_segments_centered(segs, line_y)
-            else
-                local left_c, mid_c, right_c = rest:match("^(.-)%s(chips)(.*)$")
-                if left_c and mid_c and right_c ~= nil then
-                    local segs = {}
-                    if prob then
-                        table.insert(segs, { prob, green })
-                    end
-                    table.insert(segs, { left_c .. " ", G.C.CHIPS })
-                    table.insert(segs, { mid_c, G.C.CHIPS })
-                    table.insert(segs, { right_c, gray })
-                    draw_segments_centered(segs, line_y)
-                elseif prob then
-                    draw_segments_centered({ { prob, green }, { rest, gray } }, line_y)
-                else
-                    local line_w = font:getWidth(line)
-                    local line_x = body_x + math.floor((inner_w - line_w) * 0.5 + 0.5)
-                    love.graphics.setColor(gray[1], gray[2], gray[3], gray[4])
-                    love.graphics.print(line, line_x, line_y)
-                end
-            end
+            local line_y = math.floor(text_y + (row_h - line_h) * 0.5 + 0.5)
+            draw_segments_centered(segments, line_y)
         end
-        text_y = text_y + line_h + TOOLTIP_SPACING
+        text_y = text_y + row_h + TOOLTIP_SPACING
     end
 
     love.graphics.setFont(prev_font)

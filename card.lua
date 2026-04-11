@@ -804,15 +804,21 @@ function Card:do_enhancement(ctx)
         G.money = G.money + 3
         Sfx.play_money()
     elseif self.enhancement == "lucky" then
+        local triggered = false
         -- 1 in 5 chance to give +20 mult
         if math.random(1, 5) == 1 then
             ctx.mult = (tonumber(ctx.mult) or 1) + 20
+            triggered = true
             Sfx.play_mult()
         end
         -- 1 in 15 to give +$20
         if math.random(1, 15) == 1 then
             G.money = G.money + 20
+            triggered = true
             Sfx.play_money()
+        end
+        if triggered then
+            G:emit_joker_event("lucky_trigger")
         end
     end
 end
