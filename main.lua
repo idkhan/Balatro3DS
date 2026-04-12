@@ -34,8 +34,7 @@ function love.load()
     G = Game()
     G:initialize_run_loop()
 
-    --G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
-    -- JOKERS ARENT SHOWING UP PROPERLY - SMILEY JOKER
+    G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
     if G.music then
         G.music:setLooping(true)
         G.music:play()

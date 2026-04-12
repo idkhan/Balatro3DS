@@ -4,6 +4,9 @@ Game = Object:extend()
 local ShopUI = require("shop_ui")
 local RoundWinUI = require("round_win_ui")
 
+--- Seconds between revealing each payout line on the round-win screen.
+local ROUND_WIN_LINE_DELAY = 0.38
+
 ---@param seed number|nil Optional seed for the RNG. If nil, a seed is generated (os.time()).
 function Game:init(seed)
     G = self
@@ -130,7 +133,7 @@ function Game:get_effective_hand_size_limit()
     for _, j in ipairs(self.jokers or {}) do
         local id = j and j.def and j.def.id
         if id == "j_juggler" then limit = limit + 1 end
-        if id == "j_turtle_bean" then limit = limit + 5 end
+        if id == "j_turtle_bean" then limit = limit + j.runtime_counter end
         if id == "j_troubadour" then limit = limit + 2 end
         if id == "j_stuntman" then limit = limit - 2 end
         if id == "j_merry_andy" then limit = limit - 1 end
@@ -416,7 +419,7 @@ function Game:boss_is_card_debuffed_for_scoring(node)
     if boss_id == "bl_goad" and suit == "Spades" then return true end
     if boss_id == "bl_window" and suit == "Diamonds" then return true end
     if boss_id == "bl_head" and suit == "Hearts" then return true end
-    if boss_id == "bl_plant" and rank >= 11 and rank <= 13 then return true end
+    if boss_id == "bl_plant" and (rank >= 11 and rank <= 13) or self:hasJoker("j_pareidolia") then return true end
     if boss_id == "bl_pillar" and d.uid and self._ante_played_card_uids[d.uid] then return true end
     if boss_id == "bl_final_leaf" and self.boss_runtime.verdant_leaf_active == true then return true end
     return false
@@ -1533,13 +1536,13 @@ function Game:draw_sell_button()
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
     love.graphics.setFont(font)
 
-    local sell_cost = 0
+    local sell_cost = 1
     if target.kind == "joker" and target.node then
         local n = target.node
-        sell_cost = math.max(0, math.floor(tonumber(n.sell_cost) or tonumber(n.def and n.def.sell_cost) or 0))
+        sell_cost = math.max(1, math.floor(tonumber(n.sell_cost) or tonumber(n.def and n.def.sell_cost) or 0))
     elseif target.kind == "consumable" then
         local c = self.consumables and self.consumables[target.index]
-        sell_cost = math.max(0, math.floor(tonumber(c and c.sell_cost) or 0))
+        sell_cost = math.max(1, math.floor(tonumber(c and c.sell_cost) or 0))
     end
     local label = string.format("Sell $%d", sell_cost)
     local btn_w = math.max(34, font:getWidth(label) + 10)
@@ -1884,7 +1887,7 @@ function Game:handle_blind_select_touch(x, y)
 end
 
 function Game:draw_bottom_round_win()
-    RoundWinUI.draw_bottom(self)
+    RoundWinUI.draw_bottom(self, self._round_win_display_lines)
 end
 
 function Game:handle_round_win_touch(x, y)
@@ -1897,6 +1900,9 @@ end
 
 function Game:update(dt)
     self:_update_joker_emit_queue(dt)
+    if self.STATE == self.STATES.ROUND_EVAL then
+        self:update_round_win_eval(dt)
+    end
     for _, node in ipairs(self.nodes) do
         if node.update then
             node:update(dt)
@@ -2172,10 +2178,11 @@ function Game:init_jokers()
     -- for i = 1, want do
     --     self:add_joker_by_def(pool[i])
     -- end
-    self:add_joker_by_def("j_pareidolia")
-    self:add_joker_by_def("j_smiley_face")
-    self:add_joker_by_def("j_space")
-    self:add_joker_by_def("j_ice_cream")
+    -- self:add_joker_by_def("j_turtle_bean")
+    -- self:add_joker_by_def("j_oops")
+    -- self:add_joker_by_def("j_business")
+    -- self:add_joker_by_def("j_lucky_cat")
+    -- self:add_joker_by_def("j_cavendish")
     -- for _, jj in ipairs(self.jokers) do
     --     if jj and jj.refresh_quads then jj:refresh_quads() end
     -- end
@@ -2674,8 +2681,6 @@ function Game:initialize_run_loop()
     -- Start each run with a couple of simple Consumables for testing.
     self.consumables = {}
     self.last_consumable_use_id = nil
-    self:add_consumable("tarot_death")
-    self:add_consumable("planet_pluto")
     self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
 end
@@ -3009,24 +3014,99 @@ function Game:reroll_shop_offers()
 end
 
 --- Blind just beaten: recycle deck, pay reward, show round-win screen (then shop).
---- Interest: +$1 per full $5 held after blind + hands payout; only the first $25 counts (max +$5).
+--- Interest: +$1 per full $5 held (only the first $25 counts toward the divisor; max +$5).
 function Game:enter_round_win_after_blind()
     Sfx.play("resources/sounds/win.ogg")
     local hands_left = math.max(0, math.floor(tonumber(self.hands) or 0))
-    self._round_win_hands_bonus = hands_left
-    self:emit_joker_event("on_round_end", {
+    self._round_win_joker_payout_lines = {}
+
+    local ctx = self:prepare_joker_event_ctx("on_round_end", {
         hands_left = hands_left,
         is_boss_blind = (tonumber(self.current_blind_index) == 3),
         round_score = tonumber(self.round_score) or 0,
         blind_name = self.current_blind_name,
     })
+    function ctx.add_round_win_payout(label, amt)
+        amt = math.floor(tonumber(amt) or 0)
+        if amt <= 0 then return end
+        self.money = (tonumber(self.money) or 0) + amt
+        table.insert(self._round_win_joker_payout_lines, { label, amt, "info" })
+        if JokerEffects and JokerEffects.mark_effect_applied then
+            JokerEffects.mark_effect_applied(ctx)
+        end
+        if Sfx and Sfx.play_money then Sfx.play_money() end
+    end
+    self:emit_joker_event("on_round_end", ctx)
+
     self:recycle_full_deck_after_blind_win()
     local interest_count_cap = 25
     local interest = math.floor(math.min(math.max(0, self.money), interest_count_cap) / 5)
-    self._round_win_interest = interest
-    local blind_pay = tonumber(self.current_blind_reward) or 0
-    self.money = (tonumber(self.money) or 0) + blind_pay + hands_left + interest
+    local blind_pay = math.max(0, math.floor(tonumber(self.current_blind_reward) or 0))
+
+    self._round_win_display_lines = {
+        { "Blind reward", blind_pay, "pending" },
+        { string.format("Hands left (%d)", hands_left), hands_left, "pending" },
+        { "Interest ($1 / $5 held, max $25)", interest, "pending" },
+    }
+    for _, row in ipairs(self._round_win_joker_payout_lines) do
+        self._round_win_display_lines[#self._round_win_display_lines + 1] = row
+    end
+    self._round_win_joker_payout_lines = nil
+
+    self._round_win_line_timer = 0
+    self._round_win_lines_revealed = 0
+    if self._round_win_display_lines and #self._round_win_display_lines > 0 then
+        self:_reveal_one_round_win_line()
+    end
     self:set_state(self.STATES.ROUND_EVAL)
+end
+
+--- Apply the next visible payout line; pending lines add money here (first line also runs from `enter_round_win_after_blind`).
+function Game:_reveal_one_round_win_line()
+    local lines = self._round_win_display_lines
+    if not lines or #lines == 0 then return end
+    local i = (self._round_win_lines_revealed or 0) + 1
+    if i > #lines then return end
+    self._round_win_lines_revealed = i
+    local row = lines[i]
+    local kind = row[3]
+    if kind == "pending" then
+        local amt = math.floor(tonumber(row[2]) or 0)
+        if amt ~= 0 then
+            self.money = (tonumber(self.money) or 0) + amt
+            if Sfx and Sfx.play_money then Sfx.play_money() end
+        end
+    end
+end
+
+--- Add any remaining blind/hands/interest before leaving the round-win screen.
+function Game:flush_round_win_pending_payouts()
+    local lines = self._round_win_display_lines
+    if not lines then return end
+    local r = self._round_win_lines_revealed or 0
+    for i = r + 1, #lines do
+        local row = lines[i]
+        if row[3] == "pending" then
+            local amt = math.floor(tonumber(row[2]) or 0)
+            if amt ~= 0 then
+                self.money = (tonumber(self.money) or 0) + amt
+            end
+        end
+    end
+    self._round_win_lines_revealed = #lines
+end
+
+function Game:update_round_win_eval(dt)
+    local lines = self._round_win_display_lines
+    if not lines or #lines == 0 then return end
+    local revealed = self._round_win_lines_revealed or 0
+    if revealed >= #lines then return end
+    self._round_win_line_timer = (self._round_win_line_timer or 0) + dt
+    while (self._round_win_line_timer >= ROUND_WIN_LINE_DELAY) and revealed < #lines do
+        self._round_win_line_timer = self._round_win_line_timer - ROUND_WIN_LINE_DELAY
+        self:_reveal_one_round_win_line()
+        revealed = self._round_win_lines_revealed or 0
+    end
 end
 
 function Game:enter_shop_after_blind()
@@ -3040,7 +3120,22 @@ function Game:enter_shop_after_blind()
 end
 
 function Game:continue_from_round_win()
+    self:flush_round_win_pending_payouts()
+    self._round_win_display_lines = nil
+    self._round_win_lines_revealed = nil
+    self._round_win_line_timer = nil
     self:enter_shop_after_blind()
+end
+
+function Game:do_random(min,max,goal)
+    local g = goal or 1
+    if(G:hasJoker("j_oops")) then
+        print("OOPS")
+        return math.random(min,max) <= g * 2
+    else
+        return math.random(min,max) == g
+    end
+
 end
 
 function Game:remove_owned_joker_at(index)

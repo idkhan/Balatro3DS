@@ -326,6 +326,11 @@ local function card_base_score(rank)
     return 0
 end
 
+local function card_data_bonus_chips(data)
+    if type(data) ~= "table" then return 0 end
+    return math.floor(tonumber(data.Bonus) or tonumber(data.bonus) or 0)
+end
+
 local function get_card_modifier_bonus(card_data)
     if type(card_data) ~= "table" then return 0, 0 end
 
@@ -403,6 +408,7 @@ function Card:draw_tooltip(draw_x, draw_y)
     local rank = data.rank
     local suit = data.suit
     local base_score = card_base_score(rank)
+    local bonus_chips = card_data_bonus_chips(data)
     local chip_bonus, mult_bonus = get_card_modifier_bonus(data)
 
     local header_only -- when set, single centered title (no rank/suit)
@@ -418,11 +424,17 @@ function Card:draw_tooltip(draw_x, draw_y)
     local lines = {}
     if self.enhancement == "stone" then
         lines = { "+50 chips" }
+        if bonus_chips ~= 0 then
+            table.insert(lines, string.format("Bonus %+d chips", bonus_chips))
+        end
         for _, l in ipairs(seal_tooltip_lines(self.seal)) do
             table.insert(lines, l)
         end
     else
         table.insert(lines, string.format("+%d chips", base_score))
+        if bonus_chips ~= 0 then
+            table.insert(lines, string.format("Bonus %+d chips", bonus_chips))
+        end
         if chip_bonus ~= 0 then
             table.insert(lines, string.format("%+d chips", chip_bonus))
         end
@@ -735,19 +747,10 @@ end
 
 function Card:matches_trigger(event_name)
     if event_name == "held_in_hand" then    
-        if self.enhancement == "gold" or self.enhancement == "steel" or self.seal == "blue" then
-            return true    
-        else
-            return false
-        end
+        return self.enhancement == "gold" or self.enhancement == "steel" or self.seal == "blue"
     elseif event_name == "card_played" then
-        if self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone" or self.seal == "gold" or self.seal == "red" then
-            return true
-        else
-            return false
-        end
+        return self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone" or self.seal == "gold" or self.seal == "red"
     end
-    
     return false
 end
 
@@ -788,7 +791,7 @@ function Card:do_enhancement(ctx)
         -- x2 mult, 1 in 4 chance to break
         ctx.mult = mult * 2
         Sfx.play_mult()
-        if math.random(1, 4) == 1 then
+        if G:do_random(1, 4, 1) then
             ctx.glass_broken_node = self
         end
     elseif self.enhancement == "steel" then
@@ -806,13 +809,13 @@ function Card:do_enhancement(ctx)
     elseif self.enhancement == "lucky" then
         local triggered = false
         -- 1 in 5 chance to give +20 mult
-        if math.random(1, 5) == 1 then
+        if G:do_random(1, 5, 1) then
             ctx.mult = (tonumber(ctx.mult) or 1) + 20
             triggered = true
             Sfx.play_mult()
         end
         -- 1 in 15 to give +$20
-        if math.random(1, 15) == 1 then
+        if G:do_random(1, 15, 1) then
             G.money = G.money + 20
             triggered = true
             Sfx.play_money()

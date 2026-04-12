@@ -250,6 +250,8 @@ function Joker:init(X, Y, W, H, def, params)
             self.runtime_counter = self.def.config.duration or 10 -- Starts at 10
         elseif self.def.id == "j_ice_cream" then
             self.runtime_counter = self.def.config.chips or 100 -- Starts at 100
+        elseif self.def.id == "j_turtle_bean" then
+            self.runtime_counter = self.def.config.extra.h_size or 5
         end
     end
 
@@ -718,6 +720,10 @@ function Joker:get_live_current_tooltip_text(base_text)
             return "(Currently 1 hand remaining)"
         end
         return string.format("(Currently %d hands remaining)", n)
+    end
+    if id == "j_turtle_bean" then
+        local n = math.max(0, math.floor(tonumber(self.runtime_counter) or 0))
+        return string.format("(Currently +%d hand size)", n)
     end
     if id == "j_castle" then
         local bt = tostring(base_text or "")

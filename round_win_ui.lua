@@ -1,9 +1,29 @@
 --- Bottom-screen round win summary (ROUND_EVAL).
+--- `payout_lines` is a list of `{ label, amount, kind }` where `kind` is `"pending"` (blind/hands/interest)
+--- or `"info"` (e.g. joker money already applied during `on_round_end`).
 
 local RoundWinUI = {}
 
-function RoundWinUI.draw_bottom(game)
-    local panel_x, panel_y, panel_w, panel_h = 8, 8, 304, 124
+local function sum_payout_amounts(lines)
+    local t = 0
+    for _, row in ipairs(lines or {}) do
+        t = t + math.max(0, math.floor(tonumber(row[2]) or 0))
+    end
+    return t
+end
+
+function RoundWinUI.draw_bottom(game, payout_lines)
+    payout_lines = payout_lines or game._round_win_display_lines or {}
+    local revealed = math.min(tonumber(game._round_win_lines_revealed) or 0, #payout_lines)
+    local total_payout = sum_payout_amounts(payout_lines)
+
+    local line_h = 12
+    local header_block = 50
+    local total_h = 14
+    local btn_h = 26
+    local panel_h = math.min(220, math.max(124, header_block + math.max(1, #payout_lines) * line_h + total_h + btn_h))
+    local panel_x, panel_y, panel_w = 8, 8, 304
+
     if _G.draw_rect_with_shadow then
         draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 4, 2, game.C.BLOCK.BACK, game.C.BLOCK.SHADOW, 2)
     else
@@ -15,25 +35,28 @@ function RoundWinUI.draw_bottom(game)
     local blind_label = game:get_blind_display_name(blind_idx) or "Blind"
     local target = tonumber(game.current_blind_target) or 0
     local final_score = tonumber(game.round_score) or 0
-    local reward = tonumber(game.current_blind_reward) or 0
-    local hands_bonus = math.max(0, math.floor(tonumber(game._round_win_hands_bonus) or 0))
-    local interest = math.max(0, math.floor(tonumber(game._round_win_interest) or 0))
-    local total_payout = reward + hands_bonus + interest
 
     love.graphics.setColor(game.C.WHITE)
     love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
     love.graphics.print("Round won!", panel_x + 8, panel_y + 4)
     love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    love.graphics.print(blind_label, panel_x + 8, panel_y + 22)
+    love.graphics.print(blind_label, panel_x + 8, panel_y + 26)
 
     love.graphics.setColor(game.C.GREY)
     love.graphics.print(string.format("Score %d / %d", final_score, target), panel_x + 8, panel_y + 38)
 
     love.graphics.setColor(game.C.MONEY)
-    love.graphics.print(string.format("Blind reward: +$%d", reward), panel_x + 8, panel_y + 50)
-    love.graphics.print(string.format("Hands left: %d (+$%d)", hands_bonus, hands_bonus), panel_x + 8, panel_y + 62)
-    love.graphics.print(string.format("Interest: +$%d ($1 / $5, max $25)", interest), panel_x + 8, panel_y + 74)
-    love.graphics.print(string.format("Total: +$%d", total_payout), panel_x + 8, panel_y + 86)
+    local y = panel_y + header_block
+    for i = 1, revealed do
+        local row = payout_lines[i]
+        local label = tostring(row[1] or "?")
+        local amt = math.max(0, math.floor(tonumber(row[2]) or 0))
+        love.graphics.print(string.format("%s: +$%d", label, amt), panel_x + 8, y)
+        y = y + line_h
+    end
+
+    love.graphics.setColor(game.C.WHITE)
+    love.graphics.print(string.format("Total: +$%d", total_payout), panel_x + 8, y + 2)
 
     game._round_win_continue_rect = { x = panel_x + panel_w - 84, y = panel_y + panel_h - 24, w = 74, h = 18 }
     love.graphics.setColor(game.C.ORANGE)

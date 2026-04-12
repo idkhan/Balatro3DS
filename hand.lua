@@ -313,7 +313,29 @@ end
 
 --- Internal discard used after play sequence (or directly when not scoring).
 function Hand:_discard_selected_impl(reason)
-    if #self.selected == 0 or not self.game then return end
+    if not self.game then return end
+    -- Played cards may have been destroyed during scoring (e.g. Sixth Sense); still finish the play.
+    if #self.selected == 0 then
+        if reason == "play" then
+            self.game.active_tooltip_card = nil
+            self:layout(false)
+            if self.game.restore_hand_draw_order then
+                self.game:restore_hand_draw_order()
+            end
+            if self.game.boss_after_discard_or_play then
+                self.game:boss_after_discard_or_play(reason)
+            end
+            if self.game.boss_after_play_before_draw then
+                self.game:boss_after_play_before_draw()
+            end
+            self:fill_from_deck()
+            if self.game.boss_on_hand_refilled then
+                self.game:boss_on_hand_refilled(false)
+            end
+            self:calculate_play()
+        end
+        return
+    end
     local deck = self.game.deck
     local discarded_nodes = {}
     local discarded_cards = {}
@@ -642,7 +664,7 @@ function Hand:_update_play_sequence(dt)
 
             if seq.phase == "trigger" and seq.play_rep and seq.play_rep_total then
                 local node = seq.cards[seq.idx]
-                local score_this = node and node.counts_for_play_score == true
+                local score_this = node and node.counts_for_play_score == true 
 
                 if node and score_this then
                     node.scoring_shake_timer = PLAY_SHAKE_DURATION
@@ -746,7 +768,7 @@ function Hand:_update_play_sequence(dt)
             end
             local by_node = {}
             for _, node in ipairs(self.card_nodes or {}) do
-                if not played[node] and node.matches_trigger and node:matches_trigger("held_in_hand") then
+                if not played[node] and node.card_data then
                     table.insert(by_node, node)
                 end
             end
@@ -790,9 +812,10 @@ function Hand:_update_play_sequence(dt)
                 G.selectedHandMult = tonumber(ctx.mult) or G.selectedHandMult
                 if G and G.emit_joker_event then
                     local data = (node and node.card_data) or {}
-                    G:emit_joker_event("card_held", {
-                            event = "card_held",
-                            event_name = "card_held",
+                    G:emit_joker_event("card_held", 
+                    {
+                        event = "card_held",
+                        event_name = "card_held",
                         card_node = node,
                         rank = data.rank,
                         suit = data.suit,
@@ -919,6 +942,12 @@ local function base_card_chips(rank)
     return 0
 end
 
+--- Permanent extra chips on `card_data` (field `Bonus`, lowercase `bonus` accepted).
+local function card_data_bonus_chips(data)
+    if type(data) ~= "table" then return 0 end
+    return math.floor(tonumber(data.Bonus) or tonumber(data.bonus) or 0)
+end
+
 function Hand:get_modifier_bonus(card_data)
     if type(card_data) ~= "table" then return 0, 0 end
 
@@ -955,8 +984,9 @@ function Hand:accumulate_card_score(chips, mult, node)
     local data = node.card_data or {}
     local rank = data.rank
     local suit = data.suit
+    local bonus = card_data_bonus_chips(data)
 
-    local card_chips = base_card_chips(rank)
+    local card_chips = base_card_chips(rank) + bonus
     chips = chips + card_chips
 
     local mod_chip_bonus, mod_mult_bonus = self:get_modifier_bonus(data)
@@ -980,7 +1010,7 @@ function Hand:score_selected_hand()
         local data = node.card_data or {}
         local rank = data.rank
         local suit = data.suit
-        local card_chips = base_card_chips(rank)
+        local card_chips = base_card_chips(rank) + card_data_bonus_chips(data)
         local mod_chip_bonus, mod_mult_bonus = self:get_modifier_bonus(data)
 
         if score_this then
@@ -1394,7 +1424,9 @@ function Hand:calculate_play()
         end
     end
 
-    if hi == 1 or hi == 2 or hi == 3 or hi == 4 or hi == 6 or hi == 7 or hi == 8 then
+    if G:hasJoker("j_splash") then
+        mark_all_ordered()
+    elseif hi == 1 or hi == 2 or hi == 3 or hi == 4 or hi == 6 or hi == 7 or hi == 8 then
         mark_all_ordered()
     elseif hi == 5 then
         for r, c in pairs(rank_counts) do

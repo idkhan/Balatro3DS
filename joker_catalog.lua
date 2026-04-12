@@ -2385,7 +2385,10 @@ local TOOLTIP_BY_ID = {
         "Add *$1* of sell value to every Joker",
         "and Consumable card at end of round",
     },
-    j_turtle_bean = { "+5 hand size, reduces by 1 each round" },
+    j_turtle_bean = {
+        "+5 hand size, reduces by 1 each round",
+        "(Currently +5 hand size)",
+    },
     j_erosion = {
         "+4 Mult for each card below",
         "[the deck's starting size] in your full deck",
