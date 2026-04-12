@@ -2225,10 +2225,10 @@ function Game:init_jokers()
     -- for i = 1, want do
     --     self:add_joker_by_def(pool[i])
     -- end
-    self:add_joker_by_def("j_swashbuckler")
-    self:add_joker_by_def("j_idol")
-    self:add_joker_by_def("j_cavendish")
-    self:add_joker_by_def("j_glass")
+    -- self:add_joker_by_def("j_swashbuckler")
+    -- self:add_joker_by_def("j_idol")
+    -- self:add_joker_by_def("j_cavendish")
+    -- self:add_joker_by_def("j_glass")
     -- for _, jj in ipairs(self.jokers) do
     --     if jj and jj.refresh_quads then jj:refresh_quads() end
     -- end

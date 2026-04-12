@@ -51,8 +51,8 @@ function BoosterPackUI.layout_choice_nodes(game, area)
     local n = #indices
     if n <= 0 then return end
 
-    local gap = 4
-    local scale = math.min(1, (area_h - 8) / card_h, (area_w - (n - 1) * gap) / (n * card_w))
+    local gap = 2
+    local scale = n > 4 and 0.9 or 1
     local eff_w = card_w * scale
     local total_w = n * eff_w + (n - 1) * gap
     local start_x = area_x + math.floor((area_w - total_w) * 0.5 + 0.5)

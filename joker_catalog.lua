@@ -1828,7 +1828,7 @@ JOKER_DEFS = {
         }
     },
 
-j_canio = {
+    j_canio = {
         id = "j_canio",
         name = "Canio",
         rarity = 4,
@@ -2547,7 +2547,7 @@ local TOOLTIP_BY_ID = {
         "+2 Mult for every *$5* you have",
         "(Currently +0 Mult)",
     },
-j_canio = {
+    j_canio = {
         "This Joker gains *X1 Mult* when",
         "a face card is destroyed",
         "(Currently *X1 Mult*)",

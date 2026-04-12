@@ -263,21 +263,23 @@ function TopUI.draw()
     slot_h = slot_h + (panel_pad * 2)
 
     -- Dark panel background.
-    if _G.draw_rect_with_shadow then
-        draw_rect_with_shadow(
-            start_x,
-            slot_y,
-            total_w,
-            slot_h,
-            4,
-            2,
-            G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
-            G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
-            2
-        )
-    else
-        love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
-        love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
+    if #G.jokers > 0 then
+        if _G.draw_rect_with_shadow then
+            draw_rect_with_shadow(
+                start_x,
+                slot_y,
+                total_w,
+                slot_h,
+                4,
+                2,
+                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
+                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
+                2
+            )
+        else
+            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
+            love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
+        end
     end
     if G and G.jokers_on_bottom ~= true and n > 0 then
 
