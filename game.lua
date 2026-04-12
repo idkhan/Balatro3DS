@@ -4275,7 +4275,7 @@ function Game:ensure_asset_atlas_loaded(name)
     if atlas.image then return atlas end
     if not atlas.path then return atlas end
 
-    local ok, img = pcall(love.graphics.newImage, atlas.path, { dpiscale = atlas.dpiscale or self.SETTINGS.GRAPHICS.texture_scaling })
+    local ok, img = pcall(love.graphics.newImage, atlas.path, { dpiscale = atlas.dpiscale or self.SETTINGS.GRAPHICS.texture_scaling, mipmaps = false })
     local err = ok and nil or img
     if not ok then
         ok, img = pcall(love.graphics.newImage, atlas.path, {})
@@ -4391,7 +4391,7 @@ function Game:set_render_settings()
             self.ANIMATION_ATLAS[self.animation_atli[i].name] = {}
             self.ANIMATION_ATLAS[self.animation_atli[i].name].name = self.animation_atli[i].name
             self.ANIMATION_ATLAS[self.animation_atli[i].name].path = self.animation_atli[i].path
-            self.ANIMATION_ATLAS[self.animation_atli[i].name].image = load_image(self.animation_atli[i].path, {dpiscale = self.SETTINGS.GRAPHICS.texture_scaling})
+            self.ANIMATION_ATLAS[self.animation_atli[i].name].image = load_image(self.animation_atli[i].path, {dpiscale = self.SETTINGS.GRAPHICS.texture_scaling, mipmaps = false})
             self.ANIMATION_ATLAS[self.animation_atli[i].name].px = self.animation_atli[i].px
             self.ANIMATION_ATLAS[self.animation_atli[i].name].py = self.animation_atli[i].py
             self.ANIMATION_ATLAS[self.animation_atli[i].name].frames = self.animation_atli[i].frames
