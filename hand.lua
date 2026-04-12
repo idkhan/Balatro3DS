@@ -27,6 +27,13 @@ local PLAY_SHAKE_DURATION = 0.22
 local PLAY_AFTER_SCORE_PAUSE = 0.28
 local PLAY_CENTER_SCALE = 1
 
+local function hand_size_limit()
+    if G and G.get_effective_hand_size_limit then
+        return math.max(1, tonumber(G:get_effective_hand_size_limit()) or MAX_HAND_SIZE)
+    end
+    return MAX_HAND_SIZE
+end
+
 function Hand:init(game)
     self.game = game or G
     self.cards = {}
@@ -47,9 +54,17 @@ function Hand:is_scoring_active()
     return self._play_sequence ~= nil
 end
 
-function Hand:add_card(card_data)
+---@param bypass_limit boolean|nil if true, allow one card over normal hand cap (e.g. Certificate)
+function Hand:add_card(card_data, bypass_limit)
     if not card_data or not self.game then return nil end
-    if #self.cards >= MAX_HAND_SIZE then return nil end
+    if self.game and self.game.ensure_card_uid then
+        self.game:ensure_card_uid(card_data)
+    end
+    local limit = hand_size_limit()
+    if self.game and self.game.get_active_boss_blind_id and self.game:get_active_boss_blind_id() == "bl_serpent" then
+        limit = math.max(limit, 999)
+    end
+    if not bypass_limit and #self.cards >= limit then return nil end
     table.insert(self.cards, card_data)
     local node = Card(0, 0, nil, nil, card_data, nil, { face_up = true })
     self.game:add(node)
@@ -67,6 +82,10 @@ function Hand:add_card(card_data)
         self:sort_by_rank(new_node)
     elseif self.sort_mode == "suit" then
         self:sort_by_suit(new_node)
+    end
+
+    if self.game and self.game.boss_on_card_drawn then
+        self.game:boss_on_card_drawn(new_node)
     end
 
     return node
@@ -239,6 +258,13 @@ function Hand:toggle_selection(node)
     if not node or not self.game then return end
     for i, n in ipairs(self.selected) do
         if n == node then
+            if self.game and self.game.get_active_boss_blind_id and self.game:get_active_boss_blind_id() == "bl_final_bell" then
+                local forced_uid = self.game.boss_runtime and self.game.boss_runtime.forced_card_uid
+                local uid = node.card_data and node.card_data.uid
+                if forced_uid ~= nil and uid == forced_uid then
+                    return
+                end
+            end
             node.selected = false
             Sfx.play("resources/sounds/card3.ogg")
             table.remove(self.selected, i)
@@ -252,7 +278,10 @@ function Hand:toggle_selection(node)
     node.selected = true
     Sfx.play("resources/sounds/card1.ogg")
     table.insert(self.selected, node)
-    if self.game then self.game.active_tooltip_card = node end
+    if self.game then
+        self.game.active_tooltip_card = node
+        self.game.active_tooltip_joker = nil
+    end
     if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
     self:calculate_play()
 end
@@ -261,21 +290,61 @@ function Hand:has_selection()
     return #self.selected > 0
 end
 
+function Hand:clear_selection()
+    for _, n in ipairs(self.selected) do
+        if n then n.selected = false end
+    end
+    self.selected = {}
+    if self.game then
+        self.game.active_tooltip_card = nil
+    end
+    if self.game and self.game.move_selected_hand_cards_to_front then
+        self.game:move_selected_hand_cards_to_front()
+    end
+    self:calculate_play()
+end
+
 function Hand:discard_selected()
     if self._play_sequence then return end
     if #self.selected == 0 or not self.game or G.discards <= 0 then return end
     G.discards = G.discards - 1
-    self:_discard_selected_impl()
+    self:_discard_selected_impl("discard")
 end
 
 --- Internal discard used after play sequence (or directly when not scoring).
-function Hand:_discard_selected_impl()
-    if #self.selected == 0 or not self.game then return end
+function Hand:_discard_selected_impl(reason)
+    if not self.game then return end
+    -- Played cards may have been destroyed during scoring (e.g. Sixth Sense); still finish the play.
+    if #self.selected == 0 then
+        if reason == "play" then
+            self.game.active_tooltip_card = nil
+            self:layout(false)
+            if self.game.restore_hand_draw_order then
+                self.game:restore_hand_draw_order()
+            end
+            if self.game.boss_after_discard_or_play then
+                self.game:boss_after_discard_or_play(reason)
+            end
+            if self.game.boss_after_play_before_draw then
+                self.game:boss_after_play_before_draw()
+            end
+            self:fill_from_deck()
+            if self.game.boss_on_hand_refilled then
+                self.game:boss_on_hand_refilled(false)
+            end
+            self:calculate_play()
+        end
+        return
+    end
     local deck = self.game.deck
+    local discarded_nodes = {}
+    local discarded_cards = {}
     if deck and deck.push_discard then
         for _, node in ipairs(self.selected) do
             for i, n in ipairs(self.card_nodes) do
                 if n == node then
+                    table.insert(discarded_nodes, node)
+                    table.insert(discarded_cards, self.cards[i])
                     deck:push_discard(self.cards[i])
                     break
                 end
@@ -284,6 +353,15 @@ function Hand:_discard_selected_impl()
     end
     local selected_set = {}
     for _, n in ipairs(self.selected) do selected_set[n] = true end
+    if self.game and self.game.emit_joker_event then
+        self.game:emit_joker_event("on_discard", {
+            event = "on_discard",
+            event_name = "on_discard",
+            discarded_nodes = discarded_nodes,
+            discarded_cards = discarded_cards,
+            discard_reason = reason,
+        })
+    end
     local new_cards, new_nodes = {}, {}
     for i, node in ipairs(self.card_nodes) do
         if not selected_set[node] then
@@ -306,7 +384,16 @@ function Hand:_discard_selected_impl()
     if self.game.restore_hand_draw_order then
         self.game:restore_hand_draw_order()
     end
+    if self.game and self.game.boss_after_discard_or_play then
+        self.game:boss_after_discard_or_play(reason)
+    end
+    if reason == "play" and self.game and self.game.boss_after_play_before_draw then
+        self.game:boss_after_play_before_draw()
+    end
     self:fill_from_deck()
+    if self.game and self.game.boss_on_hand_refilled then
+        self.game:boss_on_hand_refilled(false)
+    end
     self:calculate_play()
 end
 
@@ -319,6 +406,7 @@ function Hand:duplicate_card_at_index(index)
     if not cd then return nil end
     local copy = Deck.copy_card_data(cd)
     if not copy then return nil end
+    copy.uid = nil
     return self:add_card(copy)
 end
 
@@ -382,6 +470,12 @@ function Hand:remove_card_at_index(index)
     self.game:remove(node)
     table.remove(self.cards, index)
     table.remove(self.card_nodes, index)
+    if self.game.emit_on_destroy_cards and Deck and Deck.copy_card_data then
+        local snap = Deck.copy_card_data(cd)
+        if snap then
+            self.game:emit_on_destroy_cards({ snap })
+        end
+    end
     if self.game.active_tooltip_card == node then
         self.game.active_tooltip_card = nil
     end
@@ -421,7 +515,12 @@ end
 function Hand:fill_from_deck()
     local deck = self.game and self.game.deck
     if not deck then return end
-    while #self.cards + #self._draw_queue < MAX_HAND_SIZE and not deck:empty() do
+    local limit = hand_size_limit()
+    local current_count = #self.cards + #self._draw_queue
+    if self.game and self.game.boss_consume_serpent_draws then
+        limit = self.game:boss_consume_serpent_draws(limit, current_count)
+    end
+    while #self.cards + #self._draw_queue < limit and not deck:empty() do
         local card = deck:draw()
         if card then
             if #self._draw_queue == 0 and #self.cards == 0 then
@@ -481,7 +580,9 @@ function Hand:build_contained_hand_types(nodes)
     local flush = (suit_kinds == 1 and n > 0)
 
     if pairs_count >= 1 then contained["Pair"] = true end
-    if pairs_count >= 2 then contained["Two Pair"] = true end
+    if pairs_count >= 2 or (max_of_a_kind >= 3 and pairs_count >= 1) then
+        contained["Two Pair"] = true
+    end
     if max_of_a_kind >= 3 then contained["Three of a Kind"] = true end
     if max_of_a_kind >= 4 then contained["Four of a Kind"] = true end
     if flush then contained["Flush"] = true end
@@ -507,6 +608,16 @@ local function printTable(t, level, seen)
 end
 
 
+--- After one played-card trigger (including jokers), advance repeat counter or move to next card.
+local function hand_advance_play_trigger(seq)
+    seq.play_rep = (tonumber(seq.play_rep) or 0) + 1
+    if seq.play_rep > (tonumber(seq.play_rep_total) or 1) then
+        seq.play_rep = nil
+        seq.play_rep_total = nil
+    end
+    seq.trigger_wait = (seq.trigger_wait or 0) + PLAY_TRIGGER_INTERVAL
+end
+
 function Hand:_update_play_sequence(dt)
     local seq = self._play_sequence
     if not seq then return end
@@ -518,84 +629,114 @@ function Hand:_update_play_sequence(dt)
             seq.timer = 0
             seq.idx = 0
             seq.trigger_wait = 0
+            seq.play_rep = nil
+            seq.play_rep_total = nil
         elseif seq.timer >= PLAY_MOVE_MAX_TIME then
             seq.phase = "trigger"
             seq.timer = 0
             seq.idx = 0
             seq.trigger_wait = 0
+            seq.play_rep = nil
+            seq.play_rep_total = nil
         end
     elseif seq.phase == "trigger" then
         seq.trigger_wait = (seq.trigger_wait or 0) - dt
-        if seq.idx < #seq.cards and seq.trigger_wait <= 0 then
-            seq.idx = seq.idx + 1
-            local node = seq.cards[seq.idx]
-            local score_this = node and node.counts_for_play_score
-
-            -- Scoring order for each scored card: base chips → card `card_played` enhancements → jokers `card_played`.
-            if node and score_this == true then
-                node.scoring_shake_timer = PLAY_SHAKE_DURATION
-                node.scoring_shake_t0 = love.timer.getTime()
-                self:play_sfx_trigger()
-                local chips, mult = self:accumulate_card_score(
-                    tonumber(G.selectedHandChips) or 0,
-                    tonumber(G.selectedHandMult) or 1,
-                    node
-                )
-                G.selectedHandChips = chips
-                G.selectedHandMult = mult
-
-                local data = (node and node.card_data) or {}
-                chips = tonumber(G.selectedHandChips) or 0
-                mult = tonumber(G.selectedHandMult) or 1
-                local card_ctx = {
-                    event = "card_played",
-                    rank = data.rank,
-                    suit = data.suit,
-                    chips = chips,
-                    mult = mult,
-                    hand_index = G.selectedHand,
-                    hand_level = G.selectedHandLevel,
-                    card_node = node,
-                }
-                if node.emit_hand_event then
-                    node:emit_hand_event("card_played", card_ctx)
-                end
-                chips = tonumber(card_ctx.chips) or chips
-                mult = tonumber(card_ctx.mult) or mult
-                G.selectedHandChips = chips
-                G.selectedHandMult = mult
-
-                if card_ctx.glass_broken_node == node then
-                    card_ctx.glass_broken_node = nil
-                    self:destroy_card_node(node)
-                end
-
-                local jctx = {
-                    event = "card_played",
-                    rank = data.rank,
-                    suit = data.suit,
-                    chips = tonumber(G.selectedHandChips) or 0,
-                    mult = tonumber(G.selectedHandMult) or 1,
-                    hand_index = G.selectedHand,
-                    hand_level = G.selectedHandLevel,
-                    card_node = node,
-                }
-                if G and G.begin_joker_emit and G:begin_joker_emit("card_played", jctx) then
-                    seq.phase = "wait_jokers"
-                    seq.joker_wait_resume = { phase = "trigger", bump_trigger_wait = true }
-                elseif G and G.emit_joker_event then
-                    G:emit_joker_event("card_played", jctx)
-                    G.selectedHandChips = tonumber(jctx.chips) or G.selectedHandChips
-                    G.selectedHandMult = tonumber(jctx.mult) or G.selectedHandMult
+        if seq.trigger_wait <= 0 then
+            if seq.play_rep == nil then
+                -- Pick next scored card and start its repeat cycle.
+                while true do
+                    seq.idx = (tonumber(seq.idx) or 0) + 1
+                    if seq.idx > #seq.cards then
+                        seq.phase = "inhand_trigger"
+                        seq.timer = 0
+                        seq.play_rep = nil
+                        seq.play_rep_total = nil
+                        break
+                    end
+                    local node = seq.cards[seq.idx]
+                    if node and node.counts_for_play_score == true then
+                        seq.play_rep_total = node.play_trigger_total and node:play_trigger_total(seq) or 1
+                        seq.play_rep = 1
+                        break
+                    end
                 end
             end
-            if seq.phase == "trigger" then
-                seq.trigger_wait = seq.trigger_wait + PLAY_TRIGGER_INTERVAL
+
+            if seq.phase == "trigger" and seq.play_rep and seq.play_rep_total then
+                local node = seq.cards[seq.idx]
+                local score_this = node and node.counts_for_play_score == true 
+
+                if node and score_this then
+                    node.scoring_shake_timer = PLAY_SHAKE_DURATION
+                    node.scoring_shake_t0 = love.timer.getTime()
+                    self:play_sfx_trigger()
+                    local chips, mult = self:accumulate_card_score(
+                        tonumber(G.selectedHandChips) or 0,
+                        tonumber(G.selectedHandMult) or 1,
+                        node
+                    )
+                    G.selectedHandChips = chips
+                    G.selectedHandMult = mult
+
+                    local data = (node and node.card_data) or {}
+                    chips = tonumber(G.selectedHandChips) or 0
+                    mult = tonumber(G.selectedHandMult) or 1
+                    local card_ctx = {
+                        event = "card_played",
+                        rank = data.rank,
+                        suit = data.suit,
+                        chips = chips,
+                        mult = mult,
+                        hand_index = G.selectedHand,
+                        hand_level = G.selectedHandLevel,
+                        card_node = node,
+                        photograph_first_face_node = seq.photograph_first_face_node,
+                        photograph_pareidolia = seq.photograph_pareidolia,
+                    }
+                    if node.emit_hand_event then
+                        node:emit_hand_event("card_played", card_ctx)
+                    end
+                    chips = tonumber(card_ctx.chips) or chips
+                    mult = tonumber(card_ctx.mult) or mult
+                    G.selectedHandChips = chips
+                    G.selectedHandMult = mult
+
+                    local glass_broke = false
+                    if card_ctx.glass_broken_node == node then
+                        card_ctx.glass_broken_node = nil
+                        self:destroy_card_node(node)
+                        glass_broke = true
+                    end
+
+                    local jctx = {
+                        event = "card_played",
+                        event_name = "card_played",
+                        rank = data.rank,
+                        suit = data.suit,
+                        chips = tonumber(G.selectedHandChips) or 0,
+                        mult = tonumber(G.selectedHandMult) or 1,
+                        hand_index = G.selectedHand,
+                        hand_level = G.selectedHandLevel,
+                        card_node = node,
+                        photograph_first_face_node = seq.photograph_first_face_node,
+                        photograph_pareidolia = seq.photograph_pareidolia,
+                    }
+                    if glass_broke then
+                        seq.play_rep = seq.play_rep_total
+                    end
+                    if G and G.begin_joker_emit and G:begin_joker_emit("card_played", jctx) then
+                        seq.phase = "wait_jokers"
+                        seq.joker_wait_resume = { phase = "trigger", bump_trigger_wait = true, advance_play_repeat = true }
+                    else
+                        if G and G.emit_joker_event then
+                            G:emit_joker_event("card_played", jctx)
+                            G.selectedHandChips = tonumber(jctx.chips) or G.selectedHandChips
+                            G.selectedHandMult = tonumber(jctx.mult) or G.selectedHandMult
+                        end
+                        hand_advance_play_trigger(seq)
+                    end
+                end
             end
-        end
-        if seq.phase == "trigger" and seq.idx >= #seq.cards then
-            seq.phase = "inhand_trigger"
-            seq.timer = 0
         end
     elseif seq.phase == "wait_jokers" then
         if G and G.joker_emit_busy and G:joker_emit_busy() then
@@ -608,6 +749,9 @@ function Hand:_update_play_sequence(dt)
                 if r.bump_trigger_wait then
                     seq.trigger_wait = (seq.trigger_wait or 0) + PLAY_TRIGGER_INTERVAL
                 end
+                if r.advance_play_repeat then
+                    hand_advance_play_trigger(seq)
+                end
             elseif r and r.phase == "finalize" then
                 seq.phase = "finalize"
                 seq.finalize_step = r.finalize_step
@@ -616,22 +760,30 @@ function Hand:_update_play_sequence(dt)
         end
     elseif seq.phase == "inhand_trigger" then
         -- After played cards finish triggering, notify cards still held (staggered like play triggers).
+        -- Queue is flattened: each entry is one in-hand trigger pass (retriggers from Mime, Red Seal, etc.).
         if not seq.inhand_queue then
             local played = {}
             for _, n in ipairs(seq.cards) do
                 played[n] = true
             end
-            seq.inhand_queue = {}
+            local by_node = {}
             for _, node in ipairs(self.card_nodes or {}) do
-                if not played[node] and node.matches_trigger and node:matches_trigger("held_in_hand") then
-                    table.insert(seq.inhand_queue, node)
+                if not played[node] and node.card_data then
+                    table.insert(by_node, node)
                 end
             end
-            table.sort(seq.inhand_queue, function(a, b)
+            table.sort(by_node, function(a, b)
                 local ax = (a.VT and a.VT.x) or (a.T and a.T.x) or 0
                 local bx = (b.VT and b.VT.x) or (b.T and b.T.x) or 0
                 return ax < bx
             end)
+            seq.inhand_queue = {}
+            for _, node in ipairs(by_node) do
+                local tot = node.held_trigger_total and node:held_trigger_total(seq) or 1
+                for _ = 1, tot do
+                    table.insert(seq.inhand_queue, node)
+                end
+            end
             seq.inhand_i = 0
             seq.inhand_wait = 0
         end
@@ -658,25 +810,30 @@ function Hand:_update_play_sequence(dt)
                 end
                 G.selectedHandChips = tonumber(ctx.chips) or G.selectedHandChips
                 G.selectedHandMult = tonumber(ctx.mult) or G.selectedHandMult
+                if G and G.emit_joker_event then
+                    local data = (node and node.card_data) or {}
+                    G:emit_joker_event("card_held", 
+                    {
+                        event = "card_held",
+                        event_name = "card_held",
+                        card_node = node,
+                        rank = data.rank,
+                        suit = data.suit,
+                        chips = tonumber(G.selectedHandChips) or 0,
+                        mult = tonumber(G.selectedHandMult) or 1,
+                    })
+                end
                 if seq.inhand_i < #q then
                     seq.inhand_wait = PLAY_TRIGGER_INTERVAL
                 end
             end
             if seq.inhand_i >= #q then
-                local mime_repeat = (seq.inhand_mime_repeats_left or 0) > 0
-                if mime_repeat then
-                    seq.inhand_mime_repeats_left = seq.inhand_mime_repeats_left - 1
-                end
                 seq.inhand_queue = nil
                 seq.inhand_i = nil
                 seq.inhand_wait = nil
-                if mime_repeat then
-                    -- Stay in `inhand_trigger`; queue rebuilds on next tick.
-                else
-                    seq.phase = "finalize"
-                    seq.timer = 0
-                    seq.finalize_step = nil
-                end
+                seq.phase = "finalize"
+                seq.timer = 0
+                seq.finalize_step = nil
             end
         end
     elseif seq.phase == "finalize" then
@@ -702,6 +859,7 @@ function Hand:_update_play_sequence(dt)
             end
             local ctx = {
                 event = "on_hand_scored",
+                event_name = "on_hand_scored",
                 chips = chips,
                 mult = mult,
                 hand_index = G.selectedHand,
@@ -742,7 +900,7 @@ function Hand:_update_play_sequence(dt)
                 node.scoring_center = false
             end
             self._play_sequence = nil
-            self:_discard_selected_impl()
+            self:_discard_selected_impl("play")
             if G and G.evaluate_blind_progress then
                 G:evaluate_blind_progress()
             end
@@ -768,7 +926,7 @@ function Hand:size()
 end
 
 function Hand:is_full()
-    return #self.cards >= MAX_HAND_SIZE
+    return #self.cards >= hand_size_limit()
 end
 
 local SUIT_ORDER = { Hearts = 1, Clubs = 2, Diamonds = 3, Spades = 4 }
@@ -782,6 +940,12 @@ local function base_card_chips(rank)
     if rank == 11 or rank == 12 or rank == 13 then return 10 end -- J/Q/K
     if type(rank) == "number" then return rank end
     return 0
+end
+
+--- Permanent extra chips on `card_data` (field `Bonus`, lowercase `bonus` accepted).
+local function card_data_bonus_chips(data)
+    if type(data) ~= "table" then return 0 end
+    return math.floor(tonumber(data.Bonus) or tonumber(data.bonus) or 0)
 end
 
 function Hand:get_modifier_bonus(card_data)
@@ -820,8 +984,9 @@ function Hand:accumulate_card_score(chips, mult, node)
     local data = node.card_data or {}
     local rank = data.rank
     local suit = data.suit
+    local bonus = card_data_bonus_chips(data)
 
-    local card_chips = base_card_chips(rank)
+    local card_chips = base_card_chips(rank) + bonus
     chips = chips + card_chips
 
     local mod_chip_bonus, mod_mult_bonus = self:get_modifier_bonus(data)
@@ -845,7 +1010,7 @@ function Hand:score_selected_hand()
         local data = node.card_data or {}
         local rank = data.rank
         local suit = data.suit
-        local card_chips = base_card_chips(rank)
+        local card_chips = base_card_chips(rank) + card_data_bonus_chips(data)
         local mod_chip_bonus, mod_mult_bonus = self:get_modifier_bonus(data)
 
         if score_this then
@@ -873,24 +1038,88 @@ end
 
 function Hand:play_selected()
     if #self.selected == 0 or G.hands <= 0 then return end
-    G.hands = G.hands - 1
     if self._play_sequence then return end
 
     if self.game then self.game.active_tooltip_card = nil end
 
     self:calculate_play()
-
     local cards = self:ordered_selected_nodes()
+    if self.game and self.game.boss_before_play_selected and not self.game:boss_before_play_selected(cards) then
+        return
+    end
+
+    local flipped_any = false
+    for _, n in ipairs(cards) do
+        if n and n.face_up == false and n.set_face_up then
+            n:set_face_up(true)
+            flipped_any = true
+        end
+    end
+    if flipped_any then
+        self:calculate_play()
+        cards = self:ordered_selected_nodes()
+    end
+
+    G.hands = G.hands - 1
+    if self.game and self.game.boss_apply_on_hand_submitted then
+        self.game:boss_apply_on_hand_submitted(cards)
+    end
+    if self.game and self.game.emit_joker_event then
+        self.game:emit_joker_event("on_hand_played", {
+            event = "on_hand_played",
+            event_name = "on_hand_played",
+            cards = cards,
+            hand_index = G and G.selectedHand,
+            hand_level = G and G.selectedHandLevel,
+            hand_type = (G and G.handlist and G.selectedHand and G.handlist[G.selectedHand]) or nil,
+        })
+    end
+    if self.game and self.game.boss_should_void_current_play and self.game:boss_should_void_current_play() then
+        self:_discard_selected_impl("play")
+        if G and G.evaluate_blind_progress then
+            G:evaluate_blind_progress()
+        end
+        return
+    end
+    if self.game and self.game.increment_hand_play_count then
+        self.game:increment_hand_play_count(G and G.selectedHand)
+    end
+
     for _, n in ipairs(cards) do
         n.scoring_center = true
+    end
+
+    local chad_count = self.game and self.game.count_jokers_with_id and self.game:count_jokers_with_id("j_hanging_chad") or 0
+    local hanging_chad_first = nil
+    if chad_count > 0 then
+        for _, n in ipairs(cards) do
+            if n and n.counts_for_play_score == true then
+                hanging_chad_first = n
+                break
+            end
+        end
+    end
+
+    -- Photograph: first scoring face card in play order; x2 applies on every scoring pass (retriggers included).
+    local photograph_pareidolia = self.game and self.game:hasJoker("j_pareidolia")
+    local photograph_first_face = nil
+    for _, n in ipairs(cards) do
+        if n and n.counts_for_play_score == true then
+            local d = n.card_data or {}
+            local r = tonumber(d.rank)
+            if photograph_pareidolia or r == 11 or r == 12 or r == 13 then
+                photograph_first_face = n
+                break
+            end
+        end
     end
 
     self._play_sequence = {
         phase = "move_center",
         timer = 0,
         cards = cards,
-        -- Mime Joker: run `inhand_trigger` twice (first pass + one repeat).
-        inhand_mime_repeats_left = self:hasJoker("j_mime") and 1 or 0,
+        photograph_first_face_node = photograph_first_face,
+        photograph_pareidolia = photograph_pareidolia and true or false,
     }
 
     self:layout_play_cards_at_center(cards)
@@ -947,18 +1176,6 @@ function Hand:sort_by_suit(layout_skip_vt_node)
     end
 end
 
-function Hand:hasJoker(joker_id)
-    if G and type(G.jokers) == "table" then
-        for _, j in ipairs(G.jokers) do
-            local def = j and j.def
-            if type(def) == "table" and def.id == joker_id then
-                return true
-            end
-        end
-    end
-    return false
-end
-
 function Hand:calculate_play()
     local n_sel = #self.selected
     if n_sel == 0 then
@@ -966,6 +1183,7 @@ function Hand:calculate_play()
             node.counts_for_play_score = false
         end
         print("No cards selected")
+        G.selectedHandHidden = false
         G.selectedHand = -1
         G.selectedHandLevel = 1
         G.selectedHandChips = 0
@@ -991,7 +1209,7 @@ function Hand:calculate_play()
 
     local n = #ordered
     local has_four_fingers = false
-    if self:hasJoker("j_four_fingers") then
+    if self.game and self.game:hasJoker("j_four_fingers") then
         has_four_fingers = true
     end
 
@@ -1001,11 +1219,15 @@ function Hand:calculate_play()
     local rank_counts = {}
     local suit_counts = {}
     local max_rank_for_high = nil
+    local has_face_down_selected = false
 
     for _, node in ipairs(ordered) do
         local data = node.card_data or {}
         local rank = data.rank
         local suit = data.suit
+        if node and node.face_up == false then
+            has_face_down_selected = true
+        end
 
         table.insert(ranks, rank)
         table.insert(suits, suit)
@@ -1162,6 +1384,9 @@ function Hand:calculate_play()
         local level = math.max(1, tonumber(hand_stats.level) or 1)
         local chips = (hand_stats.base_chips or 0) + ((level - 1) * (hand_stats.chips_per_level or 0))
         local mult = (hand_stats.base_mult or 0) + ((level - 1) * (hand_stats.mult_per_level or 0))
+        if G and G.boss_apply_hand_base_modifiers then
+            chips, mult = G:boss_apply_hand_base_modifiers(chips, mult)
+        end
         G.selectedHandLevel = level
         G.selectedHandChips = chips
         G.selectedHandMult = mult
@@ -1176,6 +1401,7 @@ function Hand:calculate_play()
     else
         print("Detected hand index: " .. tostring(G.selectedHand))
     end
+    G.selectedHandHidden = has_face_down_selected == true
 
     print("Hand level: " .. tostring(G.selectedHandLevel))
     print("Hand chips: " .. tostring(G.selectedHandChips))
@@ -1198,7 +1424,9 @@ function Hand:calculate_play()
         end
     end
 
-    if hi == 1 or hi == 2 or hi == 3 or hi == 4 or hi == 6 or hi == 7 or hi == 8 then
+    if G:hasJoker("j_splash") then
+        mark_all_ordered()
+    elseif hi == 1 or hi == 2 or hi == 3 or hi == 4 or hi == 6 or hi == 7 or hi == 8 then
         mark_all_ordered()
     elseif hi == 5 then
         for r, c in pairs(rank_counts) do
@@ -1233,5 +1461,18 @@ function Hand:calculate_play()
         end
     else
         mark_all_ordered()
+    end
+
+    if G and G.boss_is_card_debuffed_for_scoring then
+        for _, node in ipairs(ordered) do
+            if node.counts_for_play_score == true and G:boss_is_card_debuffed_for_scoring(node) then
+                node.counts_for_play_score = false
+            end
+        end
+    end
+    if G and G.get_active_boss_blind_id and G:get_active_boss_blind_id() == "bl_psychic" and #ordered < 5 then
+        for _, node in ipairs(ordered) do
+            node.counts_for_play_score = false
+        end
     end
 end

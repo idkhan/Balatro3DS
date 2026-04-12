@@ -44,7 +44,7 @@ function TopUI.draw()
         end
     end
     local blind_index = G.selected_blind_index or G.current_blind_index or 1
-    if G.STATE == G.STATES.SELECTING_HAND then
+    if G.STATE == G.STATES.SELECTING_HAND or G.STATE == G.STATES.ROUND_EVAL then
         blind_index = G.current_blind_index or blind_index
     end
     local blind_name = (G.get_blind_display_name and G:get_blind_display_name(blind_index)) or ((blind_def and blind_def.name) or (G.current_blind_name or "Blind"))
@@ -88,25 +88,46 @@ function TopUI.draw()
     -- Blind
     local blindPosX, blindPosY = ix, iy
     local blindWidth, blindHeight = iw, math.floor((ih/4) - 1)
-    ix, iy, iw, ih = draw_rect_with_shadow(blindPosX, blindPosY, blindWidth, blindHeight, 4, 4, blind_color, blind_dark, 2)
     
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
-    if not is_blind_select then
-        TopUI.center_text(blind_name, ix, iy -2, iw, ih)
-    else 
-        TopUI.center_text("Choose blind", ix, iy -2, iw, ih)
-    end
-
-    -- Score Requirements Box
-    love.graphics.setColor(blind_sign)
-    ix, iy, iw, ih = draw_rounded_rect(blindPosX, blindPosY + blindHeight + 4, blindWidth, blindHeight * 3, 4, 4, "fill")
-    local score_box_ix, score_box_iy, score_box_iw, score_box_ih = ix, iy, iw, ih
-
-    ix, iy, iw, ih = draw_rect_with_shadow(ix + math.floor(iw/3), iy - 1, 72, ih, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2)
+    
+    
     if is_blind_select then
+        TopUI.center_text("Choose blind", ix, iy -2, iw, ih)
+
+    elseif G.STATE == G.STATES.ROUND_EVAL then
+        love.graphics.setColor(G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        TopUI.center_text("Round won!", ix, iy - 6, iw, math.floor(ih * 0.55))
+        local bi = G.current_blind_index or 1
+        G:draw_blind_chip_anim(bi, ix + math.floor(iw / 2), iy + math.floor(ih * 0.72), 1.05)
         
+    elseif G.STATE == G.STATES.SHOP then
+        local cell_w = 113
+        local cell_h = 60
+        if G.ANIMATION_ATLAS and G.ANIMATION_ATLAS.shop_sign then
+            local a = G.ANIMATION_ATLAS.shop_sign
+            cell_w = tonumber(a.px) or cell_w
+            cell_h = tonumber(a.py) or cell_h
+        end
+        local s = math.min(iw / cell_w, ih / cell_h) * 0.92
+        if s > 1.25 then s = 1.25 end
+        G:draw_shop_sign_anim(ix + math.floor(iw / 2), iy + math.floor(ih / 2), s)
+
     else
+        -- Score Requirements Box
+        ix, iy, iw, ih = draw_rect_with_shadow(blindPosX, blindPosY, blindWidth, blindHeight, 4, 4, blind_color, blind_dark, 2)
+        love.graphics.setColor(G.C.WHITE)
+        TopUI.center_text(blind_name, ix, iy -2, iw, ih)
+        
+        love.graphics.setColor(blind_sign)
+        ix, iy, iw, ih = draw_rounded_rect(blindPosX, blindPosY + blindHeight + 4, blindWidth, blindHeight * 3, 4, 4, "fill")
+        local score_box_ix, score_box_iy, score_box_iw, score_box_ih = ix, iy, iw, ih
+
+        
+        ix, iy, iw, ih = draw_rect_with_shadow(score_box_ix + math.floor(score_box_iw/3), score_box_iy - 1, 72, score_box_ih, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2)
+
         G:draw_blind_chip_anim(
             blind_index,
             score_box_ix + math.floor(score_box_iw / 6) - 2,
@@ -121,7 +142,8 @@ function TopUI.draw()
         love.graphics.setColor(G.C.RED)
         love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
         local scoreReq = tostring(math.floor(blind_target))
-        love.graphics.print(scoreReq, ix + math.floor(iw/2) - math.floor(love.graphics.getFont():getWidth(scoreReq)/2) + 5, iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 5)
+        local scoreReqY = iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 5
+        love.graphics.printf(scoreReq, ix, scoreReqY, iw, "center")
 
         love.graphics.setColor(G.C.WHITE)
         love.graphics.setFont(G.FONTS.PIXEL.SMALL)
@@ -129,13 +151,14 @@ function TopUI.draw()
         local rewardY = iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 6 + G.FONTS.PIXEL.MEDIUM_HEIGHT
         love.graphics.print(rewardText, ix, rewardY)
         love.graphics.setColor(G.C.MONEY)
-        local moneyText = "$" .. tostring(blind_reward)
-        love.graphics.print(moneyText, ix + love.graphics.getFont():getWidth(rewardText) + math.floor((iw - math.floor(love.graphics.getFont():getWidth(rewardText)))/2) - math.floor(love.graphics.getFont():getWidth(moneyText)/2), rewardY)
+        local moneyText = "$"..string.rep("$", blind_reward).."+"
+        local rewardLabelW = love.graphics.getFont():getWidth(rewardText)
+        love.graphics.print(moneyText, ix + rewardLabelW, rewardY)
     end
 
     -- Round Score, Chips and Mult
     love.graphics.setColor(G.C.BLOCK.SHADOW)
-    local width = iw
+    local width = 64
     ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY, titleWidth, math.floor(titleHeight/3.5), 4, 4, "fill")
     
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
@@ -159,20 +182,24 @@ function TopUI.draw()
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
     local handSelected = ""
+    local handHidden = (G.selectedHandHidden == true)
     if G.selectedHand and G.selectedHand ~= -1 then
         handSelected = G.handlist[G.selectedHand]
     end
-    if(love.graphics.getFont():getWidth(handSelected) > iw) then
+    if handHidden then
+        handSelected = "???"
+    end
+    if(love.graphics.getFont():getWidth(handSelected) > (iw - 20)) then
         love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     end
-    local posX, posY = TopUI.center_text(handSelected, ix, iy -2, iw -20, math.floor(ih/3))
-
-    posX = posX + love.graphics.getFont():getWidth(handSelected) + 6
+    local _, posY = TopUI.center_text(handSelected, ix, iy -2, iw -20, math.floor(ih/3))
     posY = posY + math.floor(G.FONTS.PIXEL.MEDIUM_HEIGHT/6)
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     local handLevel = G.selectedHandLevel or 1
-    if(handSelected ~= "") then
-        love.graphics.print("lvl." .. handLevel, posX, posY)
+    if(handSelected ~= "" and not handHidden) then
+        love.graphics.printf("lvl." .. handLevel, ix, posY, iw, "right")
+    elseif handSelected ~= "" then
+        love.graphics.printf("lvl.?", ix, posY, iw, "right")
     end
 
     -- X
@@ -209,42 +236,40 @@ function TopUI.draw()
     TopUI.LabeledField("Round", G.round, fieldsPositionX + (fieldWidth + padding) * 2, fieldsPositionY + fieldHeight + padding, fieldWidth, fieldHeight, G.C.RED)
     TopUI.LabeledField("", tostring(G.money), fieldsPositionX, fieldsPositionY + fieldHeight + padding, fieldWidth * 2 + padding, fieldHeight, G.C.MONEY)
 
-    -- Joker panel behind all jokers (shown only when jokers are on the top screen).
-    local capacity = (G and G.joker_capacity) or (G and #G.jokers) or 0
-    if G and G.jokers_on_bottom ~= true and capacity > 0 then
-        local slot_count = capacity
-        local slot_w, slot_h = G.joker_slot_w or 71, G.joker_slot_h or 95
-        local slot_gap = G.joker_slot_gap or 8
-        local slot_y = G.joker_slot_y_top or (panelY + panelHeight + 6)
-        local total_w = slot_count * slot_w + (slot_count - 1) * slot_gap
-        local start_x = G.joker_slot_start_x or math.floor((400 - total_w) * 0.5 + 0.5)
+    -- Joker panel behind owned jokers only (top screen); width matches fanned row from `Game`.
+    local n = G and G.jokers and #G.jokers or 0
+    local slot_w, slot_h = G.joker_slot_w or 71, G.joker_slot_h or 95
+    local slot_gap = G.joker_slot_gap or 8
+    local slot_y = G.joker_slot_y_top or (panelY + panelHeight + 6)
+    local total_w = tonumber(G.joker_row_span_top)
+        or select(2, G:_compute_fanned_joker_row(n, 400, slot_w, slot_gap, 8))
+    local start_x = G.joker_slot_start_x or math.floor((400 - total_w) * 0.5 + 0.5)
 
-        -- Extra padding so jokers don't touch the panel edges.
-        local panel_pad = 4
-        total_w = total_w + (panel_pad * 2)
-        start_x = start_x - panel_pad
-        slot_y = slot_y - panel_pad
-        slot_h = slot_h + (panel_pad * 2)
+    -- Extra padding so jokers don't touch the panel edges.
+    local panel_pad = 4
+    total_w = total_w + (panel_pad * 2)
+    start_x = start_x - panel_pad
+    slot_y = slot_y - panel_pad
+    slot_h = slot_h + (panel_pad * 2)
 
-        -- Dark panel background.
-        local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-        if _G.draw_rect_with_shadow then
-            draw_rect_with_shadow(
-                start_x,
-                slot_y,
-                total_w,
-                slot_h,
-                4,
-                2,
-                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
-                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
-                2
-            )
-        else
-            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
-            love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
-        end
-        love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+    -- Dark panel background.
+    if _G.draw_rect_with_shadow then
+        draw_rect_with_shadow(
+            start_x,
+            slot_y,
+            total_w,
+            slot_h,
+            4,
+            2,
+            G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
+            G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
+            2
+        )
+    else
+        love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
+        love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
+    end
+    if G and G.jokers_on_bottom ~= true and n > 0 then
 
         love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
         love.graphics.setColor(G.C.WHITE)
@@ -286,8 +311,10 @@ function TopUI.LabeledField(string, value, x, y, iw, ih, fieldColor)
 end
 
 function TopUI.center_text(string, x, y, iw, ih)
-    xval = x + math.floor(iw/2) - math.floor(love.graphics.getFont():getWidth(string)/2)
-    yval = y + math.floor(ih/2) - math.floor(love.graphics.getFont():getHeight()/2)
-    love.graphics.print(string, xval, yval)
+    local s = tostring(string or "")
+    local font = love.graphics.getFont()
+    local yval = y + math.floor(ih/2) - math.floor(font:getHeight()/2)
+    love.graphics.printf(s, x, yval, iw, "center")
+    local xval = x
     return xval, yval
 end

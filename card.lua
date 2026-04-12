@@ -179,6 +179,44 @@ local function apply_seal_indices(self)
     end
 end
 
+--- Recompute `rank_index` and enhancement visuals from `card_data` / instance fields (after rank/suit/editing).
+function Card:sync_visual_from_card_data()
+    local data = self.card_data or {}
+    local rank = data.rank or (self.params and self.params.rank)
+    local suit = data.suit or (self.params and self.params.suit)
+
+    local function suit_offset(s)
+        if not s then return 0 end
+        if type(s) == "string" then
+            s = s:lower()
+            if s == "hearts" then return 0 end
+            if s == "clubs" then return 13 end
+            if s == "diamonds" then return 26 end
+            if s == "spades" then return 39 end
+        elseif type(s) == "number" then
+            if s == 1 then return 0 end
+            if s == 2 then return 13 end
+            if s == 3 then return 26 end
+            if s == 4 then return 39 end
+        end
+        return 0
+    end
+
+    if rank then
+        self.rank_index = math.max(0, (rank - 2) + suit_offset(suit))
+    end
+
+    local enh = data.enhancement
+    if enh == "none" or enh == "" then enh = nil end
+    self.enhancement = enh
+
+    local seal = data.seal
+    if seal == "none" or seal == "" then seal = nil end
+    self.seal = seal
+
+    self:refresh_quads()
+end
+
 function Card:refresh_quads()
     apply_enhancement_center_indices(self)
     apply_seal_indices(self)
@@ -288,6 +326,11 @@ local function card_base_score(rank)
     return 0
 end
 
+local function card_data_bonus_chips(data)
+    if type(data) ~= "table" then return 0 end
+    return math.floor(tonumber(data.Bonus) or tonumber(data.bonus) or 0)
+end
+
 local function get_card_modifier_bonus(card_data)
     if type(card_data) ~= "table" then return 0, 0 end
 
@@ -365,6 +408,7 @@ function Card:draw_tooltip(draw_x, draw_y)
     local rank = data.rank
     local suit = data.suit
     local base_score = card_base_score(rank)
+    local bonus_chips = card_data_bonus_chips(data)
     local chip_bonus, mult_bonus = get_card_modifier_bonus(data)
 
     local header_only -- when set, single centered title (no rank/suit)
@@ -380,11 +424,17 @@ function Card:draw_tooltip(draw_x, draw_y)
     local lines = {}
     if self.enhancement == "stone" then
         lines = { "+50 chips" }
+        if bonus_chips ~= 0 then
+            table.insert(lines, string.format("Bonus %+d chips", bonus_chips))
+        end
         for _, l in ipairs(seal_tooltip_lines(self.seal)) do
             table.insert(lines, l)
         end
     else
         table.insert(lines, string.format("+%d chips", base_score))
+        if bonus_chips ~= 0 then
+            table.insert(lines, string.format("Bonus %+d chips", bonus_chips))
+        end
         if chip_bonus ~= 0 then
             table.insert(lines, string.format("%+d chips", chip_bonus))
         end
@@ -430,7 +480,14 @@ function Card:draw_tooltip(draw_x, draw_y)
     local card_w = self.VT.w * self.VT.scale
     local tx = draw_x + (card_w - box_w) * 0.5
     local ty = draw_y - box_h - 3
-    if tx < 2 then tx = 2 end
+    local margin = 2
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+        if not sw or sw <= 0 then sw = 320 end
+    end
+    tx = math.max(margin, math.min(tx, sw - box_w - margin))
     if ty < 2 then ty = draw_y + 2 end
     tx = math.floor(tx + 0.5)
     ty = math.floor(ty + 0.5)
@@ -564,12 +621,8 @@ function Card:update(dt)
     end
 end
 
-function Card:draw()
-    if not self.states.visible then return end
-
-    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-    love.graphics.setColor(1, 1, 1, 1)
-
+--- World draw position for sprite and tooltip (selected lift + scoring shake).
+function Card:get_layout_draw_xy()
     local draw_x = self.VT.x + self.collision_offset.x
     local draw_y = self.VT.y + self.collision_offset.y
     if self.selected and not self.scoring_center then draw_y = draw_y - SELECTED_LIFT end
@@ -583,6 +636,27 @@ function Card:draw()
         draw_x = draw_x + math.sin(t * 85) * mag
         draw_y = draw_y + math.cos(t * 73) * mag * 0.65
     end
+    return draw_x, draw_y
+end
+
+function Card:should_draw_tooltip()
+    if not self.face_up then return false end
+    return self.states.drag.is or (G and G.active_tooltip_card == self)
+end
+
+function Card:draw_tooltip_overlay()
+    if not self.states.visible or not self:should_draw_tooltip() then return end
+    local draw_x, draw_y = self:get_layout_draw_xy()
+    self:draw_tooltip(draw_x, draw_y)
+end
+
+function Card:draw()
+    if not self.states.visible then return end
+
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setColor(1, 1, 1, 1)
+
+    local draw_x, draw_y = self:get_layout_draw_xy()
 
     love.graphics.push()
 
@@ -619,14 +693,6 @@ function Card:draw()
 
     love.graphics.pop()
 
-    local show_tooltip = false
-    if self.face_up then
-        show_tooltip = self.states.drag.is or (G and G.active_tooltip_card == self)
-    end
-    if show_tooltip then
-        self:draw_tooltip(draw_x, draw_y)
-    end
-
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 
     -- debug bounding box
@@ -638,21 +704,53 @@ function Card:draw()
     end
 end
 
+--- How many times this card runs the played-card trigger (base 1 + `card_data.retrigger_play` + `G:sum_retrigger_extras`).
+--- Red Seal, Hanging Chad, Hack, Sock and Buskin, etc. are summed in `Game:sum_retrigger_extras`.
+---@param seq table|nil play sequence (`cards`, Photograph fields for Sock/Buskin)
+function Card:play_trigger_total(seq)
+    local cd = self.card_data or {}
+    local extra = math.max(0, tonumber(cd.retrigger_play) or 0)
+    local ctx = {
+        held = false,
+        card_node = self,
+        retrigger_card = self,
+        played_cards = type(seq) == "table" and seq.cards or nil,
+        photograph_first_face_node = type(seq) == "table" and seq.photograph_first_face_node or nil,
+        photograph_pareidolia = type(seq) == "table" and seq.photograph_pareidolia or false,
+    }
+    local R = 0
+    if G and G.sum_retrigger_extras then
+        R = tonumber(G:sum_retrigger_extras(false, ctx)) or 0
+    end
+    return math.max(1, 1 + extra + R)
+end
+
+--- How many times this card runs the in-hand trigger (Mime, Red Seal, `card_data.retrigger_held` via `G:sum_retrigger_extras`).
+---@param seq table|nil play sequence for context (`cards`, Photograph / Pareidolia flags)
+function Card:held_trigger_total(seq)
+    local cd = self.card_data or {}
+    local extra = math.max(0, tonumber(cd.retrigger_held) or 0)
+    local ctx = {
+        held = true,
+        card_node = self,
+        retrigger_card = self,
+        played_cards = type(seq) == "table" and seq.cards or nil,
+        photograph_first_face_node = type(seq) == "table" and seq.photograph_first_face_node or nil,
+        photograph_pareidolia = type(seq) == "table" and seq.photograph_pareidolia or false,
+    }
+    local R = 0
+    if G and G.sum_retrigger_extras then
+        R = tonumber(G:sum_retrigger_extras(true, ctx)) or 0
+    end
+    return math.max(1, 1 + extra + R)
+end
+
 function Card:matches_trigger(event_name)
     if event_name == "held_in_hand" then    
-        if self.enhancement == "gold" or self.enhancement == "steel" or self.seal == "blue" then
-            return true    
-        else
-            return false
-        end
+        return self.enhancement == "gold" or self.enhancement == "steel" or self.seal == "blue"
     elseif event_name == "card_played" then
-        if self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone" or self.seal == "gold" then
-            return true
-        else
-            return false
-        end
+        return self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone" or self.seal == "gold" or self.seal == "red"
     end
-    
     return false
 end
 
@@ -693,7 +791,7 @@ function Card:do_enhancement(ctx)
         -- x2 mult, 1 in 4 chance to break
         ctx.mult = mult * 2
         Sfx.play_mult()
-        if math.random(1, 4) == 1 then
+        if G:do_random(1, 4, 1) then
             ctx.glass_broken_node = self
         end
     elseif self.enhancement == "steel" then
@@ -709,15 +807,21 @@ function Card:do_enhancement(ctx)
         G.money = G.money + 3
         Sfx.play_money()
     elseif self.enhancement == "lucky" then
+        local triggered = false
         -- 1 in 5 chance to give +20 mult
-        if math.random(1, 5) == 1 then
+        if G:do_random(1, 5, 1) then
             ctx.mult = (tonumber(ctx.mult) or 1) + 20
+            triggered = true
             Sfx.play_mult()
         end
         -- 1 in 15 to give +$20
-        if math.random(1, 15) == 1 then
+        if G:do_random(1, 15, 1) then
             G.money = G.money + 20
+            triggered = true
             Sfx.play_money()
+        end
+        if triggered then
+            G:emit_joker_event("lucky_trigger")
         end
     end
 end
@@ -731,8 +835,7 @@ function Card:do_seal(ctx)
         end
         if Sfx and Sfx.play_money then Sfx.play_money() end
     elseif self.seal == "red" then
-        -- Retrigger (hand / scoring integration TBD)
-        ctx._red_seal_retriggered = true
+        -- Retrigger count is handled in `Hand` via `play_trigger_total` / `held_trigger_total`.
     elseif self.seal == "blue" then
         -- Planet card, when held in hand
     elseif self.seal == "purple" then

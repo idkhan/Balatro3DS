@@ -1,6 +1,12 @@
 ---@class Game
 Game = Object:extend()
 
+local ShopUI = require("shop_ui")
+local RoundWinUI = require("round_win_ui")
+
+--- Seconds between revealing each payout line on the round-win screen.
+local ROUND_WIN_LINE_DELAY = 0.38
+
 ---@param seed number|nil Optional seed for the RNG. If nil, a seed is generated (os.time()).
 function Game:init(seed)
     G = self
@@ -12,10 +18,19 @@ function Game:init(seed)
     self.pending_discard = {}
     self.discard_timer = 0
     self.selectedHand = -1
+    self.selectedHandHidden = false
     self.selectedHandLevel = 1
     self.selectedHandChips = 0
     self.selectedHandMult = 0
     self.active_tooltip_card = nil
+    self.active_tooltip_joker = nil
+    self.active_tooltip_consumable_index = nil
+    --- Hit rect + payload for the optional Sell control (`draw_sell_button` / `try_sell_button_press`).
+    self._sell_button_hit = nil
+    --- Hit rect + payload for the optional Use control (`draw_use_button` / `try_use_button_press`).
+    self._use_button_hit = nil
+    --- Hit rect + payload for Buy control under selected shop Joker.
+    self._shop_buy_button_hit = nil
     self.round_score = 0
     self.last_hand_score = 0
     --- Run currency
@@ -36,9 +51,15 @@ function Game:init(seed)
     self.selected_blind_index = 1
     self._blind_resolution_pending = false
     self.shop_offers = {}
-    self.shop_offer_cursor = 1
-    self.shop_sell_cursor = 1
+    self.shop_offer_nodes = {}
+    self.shop_offer_slots = 2
+    self.shop_reroll_base_cost = 5
+    self.shop_reroll_count = 0
+    self.hand_play_counts = {}
+    self._ante_played_card_uids = {}
     self.current_boss_blind_id = nil
+    self.boss_runtime = {}
+    self._next_card_uid = 1
     self._collidables_buf = {}
     self._gc_timer = 0
     self._gc_discarded_nodes = 0
@@ -47,6 +68,14 @@ function Game:init(seed)
     self._joker_emit_next = 1
     self._joker_emit_timer = 0
     self.JOKER_EMIT_INTERVAL = 0.5
+
+    -- Run Consumables (Tarot / Planet cards held outside the deck).
+    self.consumables = {}
+    self.consumable_capacity = 2
+    self._consumable_rects = {}
+    self.consumable_nodes = {}
+    --- Last consumable id used this run (Tarot except Fool, or Planet); for The Fool duplicate.
+    self.last_consumable_use_id = nil
 
     -- Pull all shared globals from globals.lua
     if self.set_globals then
@@ -59,6 +88,9 @@ function Game:init(seed)
     if seed ~= nil then
         self.SEED = seed
     end
+    if self.SEED == nil then
+        self.SEED = os.time()
+    end
     math.randomseed(self.SEED)
     collectgarbage("setpause", 110)
     collectgarbage("setstepmul", 200)
@@ -69,6 +101,467 @@ function Game:init(seed)
     -- Create joker slots + initial joker instances.
     -- (Top-screen rendering is handled by `TopUI.draw()`)
     self:init_jokers()
+end
+
+function Game:increment_hand_play_count(hand_index)
+    local hi = math.floor(tonumber(hand_index) or -1)
+    if hi < 1 then return end
+    self.hand_play_counts = self.hand_play_counts or {}
+    self.hand_play_counts[hi] = (tonumber(self.hand_play_counts[hi]) or 0) + 1
+end
+
+function Game:ensure_card_uid(card_data, force_new)
+    if type(card_data) ~= "table" then return nil end
+    if force_new == true or card_data.uid == nil then
+        local n = math.floor(tonumber(self._next_card_uid) or 1)
+        if n < 1 then n = 1 end
+        card_data.uid = n
+        self._next_card_uid = n + 1
+    end
+    return card_data.uid
+end
+
+function Game:get_active_boss_blind_id()
+    if tonumber(self.current_blind_index) ~= 3 then return nil end
+    local proto = self:get_boss_blind_prototype()
+    if not proto then return nil end
+    return self.current_boss_blind_id
+end
+
+function Game:get_effective_hand_size_limit()
+    local limit = 8
+    for _, j in ipairs(self.jokers or {}) do
+        local id = j and j.def and j.def.id
+        if id == "j_juggler" then limit = limit + 1 end
+        if id == "j_turtle_bean" then limit = limit + j.runtime_counter end
+        if id == "j_troubadour" then limit = limit + 2 end
+        if id == "j_stuntman" then limit = limit - 2 end
+        if id == "j_merry_andy" then limit = limit - 1 end
+    end
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id == "bl_manacle" then
+        limit = limit - 1
+    end
+    return math.max(1, limit)
+end
+
+function Game:get_effective_hands_per_round()
+    local hands = 5
+    for _, j in ipairs(self.jokers or {}) do
+        local id = j and j.def and j.def.id
+        if id == "j_burglar" then hands = hands + 3 end
+        if id == "j_troubadour" then hands = hands - 1 end
+    end
+    return math.max(1, hands)
+end
+
+function Game:get_effective_discards_per_round()
+    local discards = 5
+    for _, j in ipairs(self.jokers or {}) do
+        local id = j and j.def and j.def.id
+        if id == "j_drunkard" then discards = discards + 1 end
+        if id == "j_merry_andy" then discards = discards + 3 end
+        if id == "j_burglar" then discards = 0 end
+    end
+    return math.max(0, discards)
+end
+
+function Game:_boss_pick_random_hand_card_uid()
+    local cards = self.hand and self.hand.cards or nil
+    if type(cards) ~= "table" or #cards <= 0 then return nil end
+    local i = math.random(1, #cards)
+    local c = cards[i]
+    return c and c.uid or nil
+end
+
+function Game:_boss_find_hand_node_by_uid(uid)
+    if uid == nil or not self.hand or not self.hand.card_nodes then return nil end
+    for _, node in ipairs(self.hand.card_nodes) do
+        local d = node and node.card_data
+        if d and d.uid == uid then return node end
+    end
+    return nil
+end
+
+function Game:_boss_select_forced_card_if_needed()
+    if self:get_active_boss_blind_id() ~= "bl_final_bell" then return end
+    if not self.hand or not self.hand.cards then return end
+    self.boss_runtime = self.boss_runtime or {}
+    local uid = self.boss_runtime.forced_card_uid
+    if uid == nil or self:_boss_find_hand_node_by_uid(uid) == nil then
+        uid = self:_boss_pick_random_hand_card_uid()
+        self.boss_runtime.forced_card_uid = uid
+    end
+    local forced = self:_boss_find_hand_node_by_uid(uid)
+    if forced and self.hand and self.hand.is_selected and not self.hand:is_selected(forced) then
+        self.hand:toggle_selection(forced)
+    end
+end
+
+function Game:boss_reset_for_new_blind()
+    self.boss_runtime = {
+        hand_count = 0,
+        seen_hand_types = {},
+        locked_hand_type = nil,
+        mouth_void_play = false,
+        eye_void_play = false,
+        forced_card_uid = nil,
+        house_face_down_draws = 0,
+        fish_face_down_draws = 0,
+        serpent_draws_pending = 0,
+        sold_joker_this_blind = false,
+        crimson_disabled_joker = nil,
+    }
+    local boss_id = self:get_active_boss_blind_id()
+    if type(self.jokers) == "table" then
+        for _, j in ipairs(self.jokers) do
+            if j and j.set_face_up then
+                j:set_face_up(true)
+            end
+        end
+    end
+    if not boss_id then return end
+
+    if boss_id == "bl_needle" then
+        self.hands = 1
+    end
+    if boss_id == "bl_water" then
+        self.discards = 0
+    end
+    if boss_id == "bl_final_leaf" then
+        self.boss_runtime.verdant_leaf_active = true
+    end
+    if boss_id == "bl_house" then
+        self.boss_runtime.house_face_down_draws = self:get_effective_hand_size_limit()
+    end
+    if boss_id == "bl_final_acorn" and type(self.jokers) == "table" and #self.jokers > 1 then
+        for i = #self.jokers, 2, -1 do
+            local j = math.random(1, i)
+            self.jokers[i], self.jokers[j] = self.jokers[j], self.jokers[i]
+        end
+        for _, j in ipairs(self.jokers) do
+            if j and j.set_face_up then
+                j:set_face_up(false)
+            end
+        end
+        self:_apply_joker_layout()
+    end
+end
+
+function Game:boss_on_hand_refilled(is_new_blind)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id or not self.hand or not self.hand.card_nodes then return end
+    if boss_id == "bl_final_heart" then
+        local count = #self.jokers
+        if count > 0 then
+            self.boss_runtime.crimson_disabled_joker = math.random(1, count)
+        else
+            self.boss_runtime.crimson_disabled_joker = nil
+        end
+    end
+    self:_boss_select_forced_card_if_needed()
+end
+
+function Game:boss_on_card_drawn(card_node)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id or not card_node then return end
+    local data = card_node.card_data or {}
+    local force_down = false
+
+    if boss_id == "bl_mark" then
+        local r = tonumber(data.rank) or 0
+        if r >= 11 and r <= 13 then force_down = true end
+    end
+    if boss_id == "bl_house" and (tonumber(self.boss_runtime.house_face_down_draws) or 0) > 0 then
+        force_down = true
+        self.boss_runtime.house_face_down_draws = math.max(0, (tonumber(self.boss_runtime.house_face_down_draws) or 0) - 1)
+    end
+    if boss_id == "bl_wheel" and math.random(1, 7) == 1 then
+        force_down = true
+    end
+    if boss_id == "bl_fish" and (tonumber(self.boss_runtime.fish_face_down_draws) or 0) > 0 then
+        force_down = true
+        self.boss_runtime.fish_face_down_draws = math.max(0, (tonumber(self.boss_runtime.fish_face_down_draws) or 0) - 1)
+    end
+    if force_down and card_node.set_face_up then
+        card_node:set_face_up(false)
+    end
+end
+
+function Game:boss_consume_serpent_draws(default_limit, current_count)
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id ~= "bl_serpent" then return default_limit end
+    local pending = math.max(0, math.floor(tonumber(self.boss_runtime.serpent_draws_pending) or 0))
+    if pending <= 0 then return default_limit end
+    self.boss_runtime.serpent_draws_pending = 0
+    return math.max(default_limit, current_count + pending)
+end
+
+function Game:boss_after_discard_or_play(reason)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id then return end
+    if boss_id == "bl_serpent" then
+        self.boss_runtime.serpent_draws_pending = 3
+    end
+    if reason == "play" and boss_id == "bl_fish" then
+        self.boss_runtime.fish_face_down_draws = self:get_effective_hand_size_limit()
+    end
+end
+
+function Game:boss_after_play_before_draw()
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id ~= "bl_hook" then return end
+    local hand = self.hand
+    if not hand or not hand.cards then return end
+    for _ = 1, 2 do
+        if #hand.cards <= 0 then break end
+        local i = math.random(1, #hand.cards)
+        if hand.discard_card_at_index then
+            hand:discard_card_at_index(i)
+        end
+    end
+end
+
+function Game:boss_before_play_selected(selected_nodes)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id then return true end
+    local n = type(selected_nodes) == "table" and #selected_nodes or 0
+    local hand_idx = tonumber(self.selectedHand) or -1
+    local hand_name = self.handlist and self.handlist[hand_idx] or tostring(hand_idx)
+    self.boss_runtime.hand_count = (tonumber(self.boss_runtime.hand_count) or 0) + 1
+    self.boss_runtime.mouth_void_play = false
+    self.boss_runtime.eye_void_play = false
+    if boss_id == "bl_mouth" then
+        if self.boss_runtime.locked_hand_type == nil then
+            self.boss_runtime.locked_hand_type = hand_name
+        elseif self.boss_runtime.locked_hand_type ~= hand_name then
+            self.boss_runtime.mouth_void_play = true
+        end
+    end
+    if boss_id == "bl_eye" then
+        if self.boss_runtime.seen_hand_types[hand_name] then
+            self.boss_runtime.eye_void_play = true
+        end
+        self.boss_runtime.seen_hand_types[hand_name] = true
+    end
+    if boss_id == "bl_final_bell" then
+        local forced_uid = self.boss_runtime.forced_card_uid
+        if forced_uid ~= nil then
+            local has_forced = false
+            for _, node in ipairs(selected_nodes or {}) do
+                local d = node and node.card_data
+                if d and d.uid == forced_uid then
+                    has_forced = true
+                    break
+                end
+            end
+            if not has_forced then return false end
+        end
+    end
+    return true
+end
+
+function Game:boss_should_void_current_play()
+    if not self.boss_runtime then return false end
+    return self.boss_runtime.mouth_void_play == true or self.boss_runtime.eye_void_play == true
+end
+
+function Game:boss_apply_on_hand_submitted(selected_nodes)
+    local boss_id = self:get_active_boss_blind_id()
+    local hand_idx = tonumber(self.selectedHand) or -1
+
+    if type(selected_nodes) == "table" and tonumber(self.current_blind_index) ~= 3 then
+        for _, node in ipairs(selected_nodes) do
+            local d = node and node.card_data
+            if d and d.uid then
+                self._ante_played_card_uids[d.uid] = true
+            end
+        end
+    end
+    if not boss_id then return end
+
+    if boss_id == "bl_tooth" then
+        local n = type(selected_nodes) == "table" and #selected_nodes or 0
+        local floor = self:get_money_loss_floor()
+        self.money = math.max(floor, (tonumber(self.money) or 0) - n)
+    elseif boss_id == "bl_ox" then
+        local target_idx, target_count = -1, -1
+        for k, v in pairs(self.hand_play_counts or {}) do
+            local c = tonumber(v) or 0
+            if c > target_count then
+                target_count = c
+                target_idx = tonumber(k) or -1
+            end
+        end
+        if target_idx > 0 and hand_idx == target_idx then
+            self.money = 0
+        end
+    elseif boss_id == "bl_arm" then
+        local hs = self.hand_stats and self.hand_stats[hand_idx]
+        if hs then
+            hs.level = math.max(1, (tonumber(hs.level) or 1) - 1)
+            local level = tonumber(hs.level) or 1
+            self.selectedHandLevel = level
+            self.selectedHandChips = (tonumber(hs.base_chips) or 0) + ((level - 1) * (tonumber(hs.chips_per_level) or 0))
+            self.selectedHandMult = (tonumber(hs.base_mult) or 0) + ((level - 1) * (tonumber(hs.mult_per_level) or 0))
+        end
+    end
+
+end
+
+function Game:boss_is_card_debuffed_for_scoring(node)
+    local boss_id = self:get_active_boss_blind_id()
+    if not boss_id or not node then return false end
+    local d = node.card_data or {}
+    local rank = tonumber(d.rank) or 0
+    local suit = d.suit
+    if boss_id == "bl_club" and suit == "Clubs" then return true end
+    if boss_id == "bl_goad" and suit == "Spades" then return true end
+    if boss_id == "bl_window" and suit == "Diamonds" then return true end
+    if boss_id == "bl_head" and suit == "Hearts" then return true end
+    if boss_id == "bl_plant" and (rank >= 11 and rank <= 13) or self:hasJoker("j_pareidolia") then return true end
+    if boss_id == "bl_pillar" and d.uid and self._ante_played_card_uids[d.uid] then return true end
+    if boss_id == "bl_final_leaf" and self.boss_runtime.verdant_leaf_active == true then return true end
+    return false
+end
+
+function Game:boss_apply_hand_base_modifiers(chips, mult)
+    local boss_id = self:get_active_boss_blind_id()
+    chips = tonumber(chips) or 0
+    mult = tonumber(mult) or 0
+    if boss_id == "bl_flint" then
+        chips = math.floor(chips * 0.5)
+        mult = math.max(1, math.floor(mult * 0.5))
+    end
+    return chips, mult
+end
+
+function Game:boss_on_joker_sold()
+    if self:get_active_boss_blind_id() == "bl_final_leaf" then
+        self.boss_runtime.verdant_leaf_active = false
+        self.boss_runtime.sold_joker_this_blind = true
+    end
+end
+
+function Game:clear_shop_offer_nodes()
+    if type(self.shop_offer_nodes) ~= "table" then
+        self.shop_offer_nodes = {}
+        return
+    end
+    for _, node in ipairs(self.shop_offer_nodes) do
+        if node then
+            if self.active_tooltip_joker == node then
+                self.active_tooltip_joker = nil
+            end
+            self:remove(node)
+        end
+    end
+    self.shop_offer_nodes = {}
+end
+
+function Game:sync_shop_offer_nodes()
+    if type(self.shop_offers) ~= "table" then
+        self.shop_offers = {}
+    end
+    if type(self.shop_offer_nodes) ~= "table" then
+        self.shop_offer_nodes = {}
+    end
+    if not Joker and not Consumable then
+        self:clear_shop_offer_nodes()
+        return
+    end
+
+    for i = #self.shop_offer_nodes, #self.shop_offers + 1, -1 do
+        local node = self.shop_offer_nodes[i]
+        if node then
+            if self.active_tooltip_joker == node then
+                self.active_tooltip_joker = nil
+            end
+            self:remove(node)
+        end
+        table.remove(self.shop_offer_nodes, i)
+    end
+
+    for i, offer in ipairs(self.shop_offers) do
+        local node = self.shop_offer_nodes[i]
+        local need_joker = (offer.kind == nil or offer.kind == "joker")
+        local need_cons = (offer.kind == "tarot" or offer.kind == "planet")
+
+        if node then
+            local is_j = Joker and node.is and node:is(Joker)
+            local is_c = Consumable and node.is and node:is(Consumable)
+            local ok = (need_joker and is_j) or (need_cons and is_c)
+            if ok and need_joker and is_j and node.def and offer.id and node.def.id ~= offer.id then
+                ok = false
+            end
+            if ok and need_cons and is_c and node.def and offer.id and node.def.id ~= offer.id then
+                ok = false
+            end
+            if not ok then
+                if self.active_tooltip_joker == node then
+                    self.active_tooltip_joker = nil
+                end
+                self:remove(node)
+                self.shop_offer_nodes[i] = nil
+                node = nil
+            end
+        end
+
+        if not node then
+            if need_joker and Joker then
+                local def = JOKER_DEFS and JOKER_DEFS[offer.id]
+                if type(def) == "table" then
+                    node = Joker(0, 0, self.joker_slot_w, self.joker_slot_h, def, { face_up = true, edition = offer.edition })
+                    self.shop_offer_nodes[i] = node
+                    self:add(node)
+                end
+            elseif need_cons and Consumable and CONSUMABLE_DEFS then
+                local def = CONSUMABLE_DEFS[offer.id]
+                if type(def) == "table" and copy_table then
+                    node = Consumable(0, 0, copy_table(def))
+                    self.shop_offer_nodes[i] = node
+                    self:add(node)
+                end
+            end
+        end
+        if node then
+            node.shop_offer_slot = i
+            node.states.visible = false
+            node.states.click.can = false
+            node.states.drag.can = false
+            node.states.collide.can = false
+        end
+    end
+end
+
+function Game:layout_shop_offer_nodes(param)
+    ShopUI.layout_shop_offer_nodes(self, param)
+end
+
+function Game:sync_shop_offer_interactivity()
+    local active = (self.STATE == self.STATES.SHOP)
+    local tooltip_is_shop_offer = false
+    for _, node in ipairs(self.shop_offer_nodes or {}) do
+        if node and node.states then
+            node.states.visible = active
+            node.states.click.can = active
+            node.states.drag.can = false
+        end
+        if node and self.active_tooltip_joker == node then
+            tooltip_is_shop_offer = true
+        end
+    end
+    if not active and tooltip_is_shop_offer then
+        self.active_tooltip_joker = nil
+    end
+end
+
+function Game:draw_shop_offer_price_tags()
+    ShopUI.draw_shop_offer_price_tags(self)
+end
+
+function Game:draw_shop_offer_buy_button()
+    ShopUI.draw_shop_offer_buy_button(self)
 end
 
 function Game:add(node)
@@ -100,11 +593,26 @@ function Game:get_blind_def(index)
     return defs[index]
 end
 
-function Game:get_boss_blind_pool()
+--- Blinds with `boss.showdown` are legal only on ante 8, 16, 24, …
+function Game:is_showdown_ante(ante)
+    local a = math.max(1, tonumber(ante) or tonumber(self.ante) or 1)
+    return a >= 8 and (a % 8) == 0
+end
+
+---Boss pool for rolling; blinds with `boss.showdown` only appear on ante 8, 16, 24, ...
+---@param ante number|nil Defaults to `self.ante`
+function Game:get_boss_blind_pool(ante)
+    local allow_showdown = self:is_showdown_ante(ante)
     local out = {}
     for key, blind in pairs(self.P_BLINDS or {}) do
         if key ~= "bl_small" and key ~= "bl_big" and type(blind) == "table" and type(blind.boss) == "table" then
-            out[#out + 1] = key
+            if blind.boss.showdown == true then
+                if allow_showdown then
+                    out[#out + 1] = key
+                end
+            else
+                out[#out + 1] = key
+            end
         end
     end
     table.sort(out)
@@ -125,6 +633,16 @@ function Game:get_boss_blind_prototype()
     local key = self.current_boss_blind_id
     if not key or not self.P_BLINDS or not self.P_BLINDS[key] then
         key = self:roll_boss_blind()
+    else
+        local proto = self.P_BLINDS[key]
+        local boss = type(proto) == "table" and proto.boss
+        if type(boss) == "table" then
+            local is_showdown_ante = self:is_showdown_ante()
+            local is_showdown_boss = (boss.showdown == true)
+            if is_showdown_ante ~= is_showdown_boss then
+                key = self:roll_boss_blind()
+            end
+        end
     end
     return key and self.P_BLINDS and self.P_BLINDS[key] or nil
 end
@@ -137,6 +655,45 @@ function Game:get_blind_display_name(index)
         if proto and proto.name then return proto.name end
     end
     return def.name or "Blind"
+end
+
+function Game:get_boss_effect_text()
+    local boss_id = self.current_boss_blind_id
+    if not boss_id then
+        local p = self:get_boss_blind_prototype()
+        if p then boss_id = self.current_boss_blind_id end
+    end
+    local t = {
+        bl_hook = "After each hand, discard 2 random held cards.",
+        bl_ox = "Playing your most played hand sets money to $0.",
+        bl_house = "First hand is drawn face down.",
+        bl_wall = "Extra large blind.",
+        bl_wheel = "1 in 7 drawn cards are face down.",
+        bl_arm = "Decrease level of played poker hand by 1.",
+        bl_club = "All Club cards are debuffed.",
+        bl_fish = "Cards drawn after each hand are face down.",
+        bl_psychic = "Must play 5 cards.",
+        bl_goad = "All Spade cards are debuffed.",
+        bl_water = "Start with 0 discards.",
+        bl_window = "All Diamond cards are debuffed.",
+        bl_manacle = "-1 hand size.",
+        bl_eye = "No repeat hand types this round.",
+        bl_mouth = "Can only score one hand type this round.",
+        bl_plant = "All face cards are debuffed.",
+        bl_serpent = "After play/discard, always draw 3 cards.",
+        bl_pillar = "Cards played this Ante are debuffed.",
+        bl_needle = "Play only 1 hand.",
+        bl_head = "All Heart cards are debuffed.",
+        bl_tooth = "Lose $1 per card played.",
+        bl_flint = "Base chips and mult are halved.",
+        bl_mark = "All face cards are drawn face down.",
+        bl_final_acorn = "Flips and shuffles all Jokers.",
+        bl_final_leaf = "All cards debuffed until 1 Joker sold.",
+        bl_final_vessel = "Very large blind.",
+        bl_final_heart = "One random Joker disabled each hand.",
+        bl_final_bell = "Forces 1 selected card each hand.",
+    }
+    return t[boss_id] or ""
 end
 
 function Game:get_blind_color(index)
@@ -276,18 +833,29 @@ function Game:init_item_prototypes()
 end
 
 function Game:draw()
-    -- Dark panel behind the entire joker row (bottom screen).
-    if self.jokers_on_bottom == true and self.jokers then
-        local slot_count = self.joker_capacity or self.joker_slot_count or #self.jokers
+    if self.STATE == self.STATES.BLIND_SELECT then
+        self:draw_bottom_blind_select()
+    elseif self.STATE == self.STATES.ROUND_EVAL then
+        self:draw_bottom_round_win()
+    elseif self.STATE == self.STATES.SHOP then
+        self:draw_bottom_shop()
+    end
+
+    -- Dark panel behind the joker row (bottom screen): only as wide as owned jokers.
+    -- Draw this after bottom-state UI so it remains visible, but before nodes.
+    if self.jokers_on_bottom == true and self.jokers and #self.jokers > 0 then
         local slot_w = self.joker_slot_w or 71
         local slot_h = self.joker_slot_h or 95
         local slot_gap = self.joker_slot_gap or 8
         local s = self.joker_slot_scale_bottom or 1
 
-        local total_w_base = slot_count * slot_w + (slot_count - 1) * slot_gap
+        -- Span is already in screen pixels (fan uses scaled card width when s ~= 1).
+        local total_w_base = tonumber(self.joker_row_span_bottom)
+            or select(2, self:_compute_fanned_joker_row(
+                #self.jokers, 320, slot_w * s, slot_gap * s, 8))
         local panel_x = self.joker_slot_start_x_bottom or 0
         local panel_y = self.joker_slot_y_bottom or 20
-        local panel_w = total_w_base * s
+        local panel_w = total_w_base
         local panel_h = slot_h * s
 
         -- Extra padding so jokers don't touch the panel edges.
@@ -299,30 +867,843 @@ function Game:draw()
         panel_h = panel_h + (panel_pad_scaled * 2)
 
         local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-        if _G.draw_rect_with_shadow then
-            draw_rect_with_shadow(
-                panel_x, panel_y, panel_w, panel_h,
-                4, 2,
-                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
-                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
-                2
-            )
-        else
-            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
-            love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
-        end
+        
         love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
     end
 
-    for _, node in ipairs(self.nodes) do
-        node:draw()
+    self:sync_shop_offer_interactivity()
+
+    -- Hide consumables during blind select + round eval.
+    local show_consumables = not (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.ROUND_EVAL)
+    if not show_consumables then
+        self._consumable_rects = {}
+        self.active_tooltip_consumable_index = nil
+        if self.consumable_nodes then
+            for _, node in ipairs(self.consumable_nodes) do
+                if node and node.states then
+                    node.states.visible = false
+                end
+            end
+        end
+    else
+        if self.consumable_nodes then
+            for _, node in ipairs(self.consumable_nodes) do
+                if node and node.states then
+                    node.states.visible = true
+                end
+            end
+        end
+        -- Layout consumable nodes (top-right) before drawing.
+        self:draw_consumables_row()
     end
 
-    if self.STATE == self.STATES.BLIND_SELECT then
-        self:draw_bottom_blind_select()
-    elseif self.STATE == self.STATES.SHOP then
-        self:draw_bottom_shop()
+    -- Ensure node sprites (especially jokers/cards/consumables) are not tinted by prior UI draws.
+    love.graphics.setColor(1, 1, 1, 1)
+
+    -- Keep layering stable:
+    -- 1) regular nodes, 2) consumables, 3) hand cards on top -- DONT FORGET THIS
+    local cons_set = {}
+    local hand_set = {}
+    if self.consumable_nodes then
+        for _, cn in ipairs(self.consumable_nodes) do
+            cons_set[cn] = true
+        end
     end
+    if self.hand and self.hand.card_nodes then
+        for _, hn in ipairs(self.hand.card_nodes) do
+            hand_set[hn] = true
+        end
+    end
+    local draw_consumables_first = (self.jokers_on_bottom == true)
+    if draw_consumables_first and self.consumable_nodes then
+        for _, cn in ipairs(self.consumable_nodes) do
+            if cn and cn.draw then cn:draw() end
+        end
+    end
+    for _, node in ipairs(self.nodes) do
+        if not cons_set[node] and not hand_set[node] then
+            node:draw()
+        end
+    end
+    if (not draw_consumables_first) and self.consumable_nodes then
+        for _, cn in ipairs(self.consumable_nodes) do
+            if cn and cn.draw then cn:draw() end
+        end
+    end
+    if self.hand and self.hand.card_nodes then
+        for _, hn in ipairs(self.hand.card_nodes) do
+            if hn and hn.draw then hn:draw() end
+        end
+    end
+    self:draw_shop_offer_price_tags()
+    self._shop_buy_button_hit = nil
+    self:draw_shop_offer_buy_button()
+
+    self._sell_button_hit = nil
+    self:draw_sell_button()
+
+    self._use_button_hit = nil
+    self:draw_use_button()
+
+    -- Tooltips last so they paint over sprites, hand, and Use/Sell (etc.).
+    self:draw_tooltips_on_top()
+end
+
+--- Draw all bottom-screen card / joker / consumable tooltips after other UI.
+function Game:draw_tooltips_on_top()
+    love.graphics.setColor(1, 1, 1, 1)
+    if self.nodes then
+        for _, node in ipairs(self.nodes) do
+            if Joker and node and node.is and node:is(Joker) and node.draw_tooltip_overlay then
+                node:draw_tooltip_overlay()
+            end
+            if Consumable and node and node.is and node:is(Consumable) and node.shop_offer_slot and node.draw_tooltip_overlay then
+                node:draw_tooltip_overlay()
+            end
+        end
+    end
+    if self.consumable_nodes then
+        for _, cn in ipairs(self.consumable_nodes) do
+            if cn and cn.draw_tooltip_overlay then
+                cn:draw_tooltip_overlay()
+            end
+        end
+    end
+    if self.hand and self.hand.card_nodes then
+        for _, hn in ipairs(self.hand.card_nodes) do
+            if hn and hn.draw_tooltip_overlay then
+                hn:draw_tooltip_overlay()
+            end
+        end
+    end
+end
+
+--- Add a Consumable by definition id (see `CONSUMABLE_DEFS` in `consumable_catalog.lua`).
+---@param def_id string
+---@return boolean
+function Game:add_consumable(def_id)
+    if type(def_id) ~= "string" or def_id == "" then return false end
+    if not CONSUMABLE_DEFS or type(CONSUMABLE_DEFS) ~= "table" then return false end
+    local def = CONSUMABLE_DEFS[def_id]
+    if type(def) ~= "table" then return false end
+
+    if not self.consumables then self.consumables = {} end
+    if not self.consumable_nodes then self.consumable_nodes = {} end
+    local cap = tonumber(self.consumable_capacity) or 3
+    if #self.consumables >= cap then return false end
+
+    local copy = copy_table(def)
+    table.insert(self.consumables, copy)
+
+    local idx = #self.consumables
+    local node = Consumable(0, 0, copy)
+    self.consumable_nodes[idx] = node
+    self:add(node)
+
+    self:draw_consumables_row()
+    return true
+end
+
+---@return boolean
+function Game:can_add_consumable()
+    local cap = tonumber(self.consumable_capacity) or 2
+    return #(self.consumables or {}) < cap
+end
+
+---@param index integer
+---@return table|nil
+function Game:remove_consumable_at(index)
+    if type(index) ~= "number" or index < 1 then return nil end
+    if not self.consumables or type(self.consumables) ~= "table" then return nil end
+    local c = self.consumables[index]
+    if not c then return nil end
+    table.remove(self.consumables, index)
+
+    if self.consumable_nodes and self.consumable_nodes[index] then
+        local node = self.consumable_nodes[index]
+        self:remove(node)
+        table.remove(self.consumable_nodes, index)
+    end
+
+    if self.active_tooltip_consumable_index and
+       self.active_tooltip_consumable_index >= index then
+        self.active_tooltip_consumable_index =
+            math.min(#self.consumables, self.active_tooltip_consumable_index)
+    end
+
+    self:draw_consumables_row()
+    return c
+end
+
+function Game:consumable_slots_after_use_index(index)
+    local n = #(self.consumables or {})
+    local cap = tonumber(self.consumable_capacity) or 2
+    return math.max(0, cap - (n - 1))
+end
+
+function Game:consumable_play_state_ok()
+    local s = self.STATE
+    return s == self.STATES.SELECTING_HAND or s == self.STATES.SHOP
+end
+
+function Game:hand_ready_for_tarot_selection()
+    if self.STATE ~= self.STATES.SELECTING_HAND then return false end
+    if not self.hand then return false end
+    if self.hand.is_scoring_active and self.hand:is_scoring_active() then return false end
+    return true
+end
+
+function Game:ordered_selected_hand_count()
+    if not self.hand or not self.hand.ordered_selected_nodes then return 0 end
+    return #self.hand:ordered_selected_nodes()
+end
+
+function Game:joker_has_room_for_new(edition)
+    edition = Joker and Joker.normalize_edition(edition) or "base"
+    if not self.jokers then return true end
+    local neg_owned = 0
+    for _, jj in ipairs(self.jokers) do
+        if jj and Joker.normalize_edition(jj.edition) == "negative" then
+            neg_owned = neg_owned + 1
+        end
+    end
+    local new_is_neg = edition == "negative"
+    local cap_after = (self.joker_base_capacity or 5) + neg_owned + (new_is_neg and 1 or 0)
+    return #self.jokers < cap_after
+end
+
+function Game:tarot_selection_requirement_met(c)
+    local sel = c and c.select
+    if type(sel) ~= "table" then return true end
+    local n = self:ordered_selected_hand_count()
+    if sel.exact ~= nil then
+        return n == tonumber(sel.exact)
+    end
+    local smin = tonumber(sel.min)
+    local smax = tonumber(sel.max)
+    if smin and n < smin then return false end
+    if smax and n > smax then return false end
+    return true
+end
+
+function Game:consumable_use_enabled(idx)
+    if self.jokers_on_bottom == true then return false end
+    if not self:consumable_play_state_ok() then return false end
+    local c = self.consumables and self.consumables[idx]
+    if not c or type(c) ~= "table" then return false end
+
+    if c.kind == "tarot" then
+        local need_hand = false
+        local s = c.select
+        if type(s) == "table" and (s.exact or 0) > 0 then
+            need_hand = true
+        end
+        if type(s) == "table" and s.min and tonumber(s.min) > 0 then
+            need_hand = true
+        end
+        if c.spawn or c.spawn_joker or c.wheel_of_fortune or c.fool_duplicate
+            or c.hermit_money or c.temperance_money then
+            -- no hand required
+        elseif need_hand and not self:hand_ready_for_tarot_selection() then
+            return false
+        end
+        if need_hand and not self:tarot_selection_requirement_met(c) then
+            return false
+        end
+        if c.spawn then
+            if self:consumable_slots_after_use_index(idx) < 1 then return false end
+        end
+        if c.fool_duplicate then
+            local last = self.last_consumable_use_id
+            if not last or last == "tarot_fool" then return false end
+            if not CONSUMABLE_DEFS or not CONSUMABLE_DEFS[last] then return false end
+            if self:consumable_slots_after_use_index(idx) < 1 then return false end
+        end
+        if c.spawn_joker and not self:joker_has_room_for_new("base") then return false end
+        if c.wheel_of_fortune then
+            if not self.jokers or #self.jokers < 1 then return false end
+        end
+        return true
+    end
+
+    if c.kind == "planet" then
+        return true
+    end
+
+    return false
+end
+
+function Game:record_consumable_use_id(id)
+    if id == "tarot_fool" or not id then return end
+    self.last_consumable_use_id = id
+end
+
+function Game:deep_copy_card_data(data)
+    if type(data) ~= "table" then return nil end
+    local c = {}
+    for k, v in pairs(data) do
+        if type(v) == "table" then
+            c[k] = self:deep_copy_card_data(v)
+        else
+            c[k] = v
+        end
+    end
+    return c
+end
+
+function Game:random_consumable_id_of_kind(kind, exclude)
+    exclude = exclude or {}
+    local pool = {}
+    if not CONSUMABLE_DEFS then return nil end
+    for def_id, def in pairs(CONSUMABLE_DEFS) do
+        if type(def) == "table" and def.kind == kind and not exclude[def_id] then
+            pool[#pool + 1] = def_id
+        end
+    end
+    if #pool == 0 then return nil end
+    return pool[math.random(1, #pool)]
+end
+
+function Game:random_non_fool_tarot_id()
+    return self:random_consumable_id_of_kind("tarot", { tarot_fool = true })
+end
+
+function Game:random_joker_def_id()
+    if not JOKER_DEFS then return nil end
+    local pool = {}
+    for id, def in pairs(JOKER_DEFS) do
+        if type(def) == "table" then
+            pool[#pool + 1] = id
+        end
+    end
+    if #pool == 0 then return nil end
+    return pool[math.random(1, #pool)]
+end
+
+--- Increment stored level for poker hand index `idx` (1..12). If that hand is the current play, updates
+--- `selectedHandLevel`, `selectedHandChips`, and `selectedHandMult` (including boss hand modifiers).
+---@param idx integer
+---@return boolean
+function Game:upgrade_hand_level_at_index(idx)
+    idx = tonumber(idx)
+    if not idx or not self.hand_stats or not self.hand_stats[idx] then return false end
+    local stats = self.hand_stats[idx]
+    stats.level = (tonumber(stats.level) or 1) + 1
+    local level = math.max(1, tonumber(stats.level) or 1)
+    local chips = (tonumber(stats.base_chips) or 0) + ((level - 1) * (tonumber(stats.chips_per_level) or 0))
+    local mult = (tonumber(stats.base_mult) or 0) + ((level - 1) * (tonumber(stats.mult_per_level) or 0))
+    if self.boss_apply_hand_base_modifiers then
+        chips, mult = self:boss_apply_hand_base_modifiers(chips, mult)
+    end
+    if tonumber(self.selectedHand) == idx then
+        self.selectedHandLevel = level
+        self.selectedHandChips = chips
+        self.selectedHandMult = mult
+    end
+    return true
+end
+
+--- Apply the runtime effect for a Consumable and play a simple SFX where appropriate.
+---@param c table
+function Game:apply_consumable_effect(c)
+    if type(c) ~= "table" then return end
+    local kind = c.kind
+    local id = c.id
+
+    if kind == "planet" then
+        local target_hand_name = c.hand
+        if target_hand_name and self.handlist and self.hand_stats then
+            local target_idx = nil
+            for i, name in ipairs(self.handlist) do
+                if name == target_hand_name then
+                    target_idx = i
+                    break
+                end
+            end
+
+            if target_idx then
+                self:upgrade_hand_level_at_index(target_idx)
+            end
+        end
+        self:record_consumable_use_id(id)
+        if Sfx and Sfx.play_mult then Sfx.play_mult() end
+        return
+    end
+
+    if kind ~= "tarot" then return end
+
+    local hand = self.hand
+    local function ordered_nodes()
+        return (hand and hand.ordered_selected_nodes and hand:ordered_selected_nodes()) or {}
+    end
+
+    local function clear_tarot_hand_ui()
+        if hand and hand.clear_selection then
+            hand:clear_selection()
+        end
+        self.active_tooltip_card = nil
+    end
+
+    if id == "tarot_fool" then
+        local last_id = self.last_consumable_use_id
+        if last_id and last_id ~= "tarot_fool" then
+            self:add_consumable(last_id)
+            if Sfx and Sfx.play_money then Sfx.play_money() end
+        end
+        clear_tarot_hand_ui()
+        return
+    end
+
+    local ord = ordered_nodes()
+
+    if id == "tarot_magician" then
+        for i = 1, math.min(2, #ord) do
+            ord[i]:set_enhancement("lucky")
+        end
+    elseif id == "tarot_high_priestess" then
+        local free = math.max(0, (tonumber(self.consumable_capacity) or 2) - #(self.consumables or {}))
+        local k = math.min(2, free)
+        for _ = 1, k do
+            local pid = self:random_consumable_id_of_kind("planet", {})
+            if pid then self:add_consumable(pid) end
+        end
+    elseif id == "tarot_empress" then
+        for i = 1, math.min(2, #ord) do
+            ord[i]:set_enhancement("mult")
+        end
+    elseif id == "tarot_emperor" then
+        local free = math.max(0, (tonumber(self.consumable_capacity) or 2) - #(self.consumables or {}))
+        local k = math.min(2, free)
+        for _ = 1, k do
+            local tid = self:random_consumable_id_of_kind("tarot")
+            if tid then self:add_consumable(tid) end
+        end
+    elseif id == "tarot_hierophant" then
+        for i = 1, math.min(2, #ord) do
+            ord[i]:set_enhancement("bonus")
+        end
+    elseif id == "tarot_lovers" then
+        if ord[1] then ord[1]:set_enhancement("wild") end
+    elseif id == "tarot_chariot" then
+        if ord[1] then ord[1]:set_enhancement("steel") end
+    elseif id == "tarot_justice" then
+        if ord[1] then ord[1]:set_enhancement("glass") end
+    elseif id == "tarot_strength" then
+        for i = 1, math.min(2, #ord) do
+            local data = ord[i].card_data
+            if data and type(data.rank) == "number" then
+                data.rank = math.min(14, data.rank + 1)
+                ord[i]:sync_visual_from_card_data()
+            end
+        end
+    elseif id == "tarot_hermit" then
+        local m = tonumber(self.money) or 0
+        local gain = math.min(m, 20)
+        self.money = m + gain
+        if Sfx and Sfx.play_money then Sfx.play_money() end
+    elseif id == "tarot_wheel_of_fortune" then
+        if self.jokers and #self.jokers > 0 and math.random(4) == 1 then
+            local j = self.jokers[math.random(1, #self.jokers)]
+            local opts = { "foil", "holo", "polychrome" }
+            if Joker and j then
+                j.edition = Joker.normalize_edition(opts[math.random(1, #opts)])
+                if j.refresh_quads then j:refresh_quads() end
+                self:refresh_joker_capacity_from_negatives()
+            end
+        end
+    elseif id == "tarot_hanged_man" then
+        local to_destroy = {}
+        for i = 1, math.min(2, #ord) do
+            to_destroy[#to_destroy + 1] = ord[i]
+        end
+        for _, node in ipairs(to_destroy) do
+            if hand and hand.destroy_card_node then
+                hand:destroy_card_node(node)
+            end
+        end
+    elseif id == "tarot_death" then
+        if #ord >= 2 then
+            local left, right = ord[1], ord[2]
+            if right.card_data then
+                left.card_data = self:deep_copy_card_data(right.card_data)
+                left:sync_visual_from_card_data()
+            end
+        end
+    elseif id == "tarot_temperance" then
+        local total = 0
+        for _, j in ipairs(self.jokers or {}) do
+            total = total + (tonumber(j and j.sell_cost) or 0)
+        end
+        local gain = math.min(total, 50)
+        self.money = (tonumber(self.money) or 0) + gain
+        if Sfx and Sfx.play_money then Sfx.play_money() end
+    elseif id == "tarot_devil" then
+        if ord[1] then ord[1]:set_enhancement("gold") end
+    elseif id == "tarot_tower" then
+        if ord[1] then ord[1]:set_enhancement("stone") end
+    elseif id == "tarot_star" then
+        for i = 1, math.min(3, #ord) do
+            local cd = ord[i].card_data
+            if cd then cd.suit = "Diamonds" end
+            ord[i]:sync_visual_from_card_data()
+        end
+    elseif id == "tarot_moon" then
+        for i = 1, math.min(3, #ord) do
+            local cd = ord[i].card_data
+            if cd then cd.suit = "Clubs" end
+            ord[i]:sync_visual_from_card_data()
+        end
+    elseif id == "tarot_sun" then
+        for i = 1, math.min(3, #ord) do
+            local cd = ord[i].card_data
+            if cd then cd.suit = "Hearts" end
+            ord[i]:sync_visual_from_card_data()
+        end
+    elseif id == "tarot_world" then
+        for i = 1, math.min(3, #ord) do
+            local cd = ord[i].card_data
+            if cd then cd.suit = "Spades" end
+            ord[i]:sync_visual_from_card_data()
+        end
+    elseif id == "tarot_judgement" then
+        local jid = self:random_joker_def_id()
+        if jid then self:add_joker_by_def(jid) end
+    end
+
+    self:record_consumable_use_id(id)
+    if id ~= "tarot_hanged_man" then
+        clear_tarot_hand_ui()
+    else
+        self.active_tooltip_card = nil
+        if hand and hand.calculate_play then hand:calculate_play() end
+    end
+
+    local sfx_mult = id ~= "tarot_hermit" and id ~= "tarot_temperance"
+        and id ~= "tarot_wheel_of_fortune" and id ~= "tarot_high_priestess"
+        and id ~= "tarot_emperor" and id ~= "tarot_judgement"
+    if sfx_mult and Sfx and Sfx.play_mult then
+        Sfx.play_mult()
+    end
+end
+
+--- Use (consume) a Consumable at the given index.
+---@param index integer
+---@return boolean
+function Game:use_consumable(index)
+    if not self:consumable_use_enabled(index) then return false end
+    local c = self:remove_consumable_at(index)
+    if not c then return false end
+    self:emit_joker_event("on_consumable_used", {
+        consumable = c,
+        consumable_id = c.id,
+        consumable_kind = c.kind,
+    })
+    self:apply_consumable_effect(c)
+    return true
+end
+
+--- Draw Consumable cards (Tarot / Planet) as small sprites in the top-right area of the bottom screen.
+function Game:draw_consumables_row()
+    local list = self.consumables or {}
+    local nodes = self.consumable_nodes or {}
+    self._consumable_rects = {}
+    if #list == 0 then return end
+
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+    end
+    if not sw or sw <= 0 then sw = 320 end
+
+    local card_w, card_h = 72, 95
+    local cons_scale = (self.STATE == self.STATES.SHOP) and 0.85 or 1
+    local draw_w, draw_h = card_w * cons_scale, card_h * cons_scale
+    local gap = -4
+    local right_margin = 0
+    local y = -30
+
+    local n = #list
+    local max_span = math.max(draw_w, sw - right_margin)
+
+    local step, span
+    if n <= 1 then
+        step = 0
+        span = draw_w
+    else
+        local natural_span = n * draw_w + (n - 1) * gap
+        if natural_span <= max_span then
+            step = draw_w + gap
+            span = natural_span
+        else
+            step = (max_span - draw_w) / (n - 1)
+            span = (n - 1) * step + draw_w
+        end
+    end
+
+    -- Right-align the row so it's always in the top-right corner.
+    local start_x = (sw - right_margin) - span
+
+    for i = 1, n do
+        local node = nodes[i]
+        local x = start_x + (i - 1) * step
+        if node then
+            node.T.x = x
+            node.T.y = y
+            node.T.r = 0
+            node.T.scale = cons_scale
+            if node.VT then
+                -- Snap VT when not being dragged so layout updates immediately.
+                if self.dragging ~= node then
+                    node.VT.x = x
+                    node.VT.y = y
+                    node.VT.r = 0
+                    node.VT.scale = cons_scale
+                end
+            end
+        end
+
+        self._consumable_rects[i] = { x = x, y = y, w = draw_w, h = draw_h }
+    end
+
+end
+
+--- What can be sold this frame (extend with new `kind` values later).
+---@return { kind: string, index: number, node: Joker|nil }|nil
+function Game:get_active_sell_target()
+    -- Consumable sell button (enabled whenever a consumable is selected).
+    local idx = self.active_tooltip_consumable_index
+    local c = idx and self.consumables and self.consumables[idx]
+    if c then
+        return { kind = "consumable", index = idx, node = nil }
+    end
+
+    if self.jokers_on_bottom ~= true then return nil end
+    local j = self.active_tooltip_joker
+    if j then
+        for i, jj in ipairs(self.jokers or {}) do
+            if jj == j then
+                return { kind = "joker", index = i, node = j }
+            end
+        end
+    end
+    return nil
+end
+
+function Game:get_sell_anchor_rect(sell_target)
+    if not sell_target then return nil end
+    if sell_target.kind == "joker" then
+        local node = sell_target.node
+        if node and node.get_collision_rect then
+            return node:get_collision_rect()
+        end
+    elseif sell_target.kind == "consumable" then
+        local idx = sell_target.index
+        if self._consumable_rects and self._consumable_rects[idx] then
+            return self._consumable_rects[idx]
+        end
+    end
+    return nil
+end
+
+function Game:perform_sell_for_target(sell_target)
+    if not sell_target then return false end
+    if sell_target.kind == "joker" then
+        return self:sell_owned_joker(sell_target.index)
+    elseif sell_target.kind == "consumable" then
+        local idx = sell_target.index
+        local c = self:remove_consumable_at(idx)
+        if not c then return false end
+        local value = tonumber(c.sell_cost) or 0
+        self.money = (tonumber(self.money) or 0) + value
+        if self.active_tooltip_consumable_index == idx then
+            self.active_tooltip_consumable_index = nil
+        end
+        return true
+    end
+    -- Future kinds: vouchers, boosters, etc.
+    return false
+end
+
+--- One Sell control under the currently selected sellable item (joker tooltip = selection for now).
+function Game:draw_sell_button()
+    local target = self:get_active_sell_target()
+    local anchor = self:get_sell_anchor_rect(target)
+    if not anchor then return end
+
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local prev_font = love.graphics.getFont()
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setFont(font)
+
+    local sell_cost = 1
+    if target.kind == "joker" and target.node then
+        local n = target.node
+        sell_cost = math.max(1, math.floor(tonumber(n.sell_cost) or tonumber(n.def and n.def.sell_cost) or 0))
+    elseif target.kind == "consumable" then
+        local c = self.consumables and self.consumables[target.index]
+        sell_cost = math.max(1, math.floor(tonumber(c and c.sell_cost) or 0))
+    end
+    local label = string.format("Sell $%d", sell_cost)
+    local btn_w = math.max(34, font:getWidth(label) + 10)
+    local btn_h = math.max(14, font:getHeight() + 4)
+    local fill_c = self.C and self.C.PALE_GREEN
+    local shadow_c = self.C and self.C.BLOCK and self.C.BLOCK.SHADOW
+    local text_c = self.C and self.C.WHITE or { 1, 1, 1, 1 }
+
+    local gap = 4
+    local margin = 2
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+    end
+    if not sw or sw <= 0 then sw = 320 end
+
+    -- Prefer placing Sell on the right side of selected item; fallback to left.
+    local bx = anchor.x + anchor.w + gap
+    if bx + btn_w > (sw - margin) then
+        bx = anchor.x - btn_w - gap
+    end
+    if bx < margin then bx = margin end
+
+    local by = anchor.y + math.floor((anchor.h - btn_h) * 0.5 + 0.5)
+    if target.kind == "consumable" then
+        -- Place Sell below the consumable
+        local by_use = by
+        by = by_use + btn_h + 2
+    end
+    if by < margin then by = margin end
+    if _G.draw_rect_with_shadow and fill_c and shadow_c then
+        draw_rect_with_shadow(bx, by, btn_w, btn_h, 3, 2, fill_c, shadow_c, 1)
+    else
+        if type(fill_c) == "table" then
+            love.graphics.setColor(fill_c[1], fill_c[2], fill_c[3], fill_c[4] or 1)
+        else
+            love.graphics.setColor(0.15, 0.15, 0.18, 1)
+        end
+        love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
+    end
+    love.graphics.setColor(self.C.WHITE)
+    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
+    love.graphics.printf(label, bx, text_y, btn_w, "center")
+
+    self._sell_button_hit = {
+        x = bx, y = by, w = btn_w, h = btn_h,
+        target = { kind = target.kind, index = target.index, node = target.node },
+    }
+
+    love.graphics.setFont(prev_font)
+    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+end
+
+--- One Use control under the currently selected consumable.
+function Game:draw_use_button()
+    if not self.active_tooltip_consumable_index then return end
+    if not self.consumables or type(self.consumables) ~= "table" then return end
+    local c = self.consumables[self.active_tooltip_consumable_index]
+    if not c then return end
+    if not self._consumable_rects or not self._consumable_rects[self.active_tooltip_consumable_index] then return end
+
+    local anchor = self._consumable_rects[self.active_tooltip_consumable_index]
+    local idx = self.active_tooltip_consumable_index
+    local enabled = self:consumable_use_enabled(idx)
+
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local prev_font = love.graphics.getFont()
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setFont(font)
+
+    local label = "Use"
+    local btn_w = math.max(34, font:getWidth(label) + 10)
+    local btn_h = math.max(14, font:getHeight() + 4)
+    local fill_c = enabled and (self.C and self.C.ORANGE) or (self.C and self.C.GREY)
+    local shadow_c = self.C and self.C.BLOCK and self.C.BLOCK.SHADOW
+
+    local gap = 4
+    local margin = 2
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+    end
+    if not sw or sw <= 0 then sw = 320 end
+
+    -- Prefer placing Use on the right side of selected item; fallback to left.
+    local bx = anchor.x + anchor.w + gap
+    if bx + btn_w > (sw - margin) then
+        bx = anchor.x - btn_w - gap
+    end
+    if bx < margin then bx = margin end
+
+    local by = anchor.y + math.floor((anchor.h - btn_h) * 0.5 + 0.5)
+    if by < margin then by = margin end
+
+    if _G.draw_rect_with_shadow and fill_c and shadow_c then
+        draw_rect_with_shadow(bx, by, btn_w, btn_h, 3, 2, fill_c, shadow_c, 1)
+    else
+        if type(fill_c) == "table" then
+            love.graphics.setColor(fill_c[1], fill_c[2], fill_c[3], fill_c[4] or 1)
+        else
+            love.graphics.setColor(0.15, 0.15, 0.18, 1)
+        end
+        love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
+    end
+
+    local text_c = enabled and (self.C and self.C.WHITE) or (self.C and self.C.DARK_WHITE)
+    love.graphics.setColor(text_c or { 0.85, 0.85, 0.85, 1 })
+    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
+    love.graphics.printf(label, bx, text_y, btn_w, "center")
+
+    if enabled then
+        self._use_button_hit = {
+            x = bx, y = by, w = btn_w, h = btn_h,
+            target = { kind = "consumable", index = idx },
+        }
+    else
+        self._use_button_hit = nil
+    end
+
+    love.graphics.setFont(prev_font)
+    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+end
+
+function Game:try_sell_button_press(x, y)
+    local hit = self._sell_button_hit
+    if not hit or not hit.target then return false end
+    if not self:_point_in_rect_simple(x, y, hit) then return false end
+    -- Consumables become non-interactive when jokers are on bottom.
+    if hit.target.kind == "consumable" and self.jokers_on_bottom == true then
+        return false
+    end
+    self.touch_start_x = x
+    self.touch_start_y = y
+    return self:perform_sell_for_target(hit.target)
+end
+
+function Game:try_use_button_press(x, y)
+    local hit = self._use_button_hit
+    if not hit or not hit.target then return false end
+    if not self:_point_in_rect_simple(x, y, hit) then return false end
+    -- Consumables become non-interactive when jokers are on bottom.
+    if self.jokers_on_bottom == true then
+        return false
+    end
+    local idx = hit.target.index
+    if not self:consumable_use_enabled(idx) then
+        return false
+    end
+    local ok = self:use_consumable(idx)
+    if ok and self.active_tooltip_consumable_index == idx then
+        self.active_tooltip_consumable_index = nil
+    end
+    self.active_tooltip_card = nil
+    self.active_tooltip_joker = nil
+    return ok
+end
+
+function Game:try_shop_buy_button_press(x, y)
+    return ShopUI.try_buy_button_press(self, x, y)
 end
 
 function Game:_point_in_rect_simple(px, py, r)
@@ -356,6 +1737,11 @@ function Game:draw_blind_chip_anim(blind_index, center_x, center_y, scale)
     love.graphics.draw(atlas.image, quad, center_x - (cell_w * s * 0.5), center_y - (cell_h * s * 0.5), 0, s, s)
 end
 
+--- Horizontal strip: `animation_atli.shop_sign` (px×py per frame, `frames` count).
+function Game:draw_shop_sign_anim(center_x, center_y, scale)
+    ShopUI.draw_shop_sign_anim(self, center_x, center_y, scale)
+end
+
 function Game:draw_bottom_blind_select()
     local card_w, card_h = 98, 300
     local gap = 8
@@ -385,7 +1771,30 @@ function Game:draw_bottom_blind_select()
         local padding = 16
         love.graphics.setLineWidth(2)
         love.graphics.setColor(self.C.GREY)
-        love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142, 4, 4)
+
+        local scorePosY = 105
+        local addedHeight = 0
+        if def and def.id == "boss" then
+            local effect = self:get_boss_effect_text()
+            if effect ~= "" then
+                local info_w = card_w - 10
+                local info_h = 118
+                local info_x = x + 5
+                local info_y = y + 105
+                love.graphics.setColor(self.C.WHITE)
+                love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+                local num_lines = select(2, string.gsub(effect, "\n", "")) + 1
+                love.graphics.printf(effect, info_x + 4, info_y + 4, info_w - 8, "center")
+                addedHeight = love.graphics.getFont():getHeight() * num_lines + 2 * padding
+            end
+            scorePosY = 105 + addedHeight
+        end
+
+        if def and def.id == "boss" then
+            love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142 + addedHeight, 4, 4)
+        else 
+            love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142, 4, 4)
+        end
         love.graphics.setLineWidth(1)
 
 
@@ -407,8 +1816,8 @@ function Game:draw_bottom_blind_select()
 
         love.graphics.setColor(self.C.WHITE)
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
-        local tx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(selectText) / 2)
-        love.graphics.print(selectText, tx, btn_y + 2)
+        local tx = x + math.floor(card_w / 2) - math.floor(selectWidth / 2)
+        love.graphics.printf(selectText, tx, btn_y + 2, selectWidth, "center")
 
         local blindWidth = 70
         local label = self:get_blind_display_name(i)
@@ -416,9 +1825,9 @@ function Game:draw_bottom_blind_select()
         tx = x + math.floor(card_w / 2) - math.floor(blindWidth / 2)
         love.graphics.rectangle("fill", tx, btn_y + selectHeight + 8, blindWidth, selectHeight, 4, 4)
 
-        tx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(label) / 2)
+        tx = x + math.floor(card_w / 2) - math.floor(blindWidth / 2)
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.print(label, tx, btn_y + selectHeight + 8 + 2)
+        love.graphics.printf(label, tx, btn_y + selectHeight + 8 + 2, blindWidth, "center")
         self:draw_blind_chip_anim(i, x + math.floor(card_w / 2), y + 80, 1.1)
 
         local scoreWidth = 78
@@ -431,15 +1840,15 @@ function Game:draw_bottom_blind_select()
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
         love.graphics.setColor(self.C.BLOCK.BACK)
         tx = x + math.floor(card_w / 2) - math.floor(scoreWidth / 2)
-        love.graphics.rectangle("fill", tx, y + 105, scoreWidth, scoreHeight, 4, 4)
+        love.graphics.rectangle("fill", tx, y + scorePosY, scoreWidth, scoreHeight, 4, 4)
 
         love.graphics.setColor(self.C.WHITE)
-        ty = y + 108
+        ty = y + scorePosY + 3
         love.graphics.print("Score at Least", tx + 6, ty)
         love.graphics.setColor(self.C.RED)
         local req = tostring(target)
-        local rx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(req) / 2)
-        love.graphics.print(req, rx, ty + 12)
+        local rx = x + math.floor(card_w / 2) - math.floor(scoreWidth / 2)
+        love.graphics.printf(req, rx, ty + 12, scoreWidth, "center")
         
         love.graphics.setColor(self.C.WHITE)
         req = "Reward: "..string.rep("$", reward).."+"
@@ -449,85 +1858,15 @@ function Game:draw_bottom_blind_select()
         love.graphics.setColor(self.C.MONEY)
         love.graphics.print("$"..string.rep("$", reward).."+", rx + love.graphics.getFont():getWidth("Reward: "), ty + 24)
         
-
-        --[[ if not selectable then
-            local grey = self.C.GREY
-            local premultiplied_grey = {
-                grey[1] * grey[4],
-                grey[2] * grey[4],
-                grey[3] * grey[4],
-                grey[4] or 1
-            }
-            love.graphics.setBlendMode("multiply", "premultiplied")
-            love.graphics.setColor(premultiplied_grey)
-            love.graphics.setLineWidth(3)
-            love.graphics.rectangle("fill", x, y, card_w, card_h, 4, 4)
-            love.graphics.setBlendMode("alpha")
-            love.graphics.setLineWidth(1)
-
-        end ]]
     end
 end
 
+function Game:draw_shop_button(param)
+    ShopUI.draw_shop_button(self, param)
+end
+
 function Game:draw_bottom_shop()
-    local panel_x, panel_y, panel_w, panel_h = 8, 8, 304, 124
-    if _G.draw_rect_with_shadow then
-        draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 4, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
-    else
-        love.graphics.setColor(self.C.PANEL)
-        love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
-    end
-
-    love.graphics.setColor(self.C.WHITE)
-    love.graphics.setFont(self.FONTS.PIXEL.MEDIUM)
-    love.graphics.print("Shop", panel_x + 8, panel_y + 4)
-    love.graphics.setFont(self.FONTS.PIXEL.SMALL)
-    love.graphics.print("Tap offer to buy | Tap owned joker to sell", panel_x + 8, panel_y + 22)
-
-    self._shop_offer_rects = {}
-    local offer_w, offer_h = 145, 34
-    for i, offer in ipairs(self.shop_offers or {}) do
-        local ox = panel_x + 8 + ((i - 1) * (offer_w + 6))
-        local oy = panel_y + 42
-        if _G.draw_rect_with_shadow then
-            draw_rect_with_shadow(ox, oy, offer_w, offer_h, 3, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
-        else
-            love.graphics.setColor(self.C.BLOCK.BACK)
-            love.graphics.rectangle("fill", ox, oy, offer_w, offer_h, 3, 3)
-        end
-        love.graphics.setColor(self.C.WHITE)
-        love.graphics.print(offer.name or "Joker", ox + 6, oy + 5)
-        love.graphics.setColor(self.C.MONEY)
-        love.graphics.print("$"..tostring(offer.price or 0), ox + 6, oy + 18)
-        self._shop_offer_rects[i] = { x = ox, y = oy, w = offer_w, h = offer_h }
-    end
-
-    self._shop_owned_rects = {}
-    local owned_y = panel_y + 84
-    local owned_w, owned_h = 56, 26
-    for i, j in ipairs(self.jokers or {}) do
-        local ox = panel_x + 8 + ((i - 1) * (owned_w + 4))
-        if ox + owned_w <= panel_x + panel_w - 8 then
-            if _G.draw_rect_with_shadow then
-                draw_rect_with_shadow(ox, owned_y, owned_w, owned_h, 3, 2, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 2)
-            else
-                love.graphics.setColor(self.C.BLOCK.BACK)
-                love.graphics.rectangle("fill", ox, owned_y, owned_w, owned_h, 3, 3)
-            end
-            love.graphics.setColor(self.C.WHITE)
-            local short = (j.def and j.def.name) and string.sub(j.def.name, 1, 7) or "Joker"
-            love.graphics.print(short, ox + 4, owned_y + 3)
-            love.graphics.setColor(self.C.MONEY)
-            love.graphics.print("$"..tostring(j.sell_value or 0), ox + 4, owned_y + 14)
-            self._shop_owned_rects[i] = { x = ox, y = owned_y, w = owned_w, h = owned_h }
-        end
-    end
-
-    self._shop_continue_rect = { x = panel_x + panel_w - 84, y = panel_y + panel_h - 24, w = 74, h = 18 }
-    love.graphics.setColor(self.C.GREEN)
-    love.graphics.rectangle("line", self._shop_continue_rect.x, self._shop_continue_rect.y, self._shop_continue_rect.w, self._shop_continue_rect.h, 3, 3)
-    love.graphics.setColor(self.C.WHITE)
-    love.graphics.print("Continue", self._shop_continue_rect.x + 10, self._shop_continue_rect.y + 4)
+    ShopUI.draw_bottom_shop(self)
 end
 
 function Game:handle_blind_select_touch(x, y)
@@ -547,28 +1886,23 @@ function Game:handle_blind_select_touch(x, y)
     return false
 end
 
+function Game:draw_bottom_round_win()
+    RoundWinUI.draw_bottom(self, self._round_win_display_lines)
+end
+
+function Game:handle_round_win_touch(x, y)
+    return RoundWinUI.handle_touch(self, x, y)
+end
+
 function Game:handle_shop_touch(x, y)
-    for i, r in ipairs(self._shop_offer_rects or {}) do
-        if self:_point_in_rect_simple(x, y, r) then
-            self:buy_shop_joker(i)
-            return true
-        end
-    end
-    for i, r in ipairs(self._shop_owned_rects or {}) do
-        if self:_point_in_rect_simple(x, y, r) then
-            self:sell_owned_joker(i)
-            return true
-        end
-    end
-    if self:_point_in_rect_simple(x, y, self._shop_continue_rect) then
-        self:continue_from_shop()
-        return true
-    end
-    return false
+    return ShopUI.handle_touch(self, x, y)
 end
 
 function Game:update(dt)
     self:_update_joker_emit_queue(dt)
+    if self.STATE == self.STATES.ROUND_EVAL then
+        self:update_round_win_eval(dt)
+    end
     for _, node in ipairs(self.nodes) do
         if node.update then
             node:update(dt)
@@ -735,47 +2069,95 @@ function Game:get_node_at(x, y)
     return nil
 end
 
+--- Horizontal step and span for `n` jokers in `screen_w`, overlapping (fanned) when natural width exceeds `screen_wdt`.
+---@return number step x-distance between successive joker left edges
+---@return number total_span width from first to last joker's right edge
+---@return number start_x left edge of first joker, centered in screen
+function Game:_compute_fanned_joker_row(n, screen_w, card_w, gap_w, margin)
+    margin = tonumber(margin) or 8
+    n = tonumber(n) or 0
+    card_w = tonumber(card_w) or 71
+    gap_w = tonumber(gap_w) or 8
+    screen_w = tonumber(screen_w) or 400
+    if n <= 0 then return 0, 0, math.floor(screen_w * 0.5 + 0.5) end
+    local max_w = math.max(card_w, screen_w - 2 * margin)
+    local natural_step = card_w + gap_w
+    local natural_span = n * card_w + (n - 1) * gap_w
+    local step, total_span
+    if n == 1 then
+        step = 0
+        total_span = card_w
+    elseif natural_span <= max_w then
+        step = natural_step
+        total_span = natural_span
+    else
+        step = (max_w - card_w) / (n - 1)
+        total_span = (n - 1) * step + card_w
+    end
+    local start_x = math.floor((screen_w - total_span) * 0.5 + 0.5)
+    return step, total_span, start_x
+end
+
+--- Rough top/bottom start positions before `_apply_joker_layout` (uses owned count).
+function Game:recompute_joker_slot_layout()
+    self.joker_slot_w = self.joker_slot_w or 71
+    self.joker_slot_h = self.joker_slot_h or 95
+    self.joker_slot_gap = self.joker_slot_gap or 8
+    self.joker_slot_y_top = self.joker_slot_y_top or 124
+    self.joker_slot_y_bottom = self.joker_slot_y_bottom or 20
+
+    local BOTTOM_SCREEN_W = 320
+    local TOP_SCREEN_W = 400
+    local n = #(self.jokers or {})
+    local eff_n = math.max(n, 1)
+    local card_w = self.joker_slot_w or 71
+    local gap = self.joker_slot_gap or 8
+
+    local _, _, top_x = self:_compute_fanned_joker_row(eff_n, TOP_SCREEN_W, card_w, gap, 8)
+    self.joker_slot_start_x = top_x
+
+    self.joker_slot_scale_bottom = 1
+    local s = self.joker_slot_scale_bottom
+    local eff_w = card_w * s
+    local eff_gap = gap * s
+    local _, _, bot_x = self:_compute_fanned_joker_row(eff_n, BOTTOM_SCREEN_W, eff_w, eff_gap, 8)
+    self.joker_slot_start_x_bottom = bot_x
+end
+
+--- `joker_base_capacity` + one slot per owned Joker with Negative edition.
+function Game:refresh_joker_capacity_from_negatives()
+    if not self.joker_base_capacity then self.joker_base_capacity = 5 end
+    local bonus = 0
+    for _, j in ipairs(self.jokers or {}) do
+        if j and Joker.normalize_edition(j.edition) == "negative" then
+            bonus = bonus + 1
+        end
+    end
+    self.joker_capacity = (self.joker_base_capacity or 5) + bonus
+    self:recompute_joker_slot_layout()
+    self:_apply_joker_layout()
+    self:sync_jokers_interactivity()
+end
+
 function Game:init_jokers()
     -- Owned Jokers live in `self.jokers` (packed left-to-right).
-    -- `self.joker_capacity` defines the fixed UI slot count (panel size),
-    -- and does NOT change the number of owned nodes.
     self.jokers = {}
 
     if not Joker then return end
 
-    -- Capacity-first: start at 5 (you can modify later via gameplay).
-    self.joker_capacity = self.joker_capacity or 5
+    self.joker_base_capacity = self.joker_base_capacity or 5
+    self.joker_capacity = self.joker_base_capacity
 
     self.jokers_on_bottom = false
     self.jokers_sliding = false
     self.jokers_slide_time_left = 0
 
-    -- Slot geometry is shared by both top- and bottom-screen placements.
     self.joker_slot_w, self.joker_slot_h = 71, 95
     self.joker_slot_gap = 8
-    self.joker_slot_y_top = 124 -- under top HUD panel
-    self.joker_slot_y_bottom = 20 -- above the hand fan on bottom screen
+    self.joker_slot_y_top = 124
+    self.joker_slot_y_bottom = 20
 
-    -- Bottom screen is narrower than top in this project (hand uses 320 wide).
-    local BOTTOM_SCREEN_W = 320
-    local TOP_SCREEN_W = 400
-
-    local slot_count = self.joker_capacity
-    local base_total_w = slot_count * self.joker_slot_w + (slot_count - 1) * self.joker_slot_gap
-
-    -- Top layout uses full scale (1.0) and centers within the top-screen width.
-    local top_start_x = math.floor((TOP_SCREEN_W - base_total_w) * 0.5 + 0.5)
-    if top_start_x < 0 then top_start_x = 0 end
-    self.joker_slot_start_x = top_start_x
-
-    -- Bottom layout centers and scales down to fit within the bottom-screen width.
-    local bottom_scale = math.min(1, (BOTTOM_SCREEN_W or 320) / math.max(1, base_total_w))
-    self.joker_slot_scale_bottom = bottom_scale
-
-    local bottom_total_w = base_total_w * bottom_scale
-    local bottom_start_x = math.floor((BOTTOM_SCREEN_W - bottom_total_w) * 0.5 + 0.5)
-    if bottom_start_x < 0 then bottom_start_x = 0 end
-    self.joker_slot_start_x_bottom = bottom_start_x
+    self:recompute_joker_slot_layout()
 
     -- Demo-owned jokers (randomized for testing).
     -- Replace this with your shop/buy system later.
@@ -796,34 +2178,53 @@ function Game:init_jokers()
     -- for i = 1, want do
     --     self:add_joker_by_def(pool[i])
     -- end
-    self:add_joker_by_def("j_mime")
-    self:add_joker_by_def("j_banner")
-    self:add_joker_by_def("j_mystic_summit")
-    self:add_joker_by_def("j_clever")
-    self:add_joker_by_def("j_gluttenous_joker")
+    -- self:add_joker_by_def("j_turtle_bean")
+    -- self:add_joker_by_def("j_oops")
+    -- self:add_joker_by_def("j_business")
+    -- self:add_joker_by_def("j_lucky_cat")
+    -- self:add_joker_by_def("j_cavendish")
+    -- for _, jj in ipairs(self.jokers) do
+    --     if jj and jj.refresh_quads then jj:refresh_quads() end
+    -- end
 end
 
 ---Add an owned Joker by definition id.
 ---Owned Jokers are packed left-to-right and never exceed `self.joker_capacity`.
 ---@param def_id string
+---@param create_params table|nil optional `{ edition = "foil"|"holo"|... }` (single edition only)
 ---@return boolean
-function Game:add_joker_by_def(def_id)
+function Game:add_joker_by_def(def_id, create_params)
     if type(def_id) ~= "string" or def_id == "" then return false end
     if not JOKER_DEFS or type(JOKER_DEFS) ~= "table" then return false end
     local def = JOKER_DEFS[def_id]
     if type(def) ~= "table" then return false end
 
-    if not self.joker_capacity then self.joker_capacity = 5 end
+    if not self.joker_base_capacity then self.joker_base_capacity = 5 end
+    if not self.joker_capacity then self.joker_capacity = self.joker_base_capacity end
     if not self.jokers then self.jokers = {} end
-    if #self.jokers >= self.joker_capacity then return false end
 
-    -- Create at an arbitrary location; `_apply_joker_layout()` will position it.
-    local j = Joker(0, 0, self.joker_slot_w, self.joker_slot_h, def, { face_up = true })
+    local merged = { face_up = true }
+    if type(create_params) == "table" then
+        for k, v in pairs(create_params) do
+            merged[k] = v
+        end
+    end
+
+    local neg_owned = 0
+    for _, jj in ipairs(self.jokers) do
+        if jj and Joker.normalize_edition(jj.edition) == "negative" then
+            neg_owned = neg_owned + 1
+        end
+    end
+    local new_is_neg = Joker.normalize_edition(merged.edition) == "negative"
+    local cap_after = (self.joker_base_capacity or 5) + neg_owned + (new_is_neg and 1 or 0)
+    if #self.jokers >= cap_after then return false end
+
+    local j = Joker(0, 0, self.joker_slot_w, self.joker_slot_h, def, merged)
     table.insert(self.jokers, j)
     self:add(j)
 
-    self:_apply_joker_layout()
-    self:sync_jokers_interactivity()
+    self:refresh_joker_capacity_from_negatives()
 
     -- Snap immediately if we're not in a DPAD slide transition.
     if self.jokers_sliding ~= true then
@@ -839,28 +2240,115 @@ function Game:add_joker_by_def(def_id)
     return true
 end
 
+function Game:hasJoker(joker_id)
+    return self:count_jokers_with_id(joker_id) > 0
+end
+
+--- Max debt while Credit Card is owned (from `JOKER_DEFS.j_credit_card.config.extra`, default 20).
+function Game:get_credit_card_debt_limit()
+    local d = JOKER_DEFS and JOKER_DEFS.j_credit_card
+    local c = type(d) == "table" and d.config and d.config.extra
+    return math.max(1, math.floor(tonumber(c) or 20))
+end
+
+function Game:has_credit_card()
+    return self:hasJoker("j_credit_card")
+end
+
+--- Whether the player can pay `cost` from the shop (buy / reroll). Free costs (0) always allowed.
+--- With Credit Card: may spend until money reaches -debt_limit.
+--- Without Credit Card: if money is negative (e.g. sold Credit Card while in debt), no paid purchases until money is >= 0.
+function Game:can_afford_price(cost)
+    cost = math.max(0, tonumber(cost) or 0)
+    if cost <= 0 then
+        return true
+    end
+    local m = tonumber(self.money) or 0
+    if self:has_credit_card() then
+        local lim = self:get_credit_card_debt_limit()
+        return (m - cost) >= -lim
+    end
+    if m < 0 then
+        return false
+    end
+    return m >= cost
+end
+
+--- Floor for money when losing it to bosses etc. (-debt_limit with Credit Card, else 0).
+function Game:get_money_loss_floor()
+    if self:has_credit_card() then
+        return -self:get_credit_card_debt_limit()
+    end
+    return 0
+end
+
+---@param joker_id string
+---@return integer
+function Game:count_jokers_with_id(joker_id)
+    if type(self.jokers) ~= "table" or type(joker_id) ~= "string" or joker_id == "" then return 0 end
+    local n = 0
+    for _, j in ipairs(self.jokers) do
+        local def = j and j.def
+        if type(def) == "table" and def.id == joker_id then
+            n = n + 1
+        end
+    end
+    return n
+end
+
+function Game:count_cards_in_full_deck(predicate)
+    local total = 0
+    local function count_in(list)
+        if type(list) ~= "table" then return end
+        for _, card in ipairs(list) do
+            if type(card) == "table" then
+                if not predicate or predicate(card) then
+                    total = total + 1
+                end
+            end
+        end
+    end
+    local deck = self.deck
+    if deck then
+        count_in(deck.cards)
+        count_in(deck.discard_pile)
+    end
+    if self.hand and type(self.hand.cards) == "table" then
+        count_in(self.hand.cards)
+    end
+    return total
+end
+
 function Game:_apply_joker_layout()
     if not self.jokers then return end
 
-    if self.jokers_on_bottom == true then
-        local s = self.joker_slot_scale_bottom or 1
-        local start_x = self.joker_slot_start_x_bottom or 0
-        local y = self.joker_slot_y_bottom
+    local TOP_SCREEN_W = 400
+    local BOTTOM_SCREEN_W = 320
+    local slot_w = self.joker_slot_w or 71
+    local slot_h = self.joker_slot_h or 95
+    local gap = self.joker_slot_gap or 8
 
-        -- Compensation because Joker scales around its center, which shifts
-        -- the visible top-left when s != 1.
-        local slot_w = self.joker_slot_w or 71
-        local slot_h = self.joker_slot_h or 95
+    if self.jokers_on_bottom == true then
+        local n = #self.jokers
+        if n <= 0 then return end
+
+        local s = self.joker_slot_scale_bottom or 1
+        local y = self.joker_slot_y_bottom or 20
+        local eff_w = slot_w * s
+        local eff_gap = gap * s
+        local step, total_span, start_x =
+            self:_compute_fanned_joker_row(n, BOTTOM_SCREEN_W, eff_w, eff_gap, 8)
+
+        self._joker_row_step_bottom = step
+        self._joker_row_start_x_bottom = start_x
+        self.joker_row_span_bottom = total_span
+        self.joker_slot_start_x_bottom = start_x
+
         local delta_x = (slot_w * s * (1 - s)) / 2
         local delta_y = (slot_h * s * (1 - s)) / 2
 
-        -- We want the effective visible left/top edges to match:
-        --   desired_left = start_x + (i-1)*step
-        -- So set T.x/T.y to the draw coordinates that counteract that shift.
-
         for i, j in ipairs(self.jokers) do
             if j and j.T then
-                local step = (slot_w + (self.joker_slot_gap or 0)) * s
                 local desired_left = start_x + (i - 1) * step
                 j.T.x = desired_left - delta_x
                 j.T.y = y - delta_y
@@ -868,13 +2356,19 @@ function Game:_apply_joker_layout()
             end
         end
     else
+        local n = #self.jokers
+        if n <= 0 then return end
+
         local s = 1
-        local start_x = self.joker_slot_start_x or 0
-        local y = self.joker_slot_y_top
+        local y = self.joker_slot_y_top or 124
+        local step, total_span, start_x = self:_compute_fanned_joker_row(n, TOP_SCREEN_W, slot_w, gap, 8)
+
+        self._joker_row_step_top = step
+        self.joker_row_span_top = total_span
+        self.joker_slot_start_x = start_x
 
         for i, j in ipairs(self.jokers) do
             if j and j.T then
-                local step = (self.joker_slot_w + self.joker_slot_gap) * s
                 j.T.x = start_x + (i - 1) * step
                 j.T.y = y
                 j.T.scale = s
@@ -897,28 +2391,100 @@ function Game:sync_jokers_interactivity()
     end
 end
 
+function Game:prepare_joker_event_ctx(event_name, ctx)
+    if type(ctx) ~= "table" then ctx = {} end
+    ctx.event_name = event_name
+    if ctx.event == nil then
+        ctx.event = event_name
+    end
+    return ctx
+end
+
+--- All owned jokers sorted left-to-right with active-slot filtering.
+function Game:_collect_jokers_in_slot_order()
+    local out = {}
+    if not self.jokers or type(self.jokers) ~= "table" then return out end
+    for _, j in ipairs(self.jokers) do
+        if j then table.insert(out, j) end
+    end
+    table.sort(out, function(a, b)
+        local ax = (a.T and a.T.x) or (a.VT and a.VT.x) or 0
+        local bx = (b.T and b.T.x) or (b.VT and b.VT.x) or 0
+        return ax < bx
+    end)
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id == "bl_final_heart" then
+        local blocked = tonumber(self.boss_runtime and self.boss_runtime.crimson_disabled_joker) or -1
+        if blocked >= 1 and blocked <= #out then
+            table.remove(out, blocked)
+        end
+    end
+    return out
+end
+
+--- All owned jokers sorted left-to-right (for per-joker edition steps on `on_hand_scored`).
+function Game:collect_all_jokers_sorted()
+    return self:_collect_jokers_in_slot_order()
+end
+
 --- Jokers in slot order (left-to-right) that match `event_name` and have `apply_effect`.
 ---@param event_name string
 ---@param ctx table
 ---@return table[]
 function Game:collect_matching_jokers(event_name, ctx)
     local out = {}
-    if not self.jokers or type(self.jokers) ~= "table" then return out end
     if type(event_name) ~= "string" or event_name == "" then return out end
     if type(ctx) ~= "table" then ctx = {} end
 
-    for _, j in ipairs(self.jokers) do
+    for _, j in ipairs(self:_collect_jokers_in_slot_order()) do
         if j and j.matches_trigger and j:matches_trigger(event_name, ctx) and j.apply_effect then
             table.insert(out, j)
         end
     end
-    -- Resolve left-to-right on screen (array order can diverge after drag-reorder).
-    table.sort(out, function(a, b)
-        local ax = (a.T and a.T.x) or (a.VT and a.VT.x) or 0
-        local bx = (b.T and b.T.x) or (b.VT and b.VT.x) or 0
-        return ax < bx
-    end)
     return out
+end
+
+--- Sum extra scoring passes from Red Seal (once) and each joker's `query_retrigger` (Balatro-style additive retriggers).
+--- `retrigger_ctx` should include `card_node` (or `retrigger_card`), `played_cards` when scoring the play area, and `held` is set from the `held` argument.
+---@param held boolean
+---@param retrigger_ctx table|nil
+---@return number
+function Game:sum_retrigger_extras(held, retrigger_ctx)
+    if type(retrigger_ctx) ~= "table" then return 0 end
+    retrigger_ctx.held = not not held
+    local card = retrigger_ctx.card_node or retrigger_ctx.retrigger_card
+    local R = 0
+    if card and card.seal == "red" then
+        R = R + 1
+    end
+
+    local skip = {}
+    local boss_id = self:get_active_boss_blind_id()
+    if boss_id == "bl_final_heart" then
+        local blocked = tonumber(self.boss_runtime and self.boss_runtime.crimson_disabled_joker) or -1
+        local sorted = {}
+        if self.jokers and type(self.jokers) == "table" then
+            for _, j in ipairs(self.jokers) do
+                if j then table.insert(sorted, j) end
+            end
+        end
+        table.sort(sorted, function(a, b)
+            local ax = (a.T and a.T.x) or (a.VT and a.VT.x) or 0
+            local bx = (b.T and b.T.x) or (b.VT and b.VT.x) or 0
+            return ax < bx
+        end)
+        if blocked >= 1 and blocked <= #sorted then
+            skip[sorted[blocked]] = true
+        end
+    end
+
+    if not self.jokers or type(self.jokers) ~= "table" then return R end
+    for _, j in ipairs(self.jokers) do
+        if j and not skip[j] and j.query_retrigger then
+            R = R + (tonumber(j:query_retrigger(retrigger_ctx)) or 0)
+        end
+    end
+    return R
 end
 
 ---Emit a joker event to all jokers and apply their effects to the context.
@@ -928,15 +2494,38 @@ end
 function Game:emit_joker_event(event_name, ctx)
     if not self.jokers or type(self.jokers) ~= "table" then return end
     if type(event_name) ~= "string" or event_name == "" then return end
-    if type(ctx) ~= "table" then ctx = {} end
+    ctx = self:prepare_joker_event_ctx(event_name, ctx)
 
-    for _, j in ipairs(self.jokers) do
-        if j and j.matches_trigger and j:matches_trigger(event_name, ctx) then
-            if j.apply_effect then
+    if event_name == "on_hand_scored" then
+        for _, j in ipairs(self:collect_all_jokers_sorted()) do
+            if j and j.apply_edition_on_hand_scored then
+                j:apply_edition_on_hand_scored(ctx)
+            end
+            self:_sync_joker_ctx(ctx)
+            if j and j.matches_trigger and j:matches_trigger(event_name, ctx) and j.apply_effect then
                 j:apply_effect(ctx)
+                self:_sync_joker_ctx(ctx)
             end
         end
+        return
     end
+
+    for _, j in ipairs(self:collect_matching_jokers(event_name, ctx)) do
+        self:_sync_joker_ctx(ctx)
+        if j and j.apply_effect then
+            j:apply_effect(ctx)
+            self:_sync_joker_ctx(ctx)
+        end
+    end
+end
+
+--- Playing cards removed from the run (destroyed, not sent to discard). `destroyed_cards` is an array of logical card data tables.
+---@param destroyed_cards table[]
+function Game:emit_on_destroy_cards(destroyed_cards)
+    if type(destroyed_cards) ~= "table" or #destroyed_cards == 0 then return end
+    self:emit_joker_event("on_destroy", {
+        destroyed_cards = destroyed_cards,
+    })
 end
 
 function Game:_sync_joker_ctx(ctx)
@@ -959,10 +2548,19 @@ function Game:_apply_one_joker_emit()
         return
     end
     local j = q.list[self._joker_emit_next]
-    if j and j.apply_effect then
-        j:apply_effect(q.ctx)
+    if j then
+        q.ctx = self:prepare_joker_event_ctx(q.event_name, q.ctx)
+        if q.event_name == "on_hand_scored" and j.apply_edition_on_hand_scored then
+            j:apply_edition_on_hand_scored(q.ctx)
+        end
+        self:_sync_joker_ctx(q.ctx)
+        if j.apply_effect then
+            if q.pre_matched == true or (j.matches_trigger and q.event_name and j:matches_trigger(q.event_name, q.ctx)) then
+                j:apply_effect(q.ctx)
+            end
+        end
+        self:_sync_joker_ctx(q.ctx)
     end
-    self:_sync_joker_ctx(q.ctx)
     self._joker_emit_next = self._joker_emit_next + 1
     if self._joker_emit_next > #q.list then
         self._joker_emit_queue = nil
@@ -976,10 +2574,17 @@ end
 ---@param ctx table|nil
 ---@return boolean
 function Game:begin_joker_emit(event_name, ctx)
-    local list = self:collect_matching_jokers(event_name, ctx)
+    local pre_matched = false
+    local list
+    if event_name == "on_hand_scored" then
+        list = self:collect_all_jokers_sorted()
+    else
+        list = self:collect_matching_jokers(event_name, ctx)
+        pre_matched = true
+    end
     if #list == 0 then return false end
-    if type(ctx) ~= "table" then ctx = {} end
-    self._joker_emit_queue = { list = list, ctx = ctx }
+    ctx = self:prepare_joker_event_ctx(event_name, ctx)
+    self._joker_emit_queue = { list = list, ctx = ctx, event_name = event_name, pre_matched = pre_matched }
     self._joker_emit_next = 1
     self._joker_emit_timer = 0
     self:_apply_one_joker_emit()
@@ -1026,6 +2631,14 @@ function Game:prepare_hand_for_new_blind()
     if not self.deck and Deck then
         self.deck = Deck()
     end
+
+    data = {
+
+    }
+    
+    self:emit_joker_event("on_blind_selected", data)
+
+    self:set_state(self.STATES.SELECTING_HAND)
     if self.deck and self.deck.shuffle then
         self.deck:shuffle()
     end
@@ -1038,17 +2651,21 @@ function Game:prepare_hand_for_new_blind()
     if self.hand and self.hand.fill_from_deck then
         self.hand:fill_from_deck()
     end
+    self:boss_on_hand_refilled(true)
+
+    self:emit_joker_event("on_round_begin", {})
 end
 
 function Game:initialize_run_loop()
     self.STAGE = self.STAGES.RUN
     self.ante = 1
     self.round = 1
-    self.money = 0
-    self.hands = 5
-    self.discards = 5
+    self.money = 10
+    self.hands = self:get_effective_hands_per_round()
+    self.discards = self:get_effective_discards_per_round()
     self.round_score = 0
     self.last_hand_score = 0
+    self.selectedHandHidden = false
     self.current_blind_index = 1
     self.selected_blind_index = 1
     self._blind_resolution_pending = false
@@ -1056,11 +2673,15 @@ function Game:initialize_run_loop()
     self.current_blind_reward = 0
     self.current_blind_name = "Small Blind"
     self.shop_offers = {}
-    self.shop_offer_cursor = 1
-    self.shop_sell_cursor = 1
+    self.shop_reroll_count = 0
+    self.hand_play_counts = {}
     if self.hand and self.hand.clear then
         self.hand:clear()
     end
+    -- Start each run with a couple of simple Consumables for testing.
+    self.consumables = {}
+    self.last_consumable_use_id = nil
+    self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
 end
 
@@ -1068,7 +2689,9 @@ function Game:enter_blind_select()
     self:set_state(self.STATES.BLIND_SELECT)
     self.selected_blind_index = self.current_blind_index or 1
     if self.selected_blind_index == 3 then
-        self:roll_boss_blind()
+        if not self.current_boss_blind_id then
+            self:roll_boss_blind()
+        end
     end
     self.round_score = 0
     self.last_hand_score = 0
@@ -1104,14 +2727,17 @@ function Game:start_selected_blind()
     self.round_score = 0
     self.last_hand_score = 0
     self._blind_resolution_pending = false
+    self:boss_reset_for_new_blind()
     self:prepare_hand_for_new_blind()
-    self:set_state(self.STATES.SELECTING_HAND)
+
     return true
 end
 
 function Game:advance_after_shop()
     if self._last_completed_blind_was_boss then
         self.ante = (tonumber(self.ante) or 1) + 1
+        self._ante_played_card_uids = {}
+        self.current_boss_blind_id = nil
         self.current_blind_index = 1
     else
         self.current_blind_index = math.min(3, (tonumber(self.current_blind_index) or 1) + 1)
@@ -1126,51 +2752,390 @@ function Game:continue_from_shop()
     self:advance_after_shop()
 end
 
-function Game:_build_shop_pool()
-    local pool = {}
-    if type(JOKER_DEFS) ~= "table" then return pool end
-    local owned = {}
+-- ---------------------------------------------------------------------------
+-- Shop offers: sequential queue driven only by SEED (isolated from math.random).
+-- Pool weights: Joker 20, Tarot 4, Planet 4. Shop jokers: Common/Uncommon/Rare only.
+-- ---------------------------------------------------------------------------
+
+function Game:init_shop_offer_queue()
+    self.shop_offer_queue = {}
+    local s = tonumber(self.SEED) or 0
+    s = math.floor(s) % 4294967296
+    if s < 0 then s = s + 4294967296 end
+    self._shop_rng_state = (s * 2654435769) % 4294967296
+    if self._shop_rng_state == 0 then
+        self._shop_rng_state = 2463534242
+    end
+    self:_refill_shop_offer_queue(128)
+end
+
+function Game:_shop_rng_advance()
+    local st = tonumber(self._shop_rng_state) or 1
+    st = (st * 1664525 + 1013904223) % 4294967296
+    self._shop_rng_state = st
+    return st
+end
+
+function Game:_shop_rand_int(lo, hi)
+    lo = math.floor(tonumber(lo) or 1)
+    hi = math.floor(tonumber(hi) or lo)
+    if hi < lo then return lo end
+    local span = hi - lo + 1
+    local u = self:_shop_rng_advance()
+    return lo + math.floor((u / 4294967296) * span)
+end
+
+function Game:_shop_joker_owned(id)
+    if type(id) ~= "string" then return false end
     for _, j in ipairs(self.jokers or {}) do
-        if j and j.def and j.def.id then
-            owned[j.def.id] = true
+        if j and j.def and j.def.id == id then
+            return true
         end
     end
+    return false
+end
+
+function Game:_refill_shop_offer_queue(target_len)
+    self.shop_offer_queue = self.shop_offer_queue or {}
+    target_len = math.max(0, math.floor(tonumber(target_len) or 0))
+    while #self.shop_offer_queue < target_len do
+        self.shop_offer_queue[#self.shop_offer_queue + 1] = self:_generate_next_shop_queue_offer()
+    end
+end
+
+function Game:_pop_shop_queue_entry()
+    self:_refill_shop_offer_queue(64)
+    return table.remove(self.shop_offer_queue, 1)
+end
+
+function Game:_shop_queue_emergency_joker_offer()
+    local fallback_id = "j_joker"
+    if type(JOKER_DEFS) == "table" then
+        local ks = {}
+        for jid, def in pairs(JOKER_DEFS) do
+            if type(def) == "table" and type(jid) == "string" then
+                ks[#ks + 1] = jid
+            end
+        end
+        table.sort(ks)
+        if #ks > 0 then fallback_id = ks[1] end
+    end
+    local fd = JOKER_DEFS and JOKER_DEFS[fallback_id]
+    return {
+        kind = "joker",
+        id = fallback_id,
+        name = fd and fd.name or fallback_id,
+        price = self:shop_price_for_joker_offer(fd, "base"),
+        edition = "base",
+    }
+end
+
+function Game:_generate_next_shop_queue_offer()
+    local roll = self:_shop_rand_int(1, 28)
+    local kind = "planet"
+    if roll <= 20 then
+        kind = "joker"
+    elseif roll <= 24 then
+        kind = "tarot"
+    else
+        kind = "planet"
+    end
+
+    if kind == "joker" then
+        local joker_offer = self:_roll_shop_queue_joker_offer()
+        if joker_offer then return joker_offer end
+        kind = self:_shop_rand_int(1, 2) == 1 and "tarot" or "planet"
+    end
+
+    if kind == "tarot" then
+        local c = self:_roll_shop_queue_consumable_offer("tarot")
+        if c then return c end
+        local c2 = self:_roll_shop_queue_consumable_offer("planet")
+        if c2 then return c2 end
+    else
+        local c = self:_roll_shop_queue_consumable_offer("planet")
+        if c then return c end
+        local c2 = self:_roll_shop_queue_consumable_offer("tarot")
+        if c2 then return c2 end
+    end
+
+    local j2 = self:_roll_shop_queue_joker_offer()
+    if j2 then return j2 end
+    return self:_shop_queue_emergency_joker_offer()
+end
+
+function Game:_roll_shop_queue_joker_offer()
+    if type(JOKER_DEFS) ~= "table" then return nil end
+    local rar_roll = self:_shop_rand_int(1, 100)
+    local target_rar = 3
+    if rar_roll <= 70 then
+        target_rar = 1
+    elseif rar_roll <= 95 then
+        target_rar = 2
+    end
+    local candidates = {}
     for id, def in pairs(JOKER_DEFS) do
-        if type(def) == "table" and owned[id] ~= true then
-            pool[#pool + 1] = id
+        if type(def) == "table" and type(id) == "string" then
+            local rv = tonumber(def.rarity) or 1
+            if rv == target_rar and rv >= 1 and rv <= 3 then
+                candidates[#candidates + 1] = id
+            end
         end
     end
-    for i = #pool, 2, -1 do
-        local j = math.random(i)
-        pool[i], pool[j] = pool[j], pool[i]
+    table.sort(candidates)
+    if #candidates == 0 then
+        for id, def in pairs(JOKER_DEFS) do
+            if type(def) == "table" and type(id) == "string" then
+                local rv = tonumber(def.rarity) or 1
+                if rv >= 1 and rv <= 3 then
+                    candidates[#candidates + 1] = id
+                end
+            end
+        end
+        table.sort(candidates)
     end
-    return pool
+    if #candidates == 0 then return nil end
+    local pick = candidates[self:_shop_rand_int(1, #candidates)]
+    local def = JOKER_DEFS[pick]
+    local edition = "base"
+    return {
+        kind = "joker",
+        id = pick,
+        name = def and def.name or pick,
+        price = self:shop_price_for_joker_offer(def, edition),
+        edition = edition,
+    }
+end
+
+function Game:_roll_shop_queue_consumable_offer(wanted_kind)
+    if type(CONSUMABLE_DEFS) ~= "table" then return nil end
+    local ids = {}
+    for id, def in pairs(CONSUMABLE_DEFS) do
+        if type(def) == "table" and def.kind == wanted_kind and type(id) == "string" then
+            if id == "planet_x" then
+                if self.hand_play_counts[3] and self.hand_play_counts[3] >= 1 then
+                    ids[#ids + 1] = id
+                end
+            elseif id == "planet_ceres" then
+                if self.hand_play_counts[2] and self.hand_play_counts[2] >= 1 then
+                    ids[#ids + 1] = id
+                end
+            elseif id == "planet_eris" then
+                if self.hand_play_counts[1] and self.hand_play_counts[1] >= 1 then
+                    ids[#ids + 1] = id
+                end
+            else
+                ids[#ids + 1] = id
+            end
+        end
+    end
+    table.sort(ids)
+    if #ids == 0 then return nil end
+    local pick = ids[self:_shop_rand_int(1, #ids)]
+    local def = CONSUMABLE_DEFS[pick]
+    return {
+        kind = wanted_kind,
+        id = pick,
+        name = def and def.name or pick,
+        price = self:shop_price_for_consumable_offer(def),
+    }
+end
+
+--- Buy price for a shop row: `def.cost` plus edition bonus (same as a spawned `Joker`).
+---@param def table|nil
+---@param edition string|nil
+function Game:shop_price_for_joker_offer(def, edition)
+    if type(def) ~= "table" then return 1 end
+    local base = tonumber(def.cost) or 1
+    if not Joker then
+        return math.max(1, base)
+    end
+    local ec = select(1, Joker.edition_price_deltas(edition))
+    return math.max(1, base + (tonumber(ec) or 0))
+end
+
+---@param def table|nil
+function Game:shop_price_for_consumable_offer(def)
+    if type(def) ~= "table" then return 3 end
+    local sc = tonumber(def.sell_cost) or 3
+    return math.max(2, sc + 1)
+end
+
+function Game:shop_current_reroll_cost()
+    local base = tonumber(self.shop_reroll_base_cost) or 5
+    local n = math.max(0, math.floor(tonumber(self.shop_reroll_count) or 0))
+    if (self.shop_reroll_count == 0 and self:hasJoker("j_chaos")) then return 0 end 
+    return base + n
 end
 
 function Game:roll_shop_offers()
-    local pool = self:_build_shop_pool()
-    self.shop_offers = {}
-    local max_offers = math.min(2, #pool)
-    for i = 1, max_offers do
-        local id = pool[i]
-        local def = JOKER_DEFS[id]
-        local sell_value = tonumber(def and def.sell_value) or 1
-        self.shop_offers[#self.shop_offers + 1] = {
-            id = id,
-            name = def and def.name or id,
-            price = math.max(3, math.floor(sell_value * 2)),
-            sell_value = sell_value
-        }
+    if type(self.shop_offer_queue) ~= "table" then
+        self:init_shop_offer_queue()
     end
-    self.shop_offer_cursor = 1
-    self.shop_sell_cursor = math.min(1, #self.jokers or 0)
+    self.shop_offers = {}
+    local slots = math.max(1, math.floor(tonumber(self.shop_offer_slots) or 2))
+    local guard = 0
+    local guard_limit = math.max(250, slots * 125)
+    while #self.shop_offers < slots and guard < guard_limit do
+        guard = guard + 1
+        local entry = self:_pop_shop_queue_entry()
+        if not entry then break end
+        if entry.kind == "joker" or entry.kind == nil then
+            if entry.kind == nil then
+                entry.kind = "joker"
+            end
+            if self:_shop_joker_owned(entry.id) then
+                -- Owned: consume queue slot, no visible offer.
+            else
+                self.shop_offers[#self.shop_offers + 1] = entry
+            end
+        else
+            self.shop_offers[#self.shop_offers + 1] = entry
+        end
+    end
+    self:sync_shop_offer_nodes()
+end
+
+function Game:reroll_shop_offers()
+    if self.STATE ~= self.STATES.SHOP then return false end
+    local cost = self:shop_current_reroll_cost()
+    if not self:can_afford_price(cost) then
+        return false
+    end
+    self.money = (tonumber(self.money) or 0) - cost
+    self.shop_reroll_count = (tonumber(self.shop_reroll_count) or 0) + 1
+    self:emit_joker_event("on_shop_reroll", {
+        reroll_cost = cost,
+        reroll_count = self.shop_reroll_count,
+    })
+    self.active_tooltip_joker = nil
+    self:roll_shop_offers()
+    return true
+end
+
+--- Blind just beaten: recycle deck, pay reward, show round-win screen (then shop).
+--- Interest: +$1 per full $5 held (only the first $25 counts toward the divisor; max +$5).
+function Game:enter_round_win_after_blind()
+    Sfx.play("resources/sounds/win.ogg")
+    local hands_left = math.max(0, math.floor(tonumber(self.hands) or 0))
+    self._round_win_joker_payout_lines = {}
+
+    local ctx = self:prepare_joker_event_ctx("on_round_end", {
+        hands_left = hands_left,
+        is_boss_blind = (tonumber(self.current_blind_index) == 3),
+        round_score = tonumber(self.round_score) or 0,
+        blind_name = self.current_blind_name,
+    })
+    function ctx.add_round_win_payout(label, amt)
+        amt = math.floor(tonumber(amt) or 0)
+        if amt <= 0 then return end
+        self.money = (tonumber(self.money) or 0) + amt
+        table.insert(self._round_win_joker_payout_lines, { label, amt, "info" })
+        if JokerEffects and JokerEffects.mark_effect_applied then
+            JokerEffects.mark_effect_applied(ctx)
+        end
+        if Sfx and Sfx.play_money then Sfx.play_money() end
+    end
+    self:emit_joker_event("on_round_end", ctx)
+
+    self:recycle_full_deck_after_blind_win()
+    local interest_count_cap = 25
+    local interest = math.floor(math.min(math.max(0, self.money), interest_count_cap) / 5)
+    local blind_pay = math.max(0, math.floor(tonumber(self.current_blind_reward) or 0))
+
+    self._round_win_display_lines = {
+        { "Blind reward", blind_pay, "pending" },
+        { string.format("Hands left (%d)", hands_left), hands_left, "pending" },
+        { "Interest ($1 / $5 held, max $25)", interest, "pending" },
+    }
+    for _, row in ipairs(self._round_win_joker_payout_lines) do
+        self._round_win_display_lines[#self._round_win_display_lines + 1] = row
+    end
+    self._round_win_joker_payout_lines = nil
+
+    self._round_win_line_timer = 0
+    self._round_win_lines_revealed = 0
+    if self._round_win_display_lines and #self._round_win_display_lines > 0 then
+        self:_reveal_one_round_win_line()
+    end
+    self:set_state(self.STATES.ROUND_EVAL)
+end
+
+--- Apply the next visible payout line; pending lines add money here (first line also runs from `enter_round_win_after_blind`).
+function Game:_reveal_one_round_win_line()
+    local lines = self._round_win_display_lines
+    if not lines or #lines == 0 then return end
+    local i = (self._round_win_lines_revealed or 0) + 1
+    if i > #lines then return end
+    self._round_win_lines_revealed = i
+    local row = lines[i]
+    local kind = row[3]
+    if kind == "pending" then
+        local amt = math.floor(tonumber(row[2]) or 0)
+        if amt ~= 0 then
+            self.money = (tonumber(self.money) or 0) + amt
+            if Sfx and Sfx.play_money then Sfx.play_money() end
+        end
+    end
+end
+
+--- Add any remaining blind/hands/interest before leaving the round-win screen.
+function Game:flush_round_win_pending_payouts()
+    local lines = self._round_win_display_lines
+    if not lines then return end
+    local r = self._round_win_lines_revealed or 0
+    for i = r + 1, #lines do
+        local row = lines[i]
+        if row[3] == "pending" then
+            local amt = math.floor(tonumber(row[2]) or 0)
+            if amt ~= 0 then
+                self.money = (tonumber(self.money) or 0) + amt
+            end
+        end
+    end
+    self._round_win_lines_revealed = #lines
+end
+
+function Game:update_round_win_eval(dt)
+    local lines = self._round_win_display_lines
+    if not lines or #lines == 0 then return end
+    local revealed = self._round_win_lines_revealed or 0
+    if revealed >= #lines then return end
+    self._round_win_line_timer = (self._round_win_line_timer or 0) + dt
+    while (self._round_win_line_timer >= ROUND_WIN_LINE_DELAY) and revealed < #lines do
+        self._round_win_line_timer = self._round_win_line_timer - ROUND_WIN_LINE_DELAY
+        self:_reveal_one_round_win_line()
+        revealed = self._round_win_lines_revealed or 0
+    end
 end
 
 function Game:enter_shop_after_blind()
-    self:recycle_full_deck_after_blind_win()
-    self.money = (tonumber(self.money) or 0) + (tonumber(self.current_blind_reward) or 0)
     self:set_state(self.STATES.SHOP)
+    self.shop_reroll_count = 0
     self:roll_shop_offers()
+    self:emit_joker_event("on_shop_enter", {
+        offers = self.shop_offers,
+        reroll_count = self.shop_reroll_count,
+    })
+end
+
+function Game:continue_from_round_win()
+    self:flush_round_win_pending_payouts()
+    self._round_win_display_lines = nil
+    self._round_win_lines_revealed = nil
+    self._round_win_line_timer = nil
+    self:enter_shop_after_blind()
+end
+
+function Game:do_random(min,max,goal)
+    local g = goal or 1
+    if(G:hasJoker("j_oops")) then
+        print("OOPS")
+        return math.random(min,max) <= g * 2
+    else
+        return math.random(min,max) == g
+    end
+
 end
 
 function Game:remove_owned_joker_at(index)
@@ -1178,34 +3143,81 @@ function Game:remove_owned_joker_at(index)
     if type(self.jokers) ~= "table" then return nil end
     local joker = self.jokers[index]
     if not joker then return nil end
+    if self.active_tooltip_joker == joker then
+        self.active_tooltip_joker = nil
+    end
     table.remove(self.jokers, index)
     self:remove(joker)
-    self:_apply_joker_layout()
-    self:sync_jokers_interactivity()
+    self:refresh_joker_capacity_from_negatives()
     return joker
 end
 
 function Game:buy_shop_joker(slot_index)
+    if type(slot_index) ~= "number" or slot_index < 1 then return false end
     local offer = self.shop_offers and self.shop_offers[slot_index]
     if not offer then return false end
-    if (tonumber(self.money) or 0) < (tonumber(offer.price) or 0) then return false end
-    if #self.jokers >= (self.joker_capacity or 5) then return false end
-    if not self:add_joker_by_def(offer.id) then return false end
-    self.money = self.money - offer.price
-    table.remove(self.shop_offers, slot_index)
-    if self.shop_offer_cursor > #self.shop_offers then
-        self.shop_offer_cursor = math.max(1, #self.shop_offers)
+    if not self:can_afford_price(tonumber(offer.price) or 0) then return false end
+
+    local ok = false
+    local k = offer.kind
+    if k == nil or k == "joker" then
+        local neg_owned = 0
+        if Joker then
+            for _, jj in ipairs(self.jokers or {}) do
+                if jj and Joker.normalize_edition(jj.edition) == "negative" then
+                    neg_owned = neg_owned + 1
+                end
+            end
+        end
+        local new_neg = Joker and Joker.normalize_edition(offer.edition) == "negative"
+        local cap_after = (self.joker_base_capacity or 5) + neg_owned + (new_neg and 1 or 0)
+        if #self.jokers >= cap_after then return false end
+        local create_params = nil
+        if offer.edition and offer.edition ~= "base" then
+            create_params = { edition = offer.edition }
+        end
+        ok = self:add_joker_by_def(offer.id, create_params) and true or false
+    elseif k == "tarot" or k == "planet" then
+        if not self:can_add_consumable() then return false end
+        ok = self:add_consumable(offer.id)
+    else
+        return false
     end
-    self.shop_sell_cursor = math.max(1, math.min(self.shop_sell_cursor, #self.jokers))
+
+    if not ok then return false end
+
+    self.money = (tonumber(self.money) or 0) - (tonumber(offer.price) or 0)
+    self:emit_joker_event("on_shop_buy", {
+        offer = offer,
+        offer_kind = offer.kind or "joker",
+        offer_id = offer.id,
+        offer_price = tonumber(offer.price) or 0,
+    })
+    table.remove(self.shop_offers, slot_index)
+    if self.shop_offer_nodes and self.shop_offer_nodes[slot_index] then
+        local removed = self.shop_offer_nodes[slot_index]
+        if self.active_tooltip_joker == removed then
+            self.active_tooltip_joker = nil
+        end
+        self:remove(removed)
+        table.remove(self.shop_offer_nodes, slot_index)
+    end
+    for i, node in ipairs(self.shop_offer_nodes or {}) do
+        if node then node.shop_offer_slot = i end
+    end
     return true
 end
 
 function Game:sell_owned_joker(index)
     local joker = self:remove_owned_joker_at(index)
     if not joker then return false end
-    local value = tonumber(joker.sell_value) or tonumber(joker.def and joker.def.sell_value) or 0
+    local value = tonumber(joker.sell_cost) or 0
     self.money = (tonumber(self.money) or 0) + value
-    self.shop_sell_cursor = math.max(1, math.min(self.shop_sell_cursor, #self.jokers))
+    self:emit_joker_event("on_joker_sold", {
+        joker = joker,
+        sold_value = value,
+    })
+    self:boss_on_joker_sold()
     return true
 end
 
@@ -1221,7 +3233,7 @@ function Game:evaluate_blind_progress()
     if score >= target and target > 0 then
         self._blind_resolution_pending = true
         self._last_completed_blind_was_boss = (self.current_blind_index == 3)
-        self:enter_shop_after_blind()
+        self:enter_round_win_after_blind()
         return
     end
     if (tonumber(self.hands) or 0) <= 0 and score < target then
@@ -1241,6 +3253,12 @@ function Game:set_jokers_location(on_bottom)
     local to_bottom = on_bottom == true
 
     self.jokers_on_bottom = to_bottom
+    if not to_bottom then
+        self.active_tooltip_joker = nil
+    else
+        -- When jokers are on bottom, consumables become non-interactive (no Use/Sell).
+        self.active_tooltip_consumable_index = nil
+    end
     self:sync_jokers_interactivity()
 
     -- Update target transforms first.
@@ -1291,8 +3309,11 @@ function Game:_joker_nearest_slot_idx(release_x)
 
     if self.jokers_on_bottom == true then
         local s = self.joker_slot_scale_bottom or 1
-        local start_x = self.joker_slot_start_x_bottom or 0
-        local step = (self.joker_slot_w + self.joker_slot_gap) * s
+        local start_x = self._joker_row_start_x_bottom or self.joker_slot_start_x_bottom or 0
+        local step = self._joker_row_step_bottom
+        if step == nil then
+            step = (self.joker_slot_w + self.joker_slot_gap) * s
+        end
         local slot_w_scaled = self.joker_slot_w * s
         local best_i, best_d = 1, 1e9
         for i = 1, owned_count do
@@ -1307,8 +3328,13 @@ function Game:_joker_nearest_slot_idx(release_x)
     end
 
     local best_i, best_d = 1, 1e9
+    local start_x = self.joker_slot_start_x or 0
+    local step = self._joker_row_step_top
+    if step == nil then
+        step = self.joker_slot_w + self.joker_slot_gap
+    end
     for i = 1, owned_count do
-        local cx = self.joker_slot_start_x + (i - 1) * (self.joker_slot_w + self.joker_slot_gap) + self.joker_slot_w / 2
+        local cx = start_x + (i - 1) * step + self.joker_slot_w / 2
         local d = math.abs(release_x - cx)
         if d < best_d then
             best_d = d
@@ -1367,46 +3393,174 @@ end
 
 local TAP_THRESHOLD = 15
 
+local function node_is_owned_joker(self, node)
+    if not node or not self or not self.jokers then return false end
+    for _, j in ipairs(self.jokers) do
+        if j == node then return true end
+    end
+    return false
+end
+
+local function node_is_shop_offer_joker(self, node)
+    if not node or not self or not self.shop_offer_nodes then return false end
+    for _, j in ipairs(self.shop_offer_nodes) do
+        if j == node then return true end
+    end
+    return false
+end
+
+local function node_is_owned_consumable(self, node)
+    if not node or not self or not self.consumable_nodes then return false end
+    for idx, cnode in ipairs(self.consumable_nodes) do
+        if cnode == node then return true, idx end
+    end
+    return false, nil
+end
+
 function Game:touchpressed(id, x, y)
-    if self.STATE == self.STATES.BLIND_SELECT then
-        self:handle_blind_select_touch(x, y)
+    if self:try_use_button_press(x, y) then
         return
+    end
+    if self:try_sell_button_press(x, y) then
+        return
+    end
+    if self:try_shop_buy_button_press(x, y) then
+        return
+    end
+    if self.STATE == self.STATES.BLIND_SELECT then
+        -- When jokers are at the bottom, prioritize joker input over blind-select panel taps.
+        if self.jokers_on_bottom == true then
+            local node = self:get_node_at(x, y)
+            if node and node_is_owned_joker(self, node) then
+                self.touch_start_x = x
+                self.touch_start_y = y
+                if node.touchpressed then
+                    node:touchpressed(id, x, y)
+                    self.dragging = node
+                    self:move_to_front(node)
+                end
+                return
+            end
+        end
+        if self:handle_blind_select_touch(x, y) then return end
+    end
+    if self.STATE == self.STATES.ROUND_EVAL then
+        if self.jokers_on_bottom == true then
+            local node = self:get_node_at(x, y)
+            if node and node_is_owned_joker(self, node) then
+                self.touch_start_x = x
+                self.touch_start_y = y
+                if node.touchpressed then
+                    node:touchpressed(id, x, y)
+                    self.dragging = node
+                    self:move_to_front(node)
+                end
+                return
+            end
+        end
+        if self:handle_round_win_touch(x, y) then return end
     end
     if self.STATE == self.STATES.SHOP then
-        self:handle_shop_touch(x, y)
-        return
+        -- Shop offers: tap toggles tooltip + Buy; owned jokers stay draggable/reorderable.
+        local node = self:get_node_at(x, y)
+        if node and node_is_shop_offer_joker(self, node) then
+            if self.active_tooltip_joker == node then self.active_tooltip_joker = nil else self.active_tooltip_joker = node end
+            self.active_tooltip_card = nil
+            self.active_tooltip_consumable_index = nil
+            self:move_to_front(node)
+            return
+        end
+        if node and self.jokers_on_bottom == true and node_is_owned_joker(self, node) then
+            self.touch_start_x = x
+            self.touch_start_y = y
+            if node.touchpressed then
+                node:touchpressed(id, x, y)
+                self.dragging = node
+                self:move_to_front(node)
+            end
+            return
+        end
+        if self:handle_shop_touch(x, y) then return end
     end
-    if self.STATE ~= self.STATES.SELECTING_HAND then return end
-    if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
+    local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND)
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local consumable_touch_state = (self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL) and self.jokers_on_bottom ~= true
+    if not selecting_hand and not joker_touch_state and not consumable_touch_state then return end
+    if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
     self.touch_start_x = x
     self.touch_start_y = y
     local node = self:get_node_at(x, y)
-    if node and node.touchpressed then
-        node:touchpressed(id, x, y)
-        self.dragging = node
+    if node and node_is_shop_offer_joker(self, node) then
+        if self.active_tooltip_joker == node then self.active_tooltip_joker = nil else self.active_tooltip_joker = node end
+        self.active_tooltip_card = nil
+        self.active_tooltip_consumable_index = nil
         self:move_to_front(node)
+        return
+    end
+    if node and joker_touch_state and (not node_is_owned_joker(self, node)) and (not node_is_owned_consumable(self, node)) then
+        node = nil
+    end
+    if node and consumable_touch_state then
+        local is_cons = select(1, node_is_owned_consumable(self, node))
+        if is_cons then
+            -- Allow dragging consumables even when jokers are not on bottom.
+            self.touch_start_x = x
+            self.touch_start_y = y
+        end
+    end
+    if node and node.touchpressed then
+        local is_c = select(1, node_is_owned_consumable(self, node))
+        if not (is_c and self.jokers_on_bottom == true) then
+            node:touchpressed(id, x, y)
+            self.dragging = node
+            self:move_to_front(node)
+        end
     end
 end
 
 function Game:touchmoved(id, x, y, dx, dy)
-    if self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP then return end
-    if self.STATE ~= self.STATES.SELECTING_HAND then return end
-    if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
+    local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND)
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local consumable_touch_state = (self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL)
+    if not selecting_hand and not joker_touch_state and not consumable_touch_state then return end
+    if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
+    if self.dragging and node_is_shop_offer_joker(self, self.dragging) then
+        return
+    end
+    if self.dragging and joker_touch_state then
+        if not node_is_owned_joker(self, self.dragging) then return end
+    end
+    if self.dragging and self.jokers_on_bottom == true then
+        local is_c = select(1, node_is_owned_consumable(self, self.dragging))
+        if is_c then
+            -- Consumables are non-interactive while jokers are on bottom.
+            return
+        end
+    end
     if self.dragging and self.dragging.touchmoved then
         self.dragging:touchmoved(id, x, y, dx, dy)
     end
 end
 
 function Game:touchreleased(id, x, y)
-    if self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP then
+    local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND)
+    local shop_offer_touch_state = (self.STATE == self.STATES.SHOP)
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local tapped_consumable = false
+    if self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL and self.jokers_on_bottom ~= true then
+        local node_at = self:get_node_at(x, y)
+        local is_c = select(1, node_is_owned_consumable(self, node_at))
+        tapped_consumable = is_c == true
+    end
+    if not selecting_hand and not joker_touch_state and not tapped_consumable and not shop_offer_touch_state then
         self.dragging = nil
         return
     end
-    if self.STATE ~= self.STATES.SELECTING_HAND then
+    if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then
         self.dragging = nil
         return
     end
-    if self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then
+    if joker_touch_state and self.dragging and not node_is_owned_joker(self, self.dragging) and not node_is_shop_offer_joker(self, self.dragging) then
         self.dragging = nil
         return
     end
@@ -1414,16 +3568,32 @@ function Game:touchreleased(id, x, y)
     if released and released.touchreleased then
         released:touchreleased(id, x, y)
     end
-    local dx = x - self.touch_start_x
-    local dy = y - self.touch_start_y
+    local start_x = self.touch_start_x or x
+    local start_y = self.touch_start_y or y
+    local dx = x - start_x
+    local dy = y - start_y
     local dist = math.sqrt(dx * dx + dy * dy)
     local reordered = false
 
-    -- Joker reordering (bottom screen only).
-    if released and self.jokers and self.jokers_on_bottom then
+    if released and self.jokers and self.jokers_on_bottom and node_is_owned_joker(self, released) then
         local rmin = self.joker_reorder_drag_threshold and self.joker_reorder_drag_threshold() or 22
         if dist >= rmin then
             reordered = self:try_reorder_joker_after_drag(released, x) or false
+            if reordered then
+                self.active_tooltip_joker = nil
+            end
+        end
+    end
+
+    -- Tap (no reorder drag): toggle owned joker tooltip.
+    if released and self.jokers_on_bottom and node_is_owned_joker(self, released) and not reordered and dist < TAP_THRESHOLD then
+        if self.active_tooltip_joker == released then
+            self.active_tooltip_joker = nil
+        else
+            self.active_tooltip_joker = released
+            self.active_tooltip_card = nil
+            self.active_tooltip_consumable_index = nil
+            self:move_to_front(released)
         end
     end
 
@@ -1438,16 +3608,44 @@ function Game:touchreleased(id, x, y)
             end
         end
     end
+    -- Tap on hand cards toggles selection.
     if released and self.hand and not reordered and dist < TAP_THRESHOLD then
         for _, node in ipairs(self.hand.card_nodes) do
             if node == released then
                 self.hand:toggle_selection(node)
+                self.active_tooltip_consumable_index = nil
                 break
             end
         end
     end
+    -- Joker selection toggles in `touchpressed`; card-body tap does not buy.
+    -- Tap on a Consumable node (Tarot / Planet) in the top-right of the bottom screen.
+    -- Selecting shows the Use/Sell buttons; the button performs the action.
+    if dist < TAP_THRESHOLD and self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL and self.jokers_on_bottom ~= true then
+        local node_at = self:get_node_at(x, y)
+        local is_c, idx = node_is_owned_consumable(self, node_at)
+        if is_c and idx then
+            if self.active_tooltip_consumable_index == idx then
+                self.active_tooltip_consumable_index = nil
+            else
+                self.active_tooltip_consumable_index = idx
+            end
+            self.active_tooltip_card = nil
+            self.active_tooltip_joker = nil
+            self.dragging = nil
+            return
+        end
+    end
+
     if not released and dist < TAP_THRESHOLD then
+        local node_at = self:get_node_at(x, y)
+        if node_at and (node_is_shop_offer_joker(self, node_at) or node_is_owned_joker(self, node_at)) then
+            self.dragging = nil
+            return
+        end
         self.active_tooltip_card = nil
+        self.active_tooltip_joker = nil
+        self.active_tooltip_consumable_index = nil
     end
     self.dragging = nil
     if released and self.hand then
@@ -1503,10 +3701,13 @@ function Game:ensure_asset_atlas_loaded(name)
     if not atlas.path then return atlas end
 
     local ok, img = pcall(love.graphics.newImage, atlas.path, { dpiscale = atlas.dpiscale or self.SETTINGS.GRAPHICS.texture_scaling })
+    local err = ok and nil or img
     if not ok then
         ok, img = pcall(love.graphics.newImage, atlas.path, {})
+        if not ok then err = img end
     end
     atlas.image = ok and img or nil
+    atlas.load_error = ok and nil or tostring(err)
     return atlas
 end
 
@@ -1521,78 +3722,80 @@ function Game:set_render_settings()
 
         --spritesheets
         self.animation_atli = {
-            {name = "blind_chips", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/BlindChips.png",px=36,py=36, frames = 21},
-            {name = "shop_sign", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/ShopSignAnimation.png",px=113,py=60, frames = 4}
+            {name = "blind_chips", path = "resources/textures/1x/BlindChips.png",px=36,py=36, frames = 21},
+            {name = "shop_sign", path = "resources/textures/1x/ShopSignAnimation.png",px=113,py=60, frames = 4}
         }
         self.asset_atli = {
-            {name = "cards_1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/8BitDeck.png",px=72,py=95},
-            {name = "cards_2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/8BitDeck_opt2.png",px=72,py=95},
-            {name = "centers", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Enhancers.png",px=72,py=95},
-            {name = "Joker1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers1.png",px=71,py=95},
-            {name = "Joker2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Jokers2.png",px=71,py=95},
-            {name = "Tarot", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Tarots.png",px=72,py=95},
-            {name = "Voucher", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/Vouchers.png",px=72,py=95},
-            {name = "Booster", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/boosters.png",px=72,py=95},
-            {name = "ui_1", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/ui_assets.png",px=18,py=18},
-            {name = "ui_2", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/ui_assets_opt2.png",px=18,py=18},
-            {name = "balatro", path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/balatro.png",px=336,py=216},        
-            {name = 'gamepad_ui', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/gamepad_ui.png",px=32,py=32},
-            {name = 'icons', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/icons.png",px=66,py=66},
-            {name = 'tags', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/tags.png",px=34,py=34},
-            {name = 'stickers', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/stickers.png",px=72,py=95},
-            {name = 'chips', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/chips.png",px=30,py=30},
+            {name = "cards_1", path = "resources/textures/1x/8BitDeck.png",px=72,py=95},
+            {name = "cards_2", path = "resources/textures/1x/8BitDeck_opt2.png",px=72,py=95},
+            {name = "centers", path = "resources/textures/1x/Enhancers.png",px=72,py=95},
+            {name = "Joker1", path = "resources/textures/1x/Jokers1.png",px=71,py=95},
+            {name = "Joker2", path = "resources/textures/1x/Jokers2.png",px=71,py=95},
+            {name = "Joker1_negative", path = "resources/textures/1x/Jokers1_negative.png",px=71,py=95},
+            {name = "Joker2_negative", path = "resources/textures/1x/Jokers2_negative.png",px=71,py=95},
+            {name = "Tarot", path = "resources/textures/1x/Tarots.png",px=71,py=95},
+            {name = "Voucher", path = "resources/textures/1x/Vouchers.png",px=72,py=95},
+            {name = "Booster", path = "resources/textures/1x/boosters.png",px=72,py=95},
+            {name = "ui_1", path = "resources/textures/1x/ui_assets.png",px=18,py=18},
+            {name = "ui_2", path = "resources/textures/1x/ui_assets_opt2.png",px=18,py=18},
+            {name = "balatro", path = "resources/textures/1x/balatro.png",px=336,py=216},        
+            {name = 'gamepad_ui', path = "resources/textures/1x/gamepad_ui.png",px=32,py=32},
+            {name = 'icons', path = "resources/textures/1x/icons.png",px=66,py=66},
+            {name = 'tags', path = "resources/textures/1x/tags.png",px=34,py=34},
+            {name = 'stickers', path = "resources/textures/1x/stickers.png",px=72,py=95},
+            {name = 'chips', path = "resources/textures/1x/chips.png",px=30,py=30},
     
-            --[[ {name = 'collab_AU_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AU_1.png",px=71,py=95},
-            {name = 'collab_AU_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AU_2.png",px=71,py=95},
-            {name = 'collab_TW_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TW_1.png",px=71,py=95},
-            {name = 'collab_TW_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TW_2.png",px=71,py=95},
-            {name = 'collab_VS_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_VS_1.png",px=71,py=95},
-            {name = 'collab_VS_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_VS_2.png",px=71,py=95},
-            {name = 'collab_DTD_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DTD_1.png",px=71,py=95},
-            {name = 'collab_DTD_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DTD_2.png",px=71,py=95},
+            --[[ {name = 'collab_AU_1', path = "resources/textures/1x/collabs/collab_AU_1.png",px=71,py=95},
+            {name = 'collab_AU_2', path = "resources/textures/1x/collabs/collab_AU_2.png",px=71,py=95},
+            {name = 'collab_TW_1', path = "resources/textures/1x/collabs/collab_TW_1.png",px=71,py=95},
+            {name = 'collab_TW_2', path = "resources/textures/1x/collabs/collab_TW_2.png",px=71,py=95},
+            {name = 'collab_VS_1', path = "resources/textures/1x/collabs/collab_VS_1.png",px=71,py=95},
+            {name = 'collab_VS_2', path = "resources/textures/1x/collabs/collab_VS_2.png",px=71,py=95},
+            {name = 'collab_DTD_1', path = "resources/textures/1x/collabs/collab_DTD_1.png",px=71,py=95},
+            {name = 'collab_DTD_2', path = "resources/textures/1x/collabs/collab_DTD_2.png",px=71,py=95},
     
-            {name = 'collab_CYP_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CYP_1.png",px=71,py=95},
-            {name = 'collab_CYP_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CYP_2.png",px=71,py=95},
-            {name = 'collab_STS_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STS_1.png",px=71,py=95},
-            {name = 'collab_STS_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STS_2.png",px=71,py=95},
-            {name = 'collab_TBoI_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TBoI_1.png",px=71,py=95},
-            {name = 'collab_TBoI_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_TBoI_2.png",px=71,py=95},
-            {name = 'collab_SV_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SV_1.png",px=71,py=95},
-            {name = 'collab_SV_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SV_2.png",px=71,py=95},
+            {name = 'collab_CYP_1', path = "resources/textures/1x/collabs/collab_CYP_1.png",px=71,py=95},
+            {name = 'collab_CYP_2', path = "resources/textures/1x/collabs/collab_CYP_2.png",px=71,py=95},
+            {name = 'collab_STS_1', path = "resources/textures/1x/collabs/collab_STS_1.png",px=71,py=95},
+            {name = 'collab_STS_2', path = "resources/textures/1x/collabs/collab_STS_2.png",px=71,py=95},
+            {name = 'collab_TBoI_1', path = "resources/textures/1x/collabs/collab_TBoI_1.png",px=71,py=95},
+            {name = 'collab_TBoI_2', path = "resources/textures/1x/collabs/collab_TBoI_2.png",px=71,py=95},
+            {name = 'collab_SV_1', path = "resources/textures/1x/collabs/collab_SV_1.png",px=71,py=95},
+            {name = 'collab_SV_2', path = "resources/textures/1x/collabs/collab_SV_2.png",px=71,py=95},
             
-            {name = 'collab_SK_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SK_1.png",px=71,py=95},
-            {name = 'collab_SK_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_SK_2.png",px=71,py=95},
-            {name = 'collab_DS_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DS_1.png",px=71,py=95},
-            {name = 'collab_DS_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DS_2.png",px=71,py=95},
-            {name = 'collab_CL_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CL_1.png",px=71,py=95},
-            {name = 'collab_CL_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CL_2.png",px=71,py=95},
-            {name = 'collab_D2_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_D2_1.png",px=71,py=95},
-            {name = 'collab_D2_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_D2_2.png",px=71,py=95},
-            {name = 'collab_PC_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_PC_1.png",px=71,py=95},
-            {name = 'collab_PC_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_PC_2.png",px=71,py=95},
-            {name = 'collab_WF_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_WF_1.png",px=71,py=95},
-            {name = 'collab_WF_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_WF_2.png",px=71,py=95},
-            {name = 'collab_EG_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_EG_1.png",px=71,py=95},
-            {name = 'collab_EG_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_EG_2.png",px=71,py=95},
-            {name = 'collab_XR_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_XR_1.png",px=71,py=95},
-            {name = 'collab_XR_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_XR_2.png",px=71,py=95},
+            {name = 'collab_SK_1', path = "resources/textures/1x/collabs/collab_SK_1.png",px=71,py=95},
+            {name = 'collab_SK_2', path = "resources/textures/1x/collabs/collab_SK_2.png",px=71,py=95},
+            {name = 'collab_DS_1', path = "resources/textures/1x/collabs/collab_DS_1.png",px=71,py=95},
+            {name = 'collab_DS_2', path = "resources/textures/1x/collabs/collab_DS_2.png",px=71,py=95},
+            {name = 'collab_CL_1', path = "resources/textures/1x/collabs/collab_CL_1.png",px=71,py=95},
+            {name = 'collab_CL_2', path = "resources/textures/1x/collabs/collab_CL_2.png",px=71,py=95},
+            {name = 'collab_D2_1', path = "resources/textures/1x/collabs/collab_D2_1.png",px=71,py=95},
+            {name = 'collab_D2_2', path = "resources/textures/1x/collabs/collab_D2_2.png",px=71,py=95},
+            {name = 'collab_PC_1', path = "resources/textures/1x/collabs/collab_PC_1.png",px=71,py=95},
+            {name = 'collab_PC_2', path = "resources/textures/1x/collabs/collab_PC_2.png",px=71,py=95},
+            {name = 'collab_WF_1', path = "resources/textures/1x/collabs/collab_WF_1.png",px=71,py=95},
+            {name = 'collab_WF_2', path = "resources/textures/1x/collabs/collab_WF_2.png",px=71,py=95},
+            {name = 'collab_EG_1', path = "resources/textures/1x/collabs/collab_EG_1.png",px=71,py=95},
+            {name = 'collab_EG_2', path = "resources/textures/1x/collabs/collab_EG_2.png",px=71,py=95},
+            {name = 'collab_XR_1', path = "resources/textures/1x/collabs/collab_XR_1.png",px=71,py=95},
+            {name = 'collab_XR_2', path = "resources/textures/1x/collabs/collab_XR_2.png",px=71,py=95},
     
-            {name = 'collab_CR_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CR_1.png",px=71,py=95},
-            {name = 'collab_CR_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_CR_2.png",px=71,py=95},
-            {name = 'collab_BUG_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_BUG_1.png",px=71,py=95},
-            {name = 'collab_BUG_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_BUG_2.png",px=71,py=95},
-            {name = 'collab_FO_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_FO_1.png",px=71,py=95},
-            {name = 'collab_FO_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_FO_2.png",px=71,py=95},
-            {name = 'collab_DBD_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DBD_1.png",px=71,py=95},
-            {name = 'collab_DBD_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_DBD_2.png",px=71,py=95},
-            {name = 'collab_C7_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_C7_1.png",px=71,py=95},
-            {name = 'collab_C7_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_C7_2.png",px=71,py=95},
-            {name = 'collab_R_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_R_1.png",px=71,py=95},
-            {name = 'collab_R_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_R_2.png",px=71,py=95},
-            {name = 'collab_AC_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AC_1.png",px=71,py=95},
-            {name = 'collab_AC_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_AC_2.png",px=71,py=95},
-            {name = 'collab_STP_1', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STP_1.png",px=71,py=95},
-            {name = 'collab_STP_2', path = "resources/textures/"..self.SETTINGS.GRAPHICS.texture_scaling.."x/collabs/collab_STP_2.png",px=71,py=95}, ]]
+            {name = 'collab_CR_1', path = "resources/textures/1x/collabs/collab_CR_1.png",px=71,py=95},
+            {name = 'collab_CR_2', path = "resources/textures/1x/collabs/collab_CR_2.png",px=71,py=95},
+            {name = 'collab_BUG_1', path = "resources/textures/1x/collabs/collab_BUG_1.png",px=71,py=95},
+            {name = 'collab_BUG_2', path = "resources/textures/1x/collabs/collab_BUG_2.png",px=71,py=95},
+            {name = 'collab_FO_1', path = "resources/textures/1x/collabs/collab_FO_1.png",px=71,py=95},
+            {name = 'collab_FO_2', path = "resources/textures/1x/collabs/collab_FO_2.png",px=71,py=95},
+            {name = 'collab_DBD_1', path = "resources/textures/1x/collabs/collab_DBD_1.png",px=71,py=95},
+            {name = 'collab_DBD_2', path = "resources/textures/1x/collabs/collab_DBD_2.png",px=71,py=95},
+            {name = 'collab_C7_1', path = "resources/textures/1x/collabs/collab_C7_1.png",px=71,py=95},
+            {name = 'collab_C7_2', path = "resources/textures/1x/collabs/collab_C7_2.png",px=71,py=95},
+            {name = 'collab_R_1', path = "resources/textures/1x/collabs/collab_R_1.png",px=71,py=95},
+            {name = 'collab_R_2', path = "resources/textures/1x/collabs/collab_R_2.png",px=71,py=95},
+            {name = 'collab_AC_1', path = "resources/textures/1x/collabs/collab_AC_1.png",px=71,py=95},
+            {name = 'collab_AC_2', path = "resources/textures/1x/collabs/collab_AC_2.png",px=71,py=95},
+            {name = 'collab_STP_1', path = "resources/textures/1x/collabs/collab_STP_1.png",px=71,py=95},
+            {name = 'collab_STP_2', path = "resources/textures/1x/collabs/collab_STP_2.png",px=71,py=95}, ]]
         }
         self.asset_images = {
             {name = "playstack_logo", path = "resources/textures/1x/playstack-logo.png", px=1416,py=1416},
@@ -1641,15 +3844,6 @@ function Game:set_render_settings()
             self.ASSET_ATLAS[self.asset_images[i].name].py = self.asset_images[i].py
         end
 
-        -- Preload only the atlases needed for the current core gameplay path.
-        local preload_atlases = {
-            "cards_1", "cards_2", "centers", "ui_1", "ui_2", "chips", "balatro"
-        }
-        for i = 1, #preload_atlases do
-            self:ensure_asset_atlas_loaded(preload_atlases[i])
-        end
-
-        -- Aliases (point at same table; lazy loading still applies).
         self.ASSET_ATLAS.Planet = self.ASSET_ATLAS.Tarot
         self.ASSET_ATLAS.Spectral = self.ASSET_ATLAS.Tarot
 

@@ -18,8 +18,10 @@ require "deck"
 require "hand"
 require "joker"
 require "joker_catalog"
+require "consumable"
 require "game"
 require "globals"
+require "consumable_catalog"
 require "topUI"
 Sfx = require "sfx"
 
@@ -45,11 +47,6 @@ end
 
 function love.draw(screen)
     love.graphics.clear(unpack(G.C.BLIND.Big))
-
-    -- Jokers decide their own visibility based on `G.jokers_on_bottom`.
-    -- Top screen rendering is handled by `TopUI.draw()` which temporarily
-    -- forces visibility for the joker row.
-    
     if screen == "bottom" then
         love.graphics.setColor(1, 1, 1)
         G:draw()
@@ -63,32 +60,18 @@ function love.keypressed(key)
         if G then G.DEBUG = not G.DEBUG end
     end
     if not G then return end
-    if G.STATE == G.STATES.BLIND_SELECT then
-        if key == "left" then G:move_blind_select_cursor(-1) end
-        if key == "right" then G:move_blind_select_cursor(1) end
-        if key == ";" or key == "return" or key == "space" then
-            G:start_selected_blind()
+    if G.set_jokers_location then
+        -- Allow joker row screen toggle in every gameplay state.
+        if key == "up" then
+            G:set_jokers_location(true)
+            return
         end
-        return
-    end
-    if G.STATE == G.STATES.SHOP then
-        if key == "left" then
-            G.shop_offer_cursor = math.max(1, (G.shop_offer_cursor or 1) - 1)
-        elseif key == "right" then
-            G.shop_offer_cursor = math.min(#(G.shop_offers or {}), (G.shop_offer_cursor or 1) + 1)
-        elseif key == "up" then
-            G.shop_sell_cursor = math.max(1, (G.shop_sell_cursor or 1) - 1)
-        elseif key == "down" then
-            G.shop_sell_cursor = math.min(#(G.jokers or {}), (G.shop_sell_cursor or 1) + 1)
-        elseif key == "x" then
-            G:buy_shop_joker(G.shop_offer_cursor or 1)
-        elseif key == "c" then
-            G:sell_owned_joker(G.shop_sell_cursor or 1)
-        elseif key == ";" or key == "return" or key == "space" then
-            G:continue_from_shop()
+        if key == "down" then
+            G:set_jokers_location(false)
+            return
         end
-        return
     end
+
     if G.STATE ~= G.STATES.SELECTING_HAND then
         return
     end
@@ -110,16 +93,6 @@ function love.keypressed(key)
         if card then G.hand:add_card(card) end
     end
 
-    if G.set_jokers_location then
-        if key == "up" then
-            G:set_jokers_location(true)
-            return
-        end
-        if key == "down" then
-            G:set_jokers_location(false)
-            return
-        end
-    end
 end
 
 function love.gamepadpressed(_, button)
@@ -128,6 +101,16 @@ function love.gamepadpressed(_, button)
     end
 
     if not G then return end
+    if G.set_jokers_location then
+        if button == "up" or button == "dpup" then
+            G:set_jokers_location(true)
+            return
+        end
+        if button == "down" or button == "dpdown" then
+            G:set_jokers_location(false)
+            return
+        end
+    end
     if G.STATE == G.STATES.BLIND_SELECT then
         if button == "dpleft" then G:move_blind_select_cursor(-1) end
         if button == "dpright" then G:move_blind_select_cursor(1) end
@@ -136,38 +119,20 @@ function love.gamepadpressed(_, button)
         end
         return
     end
+    if G.STATE == G.STATES.ROUND_EVAL then
+        if button == "y" or button == "a" then
+            G:continue_from_round_win()
+        end
+        return
+    end
     if G.STATE == G.STATES.SHOP then
-        if button == "dpleft" then
-            G.shop_offer_cursor = math.max(1, (G.shop_offer_cursor or 1) - 1)
-        elseif button == "dpright" then
-            G.shop_offer_cursor = math.min(#(G.shop_offers or {}), (G.shop_offer_cursor or 1) + 1)
-        elseif button == "dpup" then
-            G.shop_sell_cursor = math.max(1, (G.shop_sell_cursor or 1) - 1)
-        elseif button == "dpdown" then
-            G.shop_sell_cursor = math.min(#(G.jokers or {}), (G.shop_sell_cursor or 1) + 1)
-        elseif button == "x" then
-            G:buy_shop_joker(G.shop_offer_cursor or 1)
-        elseif button == "leftshoulder" then
-            G:sell_owned_joker(G.shop_sell_cursor or 1)
-        elseif button == "y" or button == "a" then
+        if button == "y" or button == "a" then
             G:continue_from_shop()
         end
         return
     end
     if G.STATE ~= G.STATES.SELECTING_HAND then
         return
-    end
-
-    -- Bring jokers down to bottom screen for touch interaction.
-    if G.set_jokers_location then
-        if button == "dpup" or button == "up" then
-            G:set_jokers_location(true)
-            return
-        end
-        if button == "dpdown" or button == "down" then
-            G:set_jokers_location(false)
-            return
-        end
     end
 
     if (button == "l" or button == "dpleft") and G.hand then
