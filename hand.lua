@@ -168,6 +168,11 @@ function Hand:layout(update_visual, skip_vt_node)
     if #nodes == 0 then return end
     if update_visual == nil then update_visual = true end
 
+    if self.game and self.game.STATE == self.game.STATES.OPEN_BOOSTER and self.game.booster_session and self.game.booster_session.hand_for_tarot then
+        self:layout_booster_pack_row(update_visual, skip_vt_node)
+        return
+    end
+
     local n = #nodes
     local scale = math.max(MIN_HAND_SCALE, math.min(1, CARDS_AT_FULL_SCALE / n))
     local card_w = CARD_W * scale
@@ -188,6 +193,47 @@ function Hand:layout(update_visual, skip_vt_node)
         local dist_from_center = math.abs(i - half)
         local t = max_dist > 0 and (dist_from_center / max_dist) or 0
         local y_drop = FAN_DROP * (t * t)
+        local card_y = y + y_drop
+        node.T.x = x
+        node.T.y = card_y
+        node.T.r = r
+        node.T.scale = scale
+        local set_vt = update_visual and (skip_vt_node == nil or node ~= skip_vt_node)
+        if set_vt then
+            node.VT.x = x
+            node.VT.y = card_y
+            node.VT.r = r
+            node.VT.scale = scale
+        end
+    end
+end
+
+--- Compact fan at the top of the bottom screen while resolving Arcana/Spectral boosters (pack choices stay below).
+function Hand:layout_booster_pack_row(update_visual, skip_vt_node)
+    local nodes = self.card_nodes
+    if #nodes == 0 then return end
+    if update_visual == nil then update_visual = true end
+
+    local n = #nodes
+    local scale = math.max(MIN_HAND_SCALE, math.min(1, CARDS_AT_FULL_SCALE / math.max(n, 1)))
+    local card_w = CARD_W * scale
+    local card_h = CARD_H * scale
+
+    local step = (SCREEN_W - card_w) / math.max(1, n - 1)
+    local total_w = n == 1 and card_w or (card_w + (n - 1) * step)
+    local start_x = (SCREEN_W - total_w) * 0.5
+    local y = 6
+
+    local half = (n + 1) * 0.5
+    local angle_step = n > 1 and (FAN_ANGLE / (n - 1) * 2) or 0
+    local max_dist = n > 1 and (n - 1) * 0.5 or 0
+
+    for i, node in ipairs(nodes) do
+        local x = start_x + (i - 1) * step
+        local r = (i - half) * angle_step
+        local dist_from_center = math.abs(i - half)
+        local t = max_dist > 0 and (dist_from_center / max_dist) or 0
+        local y_drop = (FAN_DROP * 0.35) * (t * t)
         local card_y = y + y_drop
         node.T.x = x
         node.T.y = card_y
@@ -512,7 +558,8 @@ function Hand:layout_play_cards_at_center(nodes)
     end
 end
 
-function Hand:fill_from_deck()
+---@param immediate boolean|nil If true, move all queued draws into the hand in this call (no per-frame delay).
+function Hand:fill_from_deck(immediate)
     local deck = self.game and self.game.deck
     if not deck then return end
     local limit = hand_size_limit()
@@ -528,6 +575,12 @@ function Hand:fill_from_deck()
             else
                 table.insert(self._draw_queue, card)
             end
+        end
+    end
+    if immediate then
+        while #self._draw_queue > 0 do
+            local card = table.remove(self._draw_queue, 1)
+            if card then self:add_card(card) end
         end
     end
 end

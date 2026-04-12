@@ -252,6 +252,34 @@ function Joker:init(X, Y, W, H, def, params)
             self.runtime_counter = self.def.config.chips or 100 -- Starts at 100
         elseif self.def.id == "j_turtle_bean" then
             self.runtime_counter = self.def.config.extra.h_size or 5
+        elseif self.def.id == "j_todo_list" then
+            local found = false
+            while not found do
+                local pos = math.random(1, #G.handlist)
+                if (pos < 4) then -- Secret hands only show if played before
+                    if (G.hand_play_counts[pos] and G.hand_play_counts[pos] > 0) then
+                        found = true
+                    end
+                else
+                    found = true
+                end
+                self.random_hand = G.handlist[pos]
+            end
+        elseif self.def.id == "j_rocket" then
+            local ex = type(self.def.config) == "table" and self.def.config.extra
+            self.running_count = math.max(1, math.floor(tonumber(ex and ex.dollars) or 1))
+        elseif self.def.id == "j_mail" then
+            self.random_rank = math.random(2, 14)
+        elseif self.def.id == "j_idol" then
+            local card = G.deck and G.deck.random_card and G.deck:random_card()
+            if card then
+                self.random_rank = card.rank
+                self.random_suit = card.suit
+            else
+                local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
+                self.random_rank = math.random(2, 14)
+                self.random_suit = suits[math.random(1, #suits)]
+            end
         end
     end
 
@@ -696,6 +724,46 @@ function Joker:get_live_current_tooltip_text(base_text)
     if id == "j_cloud_9" then
         return string.format("(Currently $%d)", count_full_deck(function(c) return tonumber(c.rank) == 9 end))
     end
+    if id == "j_rocket" then
+        local n = math.max(1, math.floor(tonumber(self.running_count) or 1))
+        return string.format("(Currently $%d)", n)
+    end
+    if id == "j_mail" then
+        local r = tonumber(self.random_rank)
+        local label = "—"
+        if r == 14 then
+            label = "Ace"
+        elseif r == 13 then
+            label = "King"
+        elseif r == 12 then
+            label = "Queen"
+        elseif r == 11 then
+            label = "Jack"
+        elseif r ~= nil then
+            label = tostring(r)
+        end
+        return string.format("Earn *$5* for each discarded *%s*,", label)
+    end
+    if id == "j_idol" then
+        local r = tonumber(self.random_rank)
+        local label = "—"
+        if r == 14 then
+            label = "Ace"
+        elseif r == 13 then
+            label = "King"
+        elseif r == 12 then
+            label = "Queen"
+        elseif r == 11 then
+            label = "Jack"
+        elseif r ~= nil then
+            label = tostring(r)
+        end
+        local s = self.random_suit
+        if type(s) ~= "string" or s == "" then
+            s = "—"
+        end
+        return string.format("Each played *%s* of *%s* gives *X3 Mult* when scored,", label, s)
+    end
     if id == "j_invisible" then
         return string.format("(Currently %d/2)", math.floor(tonumber(self.runtime_counter) or 0))
     end
@@ -735,6 +803,13 @@ function Joker:get_live_current_tooltip_text(base_text)
             s = "—"
         end
         return string.format("This Joker gains +3 Chips per discarded %s", s)
+    end
+    if id == "j_todo_list" then
+        local rh = self.random_hand
+        if type(rh) ~= "string" or rh == "" then
+            rh = "—"
+        end
+        return string.format("Earn *$4* if poker hand is a *%s*,", rh)
     end
     return base_text
 end
@@ -1008,7 +1083,11 @@ function Joker:get_layout_draw_xy()
 end
 
 function Joker:should_draw_tooltip()
-    return self.face_up and G and G.active_tooltip_joker == self
+    if not self.face_up or not G then return false end
+    if self._booster_choice_index and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
+        return tonumber(G.booster_session.active_choice_index) == self._booster_choice_index
+    end
+    return G.active_tooltip_joker == self
         and (G.jokers_on_bottom == true or self.shop_offer_slot ~= nil)
 end
 

@@ -115,6 +115,16 @@ function TopUI.draw()
         if s > 1.25 then s = 1.25 end
         G:draw_shop_sign_anim(ix + math.floor(iw / 2), iy + math.floor(ih / 2), s)
 
+    elseif G.STATE == G.STATES.OPEN_BOOSTER then
+        love.graphics.setColor(G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        local sess = G.booster_session
+        local t1 = (sess and sess.title) or "Booster Pack"
+        TopUI.center_text(t1, ix, iy - 4, iw, math.floor(ih * 0.45))
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        local pr = sess and tonumber(sess.picks_remaining) or 0
+        TopUI.center_text("Picks left: " .. tostring(pr), ix, iy + math.floor(ih * 0.6), iw, math.floor(ih * 0.35))
+
     else
         -- Score Requirements Box
         ix, iy, iw, ih = draw_rect_with_shadow(blindPosX, blindPosY, blindWidth, blindHeight, 4, 4, blind_color, blind_dark, 2)

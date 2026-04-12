@@ -131,6 +131,12 @@ function love.gamepadpressed(_, button)
         end
         return
     end
+    if G.STATE == G.STATES.OPEN_BOOSTER then
+        if button == "b" and G.end_booster_session then
+            G:end_booster_session()
+        end
+        return
+    end
     if G.STATE ~= G.STATES.SELECTING_HAND then
         return
     end

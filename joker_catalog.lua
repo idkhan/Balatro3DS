@@ -2308,7 +2308,7 @@ local TOOLTIP_BY_ID = {
         "(Must have room)",
     },
     j_todo_list = {
-        "Earn *$4* if poker hand is a [Poker Hand],",
+        { kind = "current", text = "Earn *$4* if poker hand is a *High Card*," },
         "poker hand changes at end of round",
     },
     j_cavendish = {
@@ -2372,6 +2372,7 @@ local TOOLTIP_BY_ID = {
     j_rocket = {
         "Earn *$1* at end of round.",
         "Payout increases by *$2* when Boss Blind is defeated",
+        "(Currently $1)",
     },
     j_obelisk = {
         "This Joker gains *X0.2 Mult* per consecutive hand",
@@ -2399,7 +2400,7 @@ local TOOLTIP_BY_ID = {
         "chance to give *$1*",
     },
     j_mail = {
-        "Earn *$5* for each discarded [rank],",
+        { kind = "current", text = "Earn *$5* for each discarded Ace," },
         "rank changes every round",
     },
     j_to_the_moon = {
@@ -2488,8 +2489,7 @@ local TOOLTIP_BY_ID = {
         "(ex: 1 in 3 -> 2 in 3)",
     },
     j_idol = {
-        "Each played [rank] of [suit] gives *X2 Mult*",
-        "when scored",
+        { kind = "current", text = "Each played Ace of Hearts gives *X3 Mult* when scored," },
         "Card changes every round",
     },
     j_seeing_double = {

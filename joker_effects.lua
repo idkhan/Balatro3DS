@@ -1197,7 +1197,196 @@ local SPECIAL = {
                 end
             end
         end
+    },
+
+    j_red_card = {
+        matches_trigger = function(_, e) return e == "on_booster_skip" or e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_booster_skip" then
+                j.stored_mult = (tonumber(j.stored_mult) or 0) + 3
+                mark_effect_applied(ctx)
+            else
+                add_mult(ctx, tonumber(j.stored_mult) or 0)
+            end
+        end
+    },
+
+    j_superposition = {
+        matches_trigger = function(_, e) return e == "on_hand_played" end,
+        apply_effect = function(j, ctx)
+            local cards = ctx.cards
+            if has_hand_type(ctx, "Straight") then 
+                for _, card in ipairs(cards) do
+                    if card.card_data.rank == 14 then
+                        local tid = G:random_consumable_id_of_kind("tarot")
+                        if tid then
+                            G:add_consumable(tid)
+                            mark_created_item(ctx)
+                        end
+                        return
+                    end
+                end
+            end
+        end
+    },
+
+    j_todo_list = {
+        matches_trigger = function(_, e) return e == "on_hand_played" or e == "on_round_end" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_played" then
+                if ctx.hand_type == j.random_hand then
+                    add_money(ctx, tonumber(j.config and j.config.extra and j.config.extra.dollars or 4))
+                end
+            else
+                local found = false
+                while not found do
+                    local pos = math.random(1, #G.handlist)
+                    if (pos < 4) then -- Secret hands only show if played before
+                        if (G.hand_play_counts[pos] and G.hand_play_counts[pos] > 0) then
+                            found = true
+                        end
+                    else
+                        found = true
+                    end
+                    j.random_hand = G.handlist[pos]
+                end
+            end
+        end
+    },
+
+    j_hallucination = {
+        matches_trigger = function(_, e) return e == "on_booster_open" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name ~= "on_booster_open" then return end
+            if G:do_random(1, j.config and j.config.extra or 2, 1) then
+                local tid = G:random_consumable_id_of_kind("tarot")
+                if tid then
+                    G:add_consumable(tid)
+                    mark_created_item(ctx)
+                end
+            end
+        end
+    },
+
+    j_vampire = {
+        matches_trigger = function(_,e) return e == "card_played" or e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "card_played" then
+                card = ctx.card_node
+                if(card.card_data.enhancement or card.card_data.enhancement ~= "none") then
+                    j.stored_xmult = (tonumber(j.stored_xmult) or 0) + 0.1
+                    card:set_enhancement("none")
+                    mark_effect_applied(ctx)
+                end
+            else
+                mul_mult(ctx, tonumber(j.stored_xmult) or 0)
+            end
+        end
+    },
+
+    j_vagabond = {
+        matches_trigger = function(_, e) return e == "on_hand_played" end,
+        apply_effect = function(_,ctx)
+            if G and G.money and G.money < 4 then
+                local tid = G:random_consumable_id_of_kind("tarot")
+                if tid then
+                    G:add_consumable(tid)
+                    mark_created_item(ctx)
+                end
+            end
+        end
+    },
+
+    j_rocket = {
+        matches_trigger = function(_, e) return e == "on_round_end" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name ~= "on_round_end" then return end
+            if ctx.is_boss_blind then
+                j.running_count = (tonumber(j.running_count) or 1) + 2
+            end
+            local add = tonumber(j.running_count) or 1
+            add_round_win_money(ctx, j, add)
+        end
+    },
+
+    j_mail = {
+        matches_trigger = function(_, e) return e == "on_discard" or e == "on_round_end" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_discard" then
+                if ctx.discard_reason == "discard" then
+                    local payout = tonumber(type(j.def) == "table" and j.def.config and j.def.config.extra) or 5
+                    local discarded = ctx.discarded_cards
+                    for _, c in ipairs(discarded or {}) do
+                        if c and tonumber(c.rank) == tonumber(j.random_rank) then
+                            add_money(ctx, payout)
+                        end
+                    end
+                end
+            else
+                j.random_rank = math.random(2, 14)
+            end
+        end
+    },
+
+    j_acrobat = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if G.hands == 0 then
+                mul_mult(ctx, 3)
+            end
+        end
+    },
+
+    j_swashbuckler = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            local sum = 0
+            for n,jj in ipairs(G.jokers) do
+                if jj ~= j then
+                    sum = sum + jj.sell_cost
+                end
+            end
+            add_mult(ctx, sum)
+        end
+    },
+
+    j_glass = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" or e == "glass_broken" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                mul_mult(ctx, j.stored_xmult)
+            else
+                j.stored_xmult = tonumber(j.stored_xmult or 1) + 0.75
+            end
+        end
+    },
+
+    j_idol = {
+        matches_trigger = function(_, e) return e == "card_played" or e == "on_round_end" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "card_played" then
+                if j.random_rank == nil or j.random_suit == nil then return end
+                local cr = tonumber(ctx.rank)
+                local jr = tonumber(j.random_rank)
+                local cs = tostring(ctx.suit or ""):lower()
+                local js = tostring(j.random_suit or ""):lower()
+                if cr == jr and cs ~= "" and cs == js then
+                    mul_mult(ctx, 3)
+                end
+            elseif ctx.event_name == "on_round_end" then
+                local deck = G and G.deck
+                if not deck or not deck.random_card then return end
+                local card = deck:random_card()
+                if card then
+                    j.random_rank = card.rank
+                    j.random_suit = card.suit
+                    mark_effect_applied(ctx)
+                end
+            end
+        end
     }
+
+
 }
 
 function JokerEffects.get(joker)

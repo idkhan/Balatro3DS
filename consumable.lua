@@ -153,6 +153,9 @@ function Consumable:tooltip_is_active()
     if self.shop_offer_slot and G.STATE == G.STATES.SHOP and G.active_tooltip_joker == self then
         return true
     end
+    if self._booster_choice_index and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
+        return tonumber(G.booster_session.active_choice_index) == self._booster_choice_index
+    end
     if G.jokers_on_bottom == true then return false end
     if self.states.drag.is then return true end
     local idx = G.active_tooltip_consumable_index
