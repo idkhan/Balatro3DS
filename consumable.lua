@@ -42,7 +42,7 @@ function Consumable:init(X, Y, def)
     self.id = self.def.id
     self.kind = self.def.kind
     self.name = self.def.name or "Consumable"
-    self.sell_cost = tonumber(self.def.sell_cost) or 0
+    self.sell_cost = (self.kind == "spectral") and 2 or 1
     self.atlas_name = self.def.atlas or "Tarot"
     self.index = tonumber(self.def.index) or 0
 

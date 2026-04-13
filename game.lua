@@ -61,6 +61,7 @@ function Game:init(seed)
     self.shop_reroll_base_cost = 5
     self.shop_reroll_count = 0
     self.hand_play_counts = {}
+    self.blind_hand_play_counts = {}
     self._ante_played_card_uids = {}
     self.current_boss_blind_id = nil
     self.boss_runtime = {}
@@ -112,7 +113,9 @@ function Game:increment_hand_play_count(hand_index)
     local hi = math.floor(tonumber(hand_index) or -1)
     if hi < 1 then return end
     self.hand_play_counts = self.hand_play_counts or {}
+    self.blind_hand_play_counts = self.blind_hand_play_counts or {}
     self.hand_play_counts[hi] = (tonumber(self.hand_play_counts[hi]) or 0) + 1
+    self.blind_hand_play_counts[hi] = (tonumber(self.blind_hand_play_counts[hi]) or 0) + 1
 end
 
 function Game:ensure_card_uid(card_data, force_new)
@@ -226,6 +229,7 @@ function Game:boss_reset_for_new_blind()
         end
     end
     if not boss_id then return end
+    if self:hasJoker("j_chicot") then return end
 
     if boss_id == "bl_needle" then
         self.hands = 1
@@ -1553,6 +1557,14 @@ function Game:get_sell_anchor_rect(sell_target)
     return nil
 end
 
+---@param c Consumable|table|nil
+---@return integer
+function Game:consumable_sell_value(c)
+    local kind = c and (c.kind or (c.def and c.def.kind)) or nil
+    if kind == "spectral" then return 2 end
+    return 1
+end
+
 function Game:perform_sell_for_target(sell_target)
     if not sell_target then return false end
     if sell_target.kind == "joker" then
@@ -1561,7 +1573,7 @@ function Game:perform_sell_for_target(sell_target)
         local idx = sell_target.index
         local c = self:remove_consumable_at(idx)
         if not c then return false end
-        local value = tonumber(c.sell_cost) or 0
+        local value = self:consumable_sell_value(c)
         self.money = (tonumber(self.money) or 0) + value
         if self.active_tooltip_consumable_index == idx then
             self.active_tooltip_consumable_index = nil
@@ -1589,7 +1601,7 @@ function Game:draw_sell_button()
         sell_cost = math.max(1, math.floor(tonumber(n.sell_cost) or tonumber(n.def and n.def.sell_cost) or 0))
     elseif target.kind == "consumable" then
         local c = self.consumables and self.consumables[target.index]
-        sell_cost = math.max(1, math.floor(tonumber(c and c.sell_cost) or 0))
+        sell_cost = self:consumable_sell_value(c)
     end
     local label = string.format("Sell $%d", sell_cost)
     local btn_w = math.max(34, font:getWidth(label) + 10)
@@ -2226,9 +2238,11 @@ function Game:init_jokers()
     --     self:add_joker_by_def(pool[i])
     -- end
     -- self:add_joker_by_def("j_swashbuckler")
-    -- self:add_joker_by_def("j_idol")
-    -- self:add_joker_by_def("j_cavendish")
-    -- self:add_joker_by_def("j_glass")
+    self:add_joker_by_def("j_cartomancer")
+    self:add_joker_by_def("j_cavendish")
+    self:add_joker_by_def("j_popcorn")
+    self:add_joker_by_def("j_hit_the_road")
+    self:add_joker_by_def("j_chicot")
     -- for _, jj in ipairs(self.jokers) do
     --     if jj and jj.refresh_quads then jj:refresh_quads() end
     -- end
@@ -2696,7 +2710,8 @@ function Game:prepare_hand_for_new_blind()
     end
 
     data = {
-
+        blind_name = self.current_blind_name,
+        is_boss_blind = (tonumber(self.current_blind_index) == 3),
     }
     
     self:emit_joker_event("on_blind_selected", data)
@@ -2739,6 +2754,7 @@ function Game:initialize_run_loop()
     self.shop_booster_offers = {}
     self.shop_reroll_count = 0
     self.hand_play_counts = {}
+    self.blind_hand_play_counts = {}
     if self.hand and self.hand.clear then
         self.hand:clear()
     end
@@ -2788,6 +2804,7 @@ function Game:start_selected_blind()
     end
     self.hands = 5
     self.discards = 5
+    self.blind_hand_play_counts = {}
     self.round_score = 0
     self.last_hand_score = 0
     self._blind_resolution_pending = false
@@ -3022,8 +3039,15 @@ end
 ---@param def table|nil
 function Game:shop_price_for_consumable_offer(def)
     if type(def) ~= "table" then return 3 end
-    local sc = tonumber(def.sell_cost) or 3
-    return math.max(2, sc + 1)
+    if self:hasJoker("j_astronomer") and def.kind == "planet" then
+        return 0
+    end
+    local by_kind = {
+        tarot = 3,
+        planet = 3,
+        spectral = 4,
+    }
+    return by_kind[def.kind] or 3
 end
 
 function Game:shop_current_reroll_cost()
@@ -3094,27 +3118,72 @@ function Game:_spectral_consumable_defs_count()
 end
 
 function Game:_roll_booster_pack_type()
-    local spectral_ok = self:_spectral_consumable_defs_count() > 0
-    local span = spectral_ok and 5 or 4
-    local r = self:_shop_rand_int(1, span)
-    if r == 1 then return "arcana" end
-    if r == 2 then return "celestial" end
-    if r == 3 then return "standard" end
-    if r == 4 then return "buffoon" end
-    return "spectral"
+    local profile = self:_roll_booster_offer_profile()
+    return profile.pack
 end
 
 function Game:_roll_booster_size()
-    local r = self:_shop_rand_int(1, 100)
-    if r <= 50 then return "normal" end
-    if r <= 85 then return "jumbo" end
-    return "mega"
+    local profile = self:_roll_booster_offer_profile()
+    return profile.size
+end
+
+function Game:_roll_booster_offer_profile()
+    -- Scaled by 100 to keep integer RNG while preserving ratios
+    local entries = {
+        { pack = "standard",  size = "normal", weight = 400 },
+        { pack = "arcana",    size = "normal", weight = 400 },
+        { pack = "celestial", size = "normal", weight = 400 },
+        { pack = "buffoon",   size = "normal", weight = 120 },
+        { pack = "spectral",  size = "normal", weight = 60 },
+
+        { pack = "standard",  size = "jumbo",  weight = 200 },
+        { pack = "arcana",    size = "jumbo",  weight = 200 },
+        { pack = "celestial", size = "jumbo",  weight = 200 },
+        { pack = "buffoon",   size = "jumbo",  weight = 60 },
+        { pack = "spectral",  size = "jumbo",  weight = 30 },
+
+        { pack = "standard",  size = "mega",   weight = 50 },
+        { pack = "arcana",    size = "mega",   weight = 50 },
+        { pack = "celestial", size = "mega",   weight = 50 },
+        { pack = "buffoon",   size = "mega",   weight = 15 },
+        { pack = "spectral",  size = "mega",   weight = 7 },
+    }
+
+    local spectral_ok = self:_spectral_consumable_defs_count() > 0
+    local pool = {}
+    local total = 0
+    for _, e in ipairs(entries) do
+        if spectral_ok or e.pack ~= "spectral" then
+            pool[#pool + 1] = e
+            total = total + e.weight
+        end
+    end
+    if total <= 0 or #pool == 0 then
+        return { pack = "arcana", size = "normal" }
+    end
+
+    local r = self:_shop_rand_int(1, total)
+    local acc = 0
+    for _, e in ipairs(pool) do
+        acc = acc + e.weight
+        if r <= acc then
+            return { pack = e.pack, size = e.size }
+        end
+    end
+    local last = pool[#pool]
+    return { pack = last.pack, size = last.size }
 end
 
 function Game:_booster_offer_price(pack, size)
-    local base = ({ arcana = 4, celestial = 4, standard = 3, buffoon = 5, spectral = 5 })[pack] or 4
-    local mul = ({ normal = 1, jumbo = 1, mega = 2 })[size] or 1
-    return math.max(2, math.floor(base * mul + 0.5))
+    if self:hasJoker("j_astronomer") and pack == "celestial" then
+        return 0
+    end
+    local by_size = {
+        normal = 4,
+        jumbo = 6,
+        mega = 8,
+    }
+    return by_size[size] or 4
 end
 
 function Game:_booster_offer_display_name(pack, size)
@@ -3128,8 +3197,9 @@ function Game:roll_shop_boosters()
     local slots = math.max(1, math.floor(tonumber(self.shop_booster_slots) or 2))
     self.shop_booster_offers = {}
     for _ = 1, slots do
-        local pack = self:_roll_booster_pack_type()
-        local size = self:_roll_booster_size()
+        local profile = self:_roll_booster_offer_profile()
+        local pack = profile.pack
+        local size = profile.size
         local n_cards = BoosterPackUI.card_count_for_size(size)
         local n_picks = BoosterPackUI.picks_for_size(size)
         local frames = ShopUI.booster_frames_for_pack_size(pack, size)
@@ -3417,9 +3487,6 @@ function Game:booster_tarot_needs_hand(c)
     end
     if type(s) == "table" and s.min and tonumber(s.min) > 0 then
         need_hand = true
-    end
-    if c.spawn or c.spawn_joker or c.wheel_of_fortune or c.fool_duplicate or c.hermit_money or c.temperance_money then
-        need_hand = false
     end
     return need_hand
 end

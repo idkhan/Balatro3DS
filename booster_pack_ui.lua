@@ -51,12 +51,29 @@ function BoosterPackUI.layout_choice_nodes(game, area)
     local n = #indices
     if n <= 0 then return end
 
-    local gap = 2
     local scale = n > 4 and 0.9 or 1
     local eff_w = card_w * scale
-    local total_w = n * eff_w + (n - 1) * gap
-    local start_x = area_x + math.floor((area_w - total_w) * 0.5 + 0.5)
-    local base_y = area_y + math.floor((area_h - card_h * scale) * 0.5 + 0.5)
+    local eff_h = card_h * scale
+    local min_margin = 2
+    local max_span = math.max(eff_w, area_w - min_margin * 2)
+    local natural_gap = 6 * scale
+    local natural_step = eff_w + natural_gap
+    local natural_span = n == 1 and eff_w or (eff_w + (n - 1) * natural_step)
+    local step
+    if n <= 1 then
+        step = 0
+    elseif natural_span <= max_span then
+        step = natural_step
+    else
+        -- Tight packs overlap by reducing horizontal step.
+        step = (max_span - eff_w) / (n - 1)
+    end
+    local total_span = n == 1 and eff_w or ((n - 1) * step + eff_w)
+    local start_x = area_x + math.floor((area_w - total_span) * 0.5 + 0.5)
+    local base_y = area_y + math.floor((area_h - eff_h) * 0.5 + 0.5)
+    local half = (n + 1) * 0.5
+    local max_dist = n > 1 and (n - 1) * 0.5 or 0
+    local fan_drop = 8 * scale
 
     local active = tonumber(sess.active_choice_index)
     sess._choice_rects = {}
@@ -66,9 +83,13 @@ function BoosterPackUI.layout_choice_nodes(game, area)
         local node = nodes[i]
         if node and node.T and node.VT then
             col = col + 1
-            local x = start_x + (col - 1) * (eff_w + gap)
+            local x = start_x + (col - 1) * step
             local selected = (active == i)
-            local y = selected and (base_y - 8) or base_y
+            local dist_from_center = math.abs(col - half)
+            local t = max_dist > 0 and (dist_from_center / max_dist) or 0
+            local y_drop = fan_drop * (t * t)
+            local card_y = base_y + y_drop
+            local y = selected and (card_y - 8) or card_y
             node.T.x = x
             node.T.y = y
             node.T.scale = scale

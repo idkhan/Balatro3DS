@@ -1085,6 +1085,11 @@ local SPECIAL = {
             local hand = G and G.hand
             if not hand or not hand.destroy_card_node then return end
             if hand:destroy_card_node(node) then
+                local tid = G:random_consumable_id_of_kind("spectral")
+                if tid then
+                    G:add_consumable(tid)
+                    mark_created_item(ctx)
+                end
                 mark_effect_applied(ctx)
                 Sfx.play("resources/sounds/slice1.ogg")
             end
@@ -1384,7 +1389,155 @@ local SPECIAL = {
                 end
             end
         end
-    }
+    },
+
+    j_card_sharp = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            --IF Poker hand has been played this round
+            if ctx.event_name == "on_hand_scored" then
+                local hand_idx = tonumber(ctx.hand_index)
+                local played_count = (G and G.blind_hand_play_counts and hand_idx and G.blind_hand_play_counts[hand_idx]) or 0
+                if played_count > 1 then
+                    mul_mult(ctx, tonumber(j.config and j.config.extra and j.config.extra.Xmult) or 3)
+                end
+            end
+        end
+    },
+
+    j_seance = {
+        matches_trigger = function(_, e) return e == "on_hand_played" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_played" then
+                local hand = "Straight Flush"
+                if ctx.hand_type == hand then
+                    local tid = G:random_consumable_id_of_kind("spectral")
+                    if tid then
+                        G:add_consumable(tid)
+                        mark_created_item(ctx)
+                    end
+                end
+            end
+        end
+    },
+
+    j_madness = {
+        matches_trigger = function(_, e) return e == "on_blind_selected" or e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_blind_selected" then
+                if not ctx.is_boss_blind then
+                    print("trigger")
+                    j.stored_xmult = tonumber(j.stored_xmult or 1) + 0.5
+                    if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
+                        local notIt = false
+                        local pos = math.random(1, #G.jokers)
+                        while not notIt do
+                            if G.jokers[pos] ~= j then
+                                notIt = true
+                            else 
+                                pos = math.random(1, #G.jokers)
+                            end
+                        end
+                        if notIt then
+                            Sfx.play("resources/sounds/slice1.ogg")
+                            G:remove_owned_joker_at(pos)
+                        end
+                    end
+                end
+            else
+                if ctx.event_name == "on_hand_scored" then
+                    mul_mult(ctx, tonumber(j.stored_xmult) or 1)
+                end
+            end
+        end
+    },
+
+    j_obelisk = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                local hand_idx = tonumber(ctx.hand_index)
+                --Find most played 
+                local max_idx, max_val = nil, nil
+                if G and type(G.hand_play_counts) == "table" then
+                    for idx, val in pairs(G.hand_play_counts) do
+                        if type(val) == "number" and (max_val == nil or val > max_val) then
+                            max_val = val
+                            max_idx = idx
+                        end
+                    end
+                end
+                if hand_idx == max_idx then
+                    j.stored_xmult = 1
+                else 
+                    j.stored_xmult = tonumber(j.stored_xmult or 1) + 0.2
+                end
+                mul_mult(ctx, j.stored_xmult or 1)
+            end
+        end
+    },
+
+    j_satellite = {
+        matches_trigger = function(_, e) return e == "on_round_end" end,
+        apply_effect = function(j, ctx)
+            local unique = 0
+            for n,c in ipairs(G.hand_stats) do
+                if c.level > 1 then
+                    unique = unique + 1
+                end
+            end
+            j.running_count = unique
+            add_round_win_money(ctx, j, j.running_count)
+        end
+    },
+
+    j_seeing_double = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                cards = ctx.cards
+                local hasClubs = false
+                local hasOther = false
+                for _, card in ipairs(cards) do
+                    if card.card_data.suit == "Clubs" then
+                        hasClubs = true
+                    else
+                        hasOther = true
+                    end
+                end
+                if hasClubs and hasOther then
+                    mul_mult(ctx, 2)
+                end
+            end
+        end
+    },
+
+    j_cartomancer = {
+        matches_trigger = function(_, e) return e == "on_blind_selected" end,
+        apply_effect = function(_, ctx)
+            local tid = G:random_consumable_id_of_kind("tarot")
+            if tid then
+                G:add_consumable(tid)
+                mark_created_item(ctx)
+            end
+        end
+    },
+
+    j_hit_the_road = {
+        matches_trigger = function(_, e) return e == "on_discard" or e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_discard" and ctx.discard_reason == "discard" then
+                local discarded = ctx.discarded_cards
+                for _, c in ipairs(discarded or {}) do
+                    if c and tonumber(c.rank) == 11 then
+                        j.stored_xmult = j.stored_xmult + 0.5
+                    end
+                end
+            elseif ctx.event_name == "on_hand_scored" then
+                mul_mult(ctx, tonumber(j.stored_xmult) or 1)
+            end
+        end
+    },
 
 
 }

@@ -17,9 +17,9 @@ function ShopUI.layout_shop_offer_nodes(game, param)
 
     local card_w = game.joker_slot_w or 71
     local card_h = game.joker_slot_h or 95
-    local scale = math.min(0.8, (area_h - 8) / card_h)
+    local scale = math.max(0.8, (area_h - 8) / card_h)
     local eff_w = card_w * scale
-    local gap = 4
+    local gap = 2
     local total_w = (n * eff_w) + ((n - 1) * gap)
     if total_w > (area_w - 8) and n > 1 then
         gap = math.max(2, ((area_w - 8) - (n * eff_w)) / (n - 1))
@@ -53,6 +53,7 @@ end
 
 function ShopUI.draw_shop_offer_price_tags(game)
     if game.STATE ~= game.STATES.SHOP then return end
+    if game.jokers_on_bottom then return end
     for i, offer in ipairs(game.shop_offers or {}) do
         local node = game.shop_offer_nodes and game.shop_offer_nodes[i]
         local rect = node and node.get_collision_rect and node:get_collision_rect() or game._shop_offer_rects[i]
@@ -61,10 +62,10 @@ function ShopUI.draw_shop_offer_price_tags(game)
             local font = game.FONTS.PIXEL.SMALL
             local tw = font:getWidth(label)
             local th = font:getHeight()
-            local tag_w = tw + 12
-            local tag_h = th + 4
-            local tx = rect.x + math.floor((rect.w - tag_w) * 0.5 + 0.5)
-            local ty = rect.y - tag_h - 2
+            local tag_w = math.floor(tw + 12)
+            local tag_h = math.floor(th + 4)
+            local tx = math.floor(rect.x + math.floor((rect.w - tag_w) * 0.5 + 0.5))
+            local ty = math.floor(rect.y - tag_h - 2)
             if _G.draw_rect_with_shadow then
                 draw_rect_with_shadow(tx, ty, tag_w, tag_h, 3, 2, game.C.BLOCK.BACK, game.C.BLOCK.SHADOW, 1)
             else
@@ -241,11 +242,11 @@ function ShopUI.layout_shop_booster_slots(game, param)
     local area_w = param.w - 2 * padding
     local area_h = param.h - 2 * padding
 
-    local gap = 6
+    local gap = 4
     local px, py = 72, 95
     local max_sw = ((area_w - (n - 1) * gap) / n) / px
     local max_sh = (area_h - 2) / py
-    local scale = math.min(1, max_sw, max_sh)
+    local scale = math.max(0.8, max_sw, max_sh)
     local pack_w = math.max(1, math.floor(px * scale))
     local pack_h = math.max(1, math.floor(py * scale))
     local total_w = n * pack_w + (n - 1) * gap
@@ -282,10 +283,6 @@ function ShopUI.draw_shop_booster_slots(game)
             love.graphics.setFont(game.FONTS.PIXEL.SMALL)
             local sz = ({ normal = "N", jumbo = "J", mega = "M" })[offer.size] or ""
             love.graphics.printf(sz, rect.x + 2, rect.y + rect.h - 12, rect.w - 4, "center")
-            if sel then
-                love.graphics.setColor(game.C.RED)
-                love.graphics.rectangle("line", rect.x, rect.y, rect.w, rect.h, 3, 3)
-            end
         end
     end
 end
@@ -422,7 +419,7 @@ function ShopUI.draw_shop_button(game, param)
 end
 
 function ShopUI.draw_bottom_shop(game)
-    local panel_x, panel_y, panel_w, panel_h = 4, 65, 312, 200
+    local panel_x, panel_y, panel_w, panel_h = 4, 45, 312, 200
     if _G.draw_rect_with_shadow then
         draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 4, 2, game.C.BLOCK.BACK, game.C.BLOCK.SHADOW, 2)
     else
@@ -434,7 +431,7 @@ function ShopUI.draw_bottom_shop(game)
     love.graphics.rectangle("line", panel_x, panel_y, panel_w, panel_h, 4, 4)
 
     local padding = 4
-    local shop_continue_rect = { x = panel_x + padding, y = panel_y + padding, w = 74, h = 40, color = game.C.RED, text = "Next\nRound", lines = 2 }
+    local shop_continue_rect = { x = panel_x + padding, y = panel_y + padding, w = 74, h = 45, color = game.C.RED, text = "Next\nRound", lines = 2 }
     local reroll_cost = game:shop_current_reroll_cost()
     local can_reroll = game:can_afford_price(reroll_cost)
     local reroll_color = can_reroll and game.C.GREEN or game.C.GREY
@@ -458,9 +455,9 @@ function ShopUI.draw_bottom_shop(game)
 
     ShopUI.layout_shop_offer_nodes(game, jokerPanel)
 
-    local bp_w, bp_h = 113, 80
+    local bp_w, bp_h = 123, 90
     local boosterPanel = {
-        x = jokerPanel.x + math.floor(jokerPanel.w * 0.5),
+        x = jokerPanel.x + math.floor(jokerPanel.w * 0.5) - 10,
         y = jokerPanel.y + jokerPanel.h + padding,
         w = bp_w,
         h = bp_h,
