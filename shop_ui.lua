@@ -147,6 +147,78 @@ function ShopUI.draw_shop_offer_buy_button(game)
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 end
 
+function ShopUI.draw_shop_offer_use_button(game)
+    if game.STATE ~= game.STATES.SHOP then return end
+    local selected = game.active_tooltip_joker
+    local is_shop_offer = false
+    for _, n in ipairs(game.shop_offer_nodes or {}) do
+        if n == selected then
+            is_shop_offer = true
+            break
+        end
+    end
+    if not selected or not is_shop_offer then return end
+    local slot = tonumber(selected.shop_offer_slot)
+    local offer = slot and game.shop_offers and game.shop_offers[slot] or nil
+    if not offer then return end
+    local kind = offer.kind
+    if kind ~= "tarot" and kind ~= "planet" and kind ~= "spectral" then return end
+    if not (game.shop_offer_consumable_use_enabled and game:shop_offer_consumable_use_enabled(offer)) then return end
+
+    local rect = selected.get_collision_rect and selected:get_collision_rect() or nil
+    if not rect then return end
+
+    local font = (game.FONTS and game.FONTS.PIXEL and game.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local prev_font = love.graphics.getFont()
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setFont(font)
+
+    local can_afford = game:can_afford_price(tonumber(offer.price) or 0)
+    local label = "Buy and Use"
+    local btn_w = math.max(32, font:getWidth(label) + 14)
+    local btn_h = math.max(14, font:getHeight() + 4)
+    local gap = 4
+    local margin = 2
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+    end
+    if not sw or sw <= 0 then sw = 320 end
+    local bx = rect.x + rect.w + gap
+    if bx + btn_w > (sw - margin) then
+        bx = rect.x - btn_w - gap
+    end
+    if bx < margin then bx = margin end
+    local buy_h = math.max(14, font:getHeight() + 4)
+    local by = rect.y + math.floor((rect.h - buy_h) * 0.5 + 0.5) + buy_h + 3
+    if by < margin then by = margin end
+    local can_use = can_afford
+    local fill_c = can_use and (game.C and game.C.ORANGE) or (game.C and game.C.GREY)
+    local shadow_c = game.C and game.C.BLOCK and game.C.BLOCK.SHADOW
+
+    if _G.draw_rect_with_shadow and fill_c and shadow_c then
+        draw_rect_with_shadow(bx, by, btn_w, btn_h, 3, 2, fill_c, shadow_c, 1)
+    else
+        if type(fill_c) == "table" then
+            love.graphics.setColor(fill_c[1], fill_c[2], fill_c[3], fill_c[4] or 1)
+        else
+            love.graphics.setColor(0.2, 0.2, 0.2, 1)
+        end
+        love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
+    end
+    love.graphics.setColor(game.C.WHITE)
+    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
+    love.graphics.printf(label, bx, text_y, btn_w, "center")
+
+    if can_use then
+        game._shop_use_button_hit = { x = bx, y = by, w = btn_w, h = btn_h, slot_index = slot }
+    end
+
+    love.graphics.setFont(prev_font)
+    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+end
+
 function ShopUI.try_buy_button_press(game, x, y)
     local hit = game._shop_buy_button_hit
     if not hit then return false end
@@ -154,6 +226,15 @@ function ShopUI.try_buy_button_press(game, x, y)
     game.touch_start_x = x
     game.touch_start_y = y
     return game:buy_shop_joker(hit.slot_index)
+end
+
+function ShopUI.try_use_button_press(game, x, y)
+    local hit = game._shop_use_button_hit
+    if not hit then return false end
+    if not game:_point_in_rect_simple(x, y, hit) then return false end
+    game.touch_start_x = x
+    game.touch_start_y = y
+    return game:buy_and_use_shop_consumable(hit.slot_index)
 end
 
 --- Top-screen shop sign (`animation_atli.shop_sign`).

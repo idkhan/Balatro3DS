@@ -314,6 +314,34 @@ local function card_is_debuffed_for_display(card)
     return G and G.boss_is_card_debuffed_for_scoring and G:boss_is_card_debuffed_for_scoring(card) == true
 end
 
+local function card_edition_for_display(card)
+    local data = card and card.card_data
+    local mod = data and data.modifier
+    local ed = mod and mod.edition
+    if type(ed) ~= "string" then return nil end
+    if ed == "foil" or ed == "holo" or ed == "polychrome" then
+        return ed
+    end
+    return nil
+end
+
+local function edition_tint_rgba(edition)
+    if edition == "foil" then
+        return 0.75, 0.9, 1.0, 1.0
+    end
+    if edition == "holo" then
+        return 0.92, 0.72, 1.0, 1.0
+    end
+    if edition == "polychrome" then
+        local t = love.timer and love.timer.getTime and love.timer.getTime() or 0
+        local r = 0.65 + 0.35 * (0.5 + 0.5 * math.sin(t * 2.2 + 0.0))
+        local g = 0.65 + 0.35 * (0.5 + 0.5 * math.sin(t * 2.2 + 2.1))
+        local b = 0.65 + 0.35 * (0.5 + 0.5 * math.sin(t * 2.2 + 4.2))
+        return r, g, b, 1.0
+    end
+    return 1.0, 1.0, 1.0, 1.0
+end
+
 local function draw_debuff_x_overlay(draw_x, draw_y, w, h)
     local inset = math.max(4, math.floor(math.min(w, h) * 0.14))
     local x1 = draw_x + inset
@@ -388,7 +416,7 @@ local function seal_tooltip_lines(seal)
     if seal == "gold" then return { "+$3 when scored" }
     elseif seal == "red" then return { "Retrigger" }
     elseif seal == "blue" then return { "Planet if held" }
-    elseif seal == "purple" then return { "Purple seal" }
+    elseif seal == "purple" then return { "Creates Tarot when discarded" }
     end
     return {}
 end
@@ -675,7 +703,9 @@ function Card:draw()
     if not self.states.visible then return end
 
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-    love.graphics.setColor(1, 1, 1, 1)
+    local ed = card_edition_for_display(self)
+    local tr, tg, tb, ta = edition_tint_rgba(ed)
+    love.graphics.setColor(tr, tg, tb, ta)
 
     local draw_x, draw_y = self:get_layout_draw_xy()
 
@@ -801,9 +831,12 @@ function Card:emit_hand_event(event_name, ctx)
             trigger = true
 
         elseif ev == "card_played" and self.seal == "gold" then
-            self.do_seal(ctx)
+            self:do_seal(ctx)
             trigger = true
 
+        elseif ev == "on_discard" and self.seal == "purple" and ctx.discard_reason == "discard" then
+            self:do_seal(ctx)
+            trigger = true
         end
     end
     if trigger then
@@ -877,8 +910,28 @@ function Card:do_seal(ctx)
     elseif self.seal == "red" then
         -- Retrigger count is handled in `Hand` via `play_trigger_total` / `held_trigger_total`.
     elseif self.seal == "blue" then
-        -- Planet card, when held in hand
+        if not (G and G.add_consumable and G.random_planet_id_for_hand_name and G.can_add_consumable) then
+            return
+        end
+        if not G:can_add_consumable() then return end
+        local hand_idx = tonumber(ctx.last_played_hand_index) or tonumber(G.last_played_hand_index)
+        if not hand_idx or hand_idx < 1 then return end
+        local hand_name = G.handlist and G.handlist[hand_idx] or nil
+        if not hand_name then return end
+        local pid = G:random_planet_id_for_hand_name(hand_name)
+        if not pid then return end
+        if G:add_consumable(pid) and Sfx and Sfx.play_mult then
+            Sfx.play_mult()
+        end
     elseif self.seal == "purple" then
-
+        if not (G and G.add_consumable and G.random_non_fool_tarot_id and G.can_add_consumable) then
+            return
+        end
+        if not G:can_add_consumable() then return end
+        local tid = G:random_non_fool_tarot_id()
+        if not tid then return end
+        if G:add_consumable(tid) and Sfx and Sfx.play_mult then
+            Sfx.play_mult()
+        end
     end
 end

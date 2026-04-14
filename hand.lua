@@ -408,6 +408,20 @@ function Hand:_discard_selected_impl(reason)
             discard_reason = reason,
         })
     end
+    if reason == "discard" then
+        for _, node in ipairs(discarded_nodes) do
+            if node and node.emit_hand_event then
+                node:emit_hand_event("on_discard", {
+                    event = "on_discard",
+                    event_name = "on_discard",
+                    discard_reason = reason,
+                    discarded_nodes = discarded_nodes,
+                    discarded_cards = discarded_cards,
+                    card_node = node,
+                })
+            end
+        end
+    end
     local new_cards, new_nodes = {}, {}
     for i, node in ipairs(self.card_nodes) do
         if not selected_set[node] then
@@ -1111,6 +1125,13 @@ function Hand:play_selected()
     if flipped_any then
         self:calculate_play()
         cards = self:ordered_selected_nodes()
+    end
+
+    if self.game then
+        local hi = tonumber(G and G.selectedHand)
+        if hi and hi > 0 then
+            self.game.last_played_hand_index = hi
+        end
     end
 
     G.hands = G.hands - 1

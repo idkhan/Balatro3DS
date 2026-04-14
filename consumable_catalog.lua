@@ -482,7 +482,7 @@ CONSUMABLE_DEFS = {
         name = "The Soul",
         atlas = "Spectral",
         tooltip = "Creates a Legendary Joker,\n(Must have room)",
-        index = 56,
+        index = 22,
     },
 
     

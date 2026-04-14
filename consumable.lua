@@ -159,7 +159,7 @@ function Consumable:get_tooltip_body_lines()
     if def.kind == "planet" and type(def.hand) == "string" and def.hand ~= "" then
         return { string.format("Increases the value of %s", def.hand) }
     end
-    if def.kind == "tarot" then
+    if def.kind == "tarot" or def.kind == "spectral" then
         local tip = def.tooltip
         if type(tip) == "table" then
             local out = {}

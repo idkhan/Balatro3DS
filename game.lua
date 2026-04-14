@@ -34,8 +34,11 @@ function Game:init(seed)
     self._use_button_hit = nil
     --- Hit rect + payload for Buy control under selected shop Joker.
     self._shop_buy_button_hit = nil
+    --- Hit rect + payload for Use control under selected shop consumable.
+    self._shop_use_button_hit = nil
     self.round_score = 0
     self.last_hand_score = 0
+    self.last_played_hand_index = nil
     --- Run currency
     self.money = 0
     -- Run Discards
@@ -644,6 +647,10 @@ function Game:draw_shop_offer_buy_button()
     ShopUI.draw_shop_offer_buy_button(self)
 end
 
+function Game:draw_shop_offer_use_button()
+    ShopUI.draw_shop_offer_use_button(self)
+end
+
 function Game:draw_shop_booster_slots()
     ShopUI.draw_shop_booster_slots(self)
 end
@@ -763,18 +770,36 @@ function Game:is_showdown_ante(ante)
     return a >= 8 and (a % 8) == 0
 end
 
+---@param blind table|nil
+---@param ante number|nil
+---@return boolean
+function Game:is_boss_blind_allowed_for_ante(blind, ante)
+    if type(blind) ~= "table" then return false end
+    local boss = blind.boss
+    if type(boss) ~= "table" then return false end
+    local a = math.max(1, tonumber(ante) or tonumber(self.ante) or 1)
+    local bmin = tonumber(boss.min)
+    local bmax = tonumber(boss.max)
+    if bmin and a < bmin then return false end
+    if bmax and a > bmax then return false end
+    local allow_showdown = self:is_showdown_ante(a)
+    local is_showdown_boss = (boss.showdown == true)
+    if is_showdown_boss and not allow_showdown then
+        return false
+    end
+    if (not is_showdown_boss) and allow_showdown then
+        return false
+    end
+    return true
+end
+
 ---Boss pool for rolling; blinds with `boss.showdown` only appear on ante 8, 16, 24, ...
 ---@param ante number|nil Defaults to `self.ante`
 function Game:get_boss_blind_pool(ante)
-    local allow_showdown = self:is_showdown_ante(ante)
     local out = {}
     for key, blind in pairs(self.P_BLINDS or {}) do
         if key ~= "bl_small" and key ~= "bl_big" and type(blind) == "table" and type(blind.boss) == "table" then
-            if blind.boss.showdown == true then
-                if allow_showdown then
-                    out[#out + 1] = key
-                end
-            else
+            if self:is_boss_blind_allowed_for_ante(blind, ante) then
                 out[#out + 1] = key
             end
         end
@@ -799,13 +824,8 @@ function Game:get_boss_blind_prototype()
         key = self:roll_boss_blind()
     else
         local proto = self.P_BLINDS[key]
-        local boss = type(proto) == "table" and proto.boss
-        if type(boss) == "table" then
-            local is_showdown_ante = self:is_showdown_ante()
-            local is_showdown_boss = (boss.showdown == true)
-            if is_showdown_ante ~= is_showdown_boss then
-                key = self:roll_boss_blind()
-            end
+        if not self:is_boss_blind_allowed_for_ante(proto, self.ante) then
+            key = self:roll_boss_blind()
         end
     end
     return key and self.P_BLINDS and self.P_BLINDS[key] or nil
@@ -1126,7 +1146,9 @@ function Game:draw()
         self:draw_shop_booster_slots()
         self:draw_shop_booster_price_tags()
         self._shop_buy_button_hit = nil
+        self._shop_use_button_hit = nil
         self:draw_shop_offer_buy_button()
+        self:draw_shop_offer_use_button()
         self._shop_booster_buy_button_hit = nil
         self:draw_shop_booster_buy_button()
     elseif self.STATE == self.STATES.OPEN_BOOSTER then
@@ -1367,6 +1389,10 @@ function Game:consumable_use_enabled(idx)
     end
 
     if c.kind == "spectral" then
+        local sid = c.id
+        if sid == "spectral_wraith" or sid == "spectral_soul" then
+            if not self:joker_has_room_for_new("base") then return false end
+        end
         local need_hand = false
         local s = c.select
         if type(s) == "table" and (s.exact or 0) > 0 then
@@ -1383,6 +1409,34 @@ function Game:consumable_use_enabled(idx)
     end
 
     return false
+end
+
+---@param c table|nil
+---@return boolean
+function Game:consumable_requires_selection(c)
+    if type(c) ~= "table" then return false end
+    local s = c.select
+    if type(s) ~= "table" then return false end
+    local exact = tonumber(s.exact)
+    if exact and exact > 0 then return true end
+    local smin = tonumber(s.min)
+    if smin and smin > 0 then return true end
+    return false
+end
+
+---@param offer table|nil
+---@return boolean
+function Game:shop_offer_consumable_use_enabled(offer)
+    if type(offer) ~= "table" then return false end
+    local kind = offer.kind
+    if kind ~= "tarot" and kind ~= "planet" and kind ~= "spectral" then return false end
+    local def = CONSUMABLE_DEFS and CONSUMABLE_DEFS[offer.id]
+    if type(def) ~= "table" then return false end
+    if self:consumable_requires_selection(def) then return false end
+    local c = copy_table and copy_table(def) or nil
+    if type(c) ~= "table" then return false end
+    c.id = offer.id
+    return self:pack_consumable_can_apply(c)
 end
 
 function Game:record_consumable_use_id(id)
@@ -1405,22 +1459,10 @@ end
 function Game:random_consumable_id_of_kind(kind, exclude)
     exclude = exclude or {}
     local pool = {}
-    local allow_duplicates = self:hasJoker("j_ring_master")
     if not CONSUMABLE_DEFS then return nil end
     for def_id, def in pairs(CONSUMABLE_DEFS) do
         if type(def) == "table" and def.kind == kind and not exclude[def_id] then
-            local owned = false
-            if not allow_duplicates then
-                for _, c in ipairs(self.consumables or {}) do
-                    if type(c) == "table" and c.id == def_id then
-                        owned = true
-                        break
-                    end
-                end
-            end
-            if not owned then
-                pool[#pool + 1] = def_id
-            end
+            pool[#pool + 1] = def_id
         end
     end
     if #pool == 0 then return nil end
@@ -1429,6 +1471,21 @@ end
 
 function Game:random_non_fool_tarot_id()
     return self:random_consumable_id_of_kind("tarot", { tarot_fool = true })
+end
+
+---@param hand_name string|nil
+---@return string|nil
+function Game:random_planet_id_for_hand_name(hand_name)
+    if type(hand_name) ~= "string" or hand_name == "" then return nil end
+    if not CONSUMABLE_DEFS then return nil end
+    local pool = {}
+    for def_id, def in pairs(CONSUMABLE_DEFS) do
+        if type(def) == "table" and def.kind == "planet" and def.hand == hand_name then
+            pool[#pool + 1] = def_id
+        end
+    end
+    if #pool == 0 then return nil end
+    return pool[math.random(1, #pool)]
 end
 
 function Game:random_joker_def_id()
@@ -2222,7 +2279,13 @@ function Game:try_use_button_press(x, y)
 end
 
 function Game:try_shop_buy_button_press(x, y)
+    if self.STATE ~= self.STATES.SHOP then return false end
     return ShopUI.try_buy_button_press(self, x, y)
+end
+
+function Game:try_shop_use_button_press(x, y)
+    if self.STATE ~= self.STATES.SHOP then return false end
+    return ShopUI.try_use_button_press(self, x, y)
 end
 
 function Game:_point_in_rect_simple(px, py, r)
@@ -3234,7 +3297,6 @@ function Game:initialize_run_loop()
     if self.hand and self.hand.clear then
         self.hand:clear()
     end
-    -- Start each run with a couple of simple Consumables for testing.
     self.consumables = {}
     self.last_consumable_use_id = nil
     self:init_shop_offer_queue()
@@ -3847,18 +3909,7 @@ function Game:_shop_pick_unique_consumable_ids(wanted_kind, count)
                 end
             end
             if incl then
-                local owned = false
-                if not allow_duplicates then
-                    for _, c in ipairs(self.consumables or {}) do
-                        if type(c) == "table" and c.id == id then
-                            owned = true
-                            break
-                        end
-                    end
-                end
-                if not owned then
-                    pool[#pool + 1] = id
-                end
+                pool[#pool + 1] = id
             end
         end
     end
@@ -4142,6 +4193,10 @@ function Game:pack_consumable_can_apply(c)
         return true
     end
     if kind == "spectral" then
+        local sid = c.id
+        if sid == "spectral_wraith" or sid == "spectral_soul" then
+            if not self:joker_has_room_for_new("base") then return false end
+        end
         if self:booster_spectral_needs_hand(c) then
             if not self:hand_ready_for_tarot_selection() then return false end
             return self:tarot_selection_requirement_met(c)
@@ -4267,6 +4322,7 @@ function Game:enter_round_win_after_blind()
         is_boss_blind = (tonumber(self.current_blind_index) == 3),
         round_score = tonumber(self.round_score) or 0,
         blind_name = self.current_blind_name,
+        last_played_hand_index = tonumber(self.last_played_hand_index) or nil,
     })
     function ctx.add_round_win_payout(label, amt)
         amt = math.floor(tonumber(amt) or 0)
@@ -4438,6 +4494,45 @@ function Game:buy_shop_joker(slot_index)
         offer_id = offer.id,
         offer_price = tonumber(offer.price) or 0,
     })
+    table.remove(self.shop_offers, slot_index)
+    if self.shop_offer_nodes and self.shop_offer_nodes[slot_index] then
+        local removed = self.shop_offer_nodes[slot_index]
+        if self.active_tooltip_joker == removed then
+            self.active_tooltip_joker = nil
+        end
+        self:remove(removed)
+        table.remove(self.shop_offer_nodes, slot_index)
+    end
+    for i, node in ipairs(self.shop_offer_nodes or {}) do
+        if node then node.shop_offer_slot = i end
+    end
+    return true
+end
+
+function Game:buy_and_use_shop_consumable(slot_index)
+    if type(slot_index) ~= "number" or slot_index < 1 then return false end
+    local offer = self.shop_offers and self.shop_offers[slot_index]
+    if type(offer) ~= "table" then return false end
+    local kind = offer.kind
+    if kind ~= "tarot" and kind ~= "planet" and kind ~= "spectral" then return false end
+    if not self:can_afford_price(tonumber(offer.price) or 0) then return false end
+    if not self:shop_offer_consumable_use_enabled(offer) then return false end
+    local def = CONSUMABLE_DEFS and CONSUMABLE_DEFS[offer.id]
+    if type(def) ~= "table" then return false end
+    local c = copy_table and copy_table(def) or nil
+    if type(c) ~= "table" then return false end
+    c.id = offer.id
+
+    self.money = (tonumber(self.money) or 0) - (tonumber(offer.price) or 0)
+    self.active_shop_booster_slot = nil
+    self:emit_joker_event("on_shop_buy", {
+        offer = offer,
+        offer_kind = offer.kind or "consumable",
+        offer_id = offer.id,
+        offer_price = tonumber(offer.price) or 0,
+    })
+    self:apply_consumable_effect(c)
+
     table.remove(self.shop_offers, slot_index)
     if self.shop_offer_nodes and self.shop_offer_nodes[slot_index] then
         local removed = self.shop_offer_nodes[slot_index]
@@ -4738,8 +4833,24 @@ function Game:touchpressed(id, x, y)
         return
     end
     if self.STATE == self.STATES.OPEN_BOOSTER then
+        if self:try_sell_button_press(x, y) then
+            return
+        end
         if BoosterPackUI.handle_touch_pressed(self, id, x, y) then
             return
+        end
+        if self.jokers_on_bottom == true then
+            self.touch_start_x = x
+            self.touch_start_y = y
+            local node = self:get_node_at(x, y)
+            if node and node_is_owned_joker(self, node) then
+                if node.touchpressed then
+                    node:touchpressed(id, x, y)
+                    self.dragging = node
+                    self:move_to_front(node)
+                end
+                return
+            end
         end
         if self.booster_session and self.booster_session.hand_for_tarot and self.hand and self.hand.card_nodes then
             self.touch_start_x = x
@@ -4765,6 +4876,9 @@ function Game:touchpressed(id, x, y)
         return
     end
     if self:try_shop_buy_button_press(x, y) then
+        return
+    end
+    if self:try_shop_use_button_press(x, y) then
         return
     end
     if self.STATE == self.STATES.SHOP then
@@ -4833,7 +4947,7 @@ function Game:touchpressed(id, x, y)
     end
     local pack_hand_move = (self.STATE == self.STATES.OPEN_BOOSTER and self.booster_session and self.booster_session.hand_for_tarot)
     local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND) or pack_hand_move
-    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL or self.STATE == self.STATES.OPEN_BOOSTER) and self.jokers_on_bottom == true
     local consumable_touch_state = (self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL and self.STATE ~= self.STATES.OPEN_BOOSTER) and self.jokers_on_bottom ~= true
     if not selecting_hand and not joker_touch_state and not consumable_touch_state then return end
     if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
@@ -4875,7 +4989,7 @@ function Game:touchmoved(id, x, y, dx, dy)
     end
     local pack_hand_move = (self.STATE == self.STATES.OPEN_BOOSTER and self.booster_session and self.booster_session.hand_for_tarot)
     local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND) or pack_hand_move
-    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL or self.STATE == self.STATES.OPEN_BOOSTER) and self.jokers_on_bottom == true
     local consumable_touch_state = (self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL and self.STATE ~= self.STATES.OPEN_BOOSTER)
     if not selecting_hand and not joker_touch_state and not consumable_touch_state then return end
     if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then return end
@@ -4906,7 +5020,7 @@ function Game:touchreleased(id, x, y)
     local pack_hand_move = (self.STATE == self.STATES.OPEN_BOOSTER and self.booster_session and self.booster_session.hand_for_tarot)
     local selecting_hand = (self.STATE == self.STATES.SELECTING_HAND) or pack_hand_move
     local shop_offer_touch_state = (self.STATE == self.STATES.SHOP)
-    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL) and self.jokers_on_bottom == true
+    local joker_touch_state = (self.STATE == self.STATES.BLIND_SELECT or self.STATE == self.STATES.SHOP or self.STATE == self.STATES.ROUND_EVAL or self.STATE == self.STATES.OPEN_BOOSTER) and self.jokers_on_bottom == true
     local tapped_consumable = false
     if self.STATE ~= self.STATES.BLIND_SELECT and self.STATE ~= self.STATES.ROUND_EVAL and self.STATE ~= self.STATES.OPEN_BOOSTER and self.jokers_on_bottom ~= true then
         local node_at = self:get_node_at(x, y)
