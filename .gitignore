@@ -8,3 +8,4 @@
 # Scripts
 *.bat
 .luarc.json
+scripts/split_joker_atlases.py

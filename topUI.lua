@@ -44,7 +44,7 @@ function TopUI.draw()
         end
     end
     local blind_index = G.selected_blind_index or G.current_blind_index or 1
-    if G.STATE == G.STATES.SELECTING_HAND or G.STATE == G.STATES.ROUND_EVAL then
+    if G.STATE == G.STATES.SELECTING_HAND or G.STATE == G.STATES.ROUND_EVAL or G.STATE == G.STATES.GAME_OVER then
         blind_index = G.current_blind_index or blind_index
     end
     local blind_name = (G.get_blind_display_name and G:get_blind_display_name(blind_index)) or ((blind_def and blind_def.name) or (G.current_blind_name or "Blind"))
@@ -102,7 +102,14 @@ function TopUI.draw()
         TopUI.center_text("Round won!", ix, iy - 6, iw, math.floor(ih * 0.55))
         local bi = G.current_blind_index or 1
         G:draw_blind_chip_anim(bi, ix + math.floor(iw / 2), iy + math.floor(ih * 0.72), 1.05)
-        
+
+    elseif G.STATE == G.STATES.GAME_OVER then
+        love.graphics.setColor(G.C.MULT or G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        TopUI.center_text("Game Over", ix, iy - 6, iw, math.floor(ih * 0.55))
+        local bi = G.current_blind_index or 1
+        G:draw_blind_chip_anim(bi, ix + math.floor(iw / 2), iy + math.floor(ih * 0.72), 0.9)
+
     elseif G.STATE == G.STATES.SHOP then
         local cell_w = 113
         local cell_h = 60

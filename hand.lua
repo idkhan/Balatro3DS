@@ -1262,8 +1262,23 @@ function Hand:calculate_play()
 
     local n = #ordered
     local has_four_fingers = false
+    local has_shortcut = false
+    local has_smeared = false
     if self.game and self.game:hasJoker("j_four_fingers") then
         has_four_fingers = true
+    end
+    if self.game and self.game:hasJoker("j_shortcut") then
+        has_shortcut = true
+    end
+    if self.game and self.game:hasJoker("j_smeared") then
+        has_smeared = true
+    end
+
+    local function normalized_suit_for_scoring(suit)
+        if not has_smeared then return suit end
+        if suit == "Hearts" or suit == "Diamonds" then return "Red" end
+        if suit == "Spades" or suit == "Clubs" then return "Black" end
+        return suit
     end
 
     -- Collect ranks / suits (hand order); track high rank for marking high card later
@@ -1286,7 +1301,8 @@ function Hand:calculate_play()
         table.insert(suits, suit)
 
         rank_counts[rank] = (rank_counts[rank] or 0) + 1
-        suit_counts[suit] = (suit_counts[suit] or 0) + 1
+        local normalized_suit = normalized_suit_for_scoring(suit)
+        suit_counts[normalized_suit] = (suit_counts[normalized_suit] or 0) + 1
 
         if type(rank) == "number" then
             if max_rank_for_high == nil or rank > max_rank_for_high then
@@ -1319,6 +1335,23 @@ function Hand:calculate_play()
     -- A straight usually needs 5 cards, but Four Fingers allows 4-card straights.
     local function is_straight()
         if n < min_straight_flush_cards then return false end
+        local function has_valid_run(sorted_unique_ranks)
+            if #sorted_unique_ranks < min_straight_flush_cards then return false end
+            local run_len = 1
+            for i = 2, #sorted_unique_ranks do
+                local diff = sorted_unique_ranks[i] - sorted_unique_ranks[i - 1]
+                local is_run_step = (diff == 1) or (has_shortcut and diff == 2)
+                if is_run_step then
+                    run_len = run_len + 1
+                    if run_len >= min_straight_flush_cards then
+                        return true
+                    end
+                else
+                    run_len = 1
+                end
+            end
+            return false
+        end
 
         local uniq = {}
         for _, r in ipairs(ranks) do
@@ -1332,20 +1365,24 @@ function Hand:calculate_play()
         end
         table.sort(uniq_ranks)
 
-        if #uniq_ranks < min_straight_flush_cards then return false end
+        if has_valid_run(uniq_ranks) then return true end
 
-        -- Need any consecutive run of required length (so 5-card straights
-        -- still work when Four Fingers lowers the requirement to 4).
-        local run_len = 1
-        for i = 2, #uniq_ranks do
-            if uniq_ranks[i] == uniq_ranks[i - 1] + 1 then
-                run_len = run_len + 1
-                if run_len >= min_straight_flush_cards then
-                    return true
-                end
-            else
-                run_len = 1
+        -- Ace-low variants (A as 1), including Shortcut gap runs (e.g. A-3-5-7-9).
+        if uniq[14] then
+            local ace_low = {}
+            for _, rr in ipairs(uniq_ranks) do
+                ace_low[#ace_low + 1] = (rr == 14) and 1 or rr
             end
+            table.sort(ace_low)
+            local dedup = {}
+            local prev = nil
+            for _, rr in ipairs(ace_low) do
+                if rr ~= prev then
+                    dedup[#dedup + 1] = rr
+                    prev = rr
+                end
+            end
+            if has_valid_run(dedup) then return true end
         end
 
         local hasA = uniq[14] or uniq["A"]
@@ -1517,15 +1554,23 @@ function Hand:calculate_play()
     end
 
     if G and G.boss_is_card_debuffed_for_scoring then
+        local any_debuffed = false
         for _, node in ipairs(ordered) do
             if node.counts_for_play_score == true and G:boss_is_card_debuffed_for_scoring(node) then
                 node.counts_for_play_score = false
+                any_debuffed = true
             end
+        end
+        if any_debuffed and G.notify_boss_effect_triggered then
+            G:notify_boss_effect_triggered({ reason = "card_debuffed_for_scoring" })
         end
     end
     if G and G.get_active_boss_blind_id and G:get_active_boss_blind_id() == "bl_psychic" and #ordered < 5 then
         for _, node in ipairs(ordered) do
             node.counts_for_play_score = false
+        end
+        if G.notify_boss_effect_triggered then
+            G:notify_boss_effect_triggered({ reason = "psychic_min_cards" })
         end
     end
 end

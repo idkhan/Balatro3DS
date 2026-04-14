@@ -310,6 +310,24 @@ local TOOLTIP_SECTION_GAP = 2
 local TOOLTIP_OUTER_PAD_X = 3
 local TOOLTIP_OUTER_PAD_Y = 3
 
+local function card_is_debuffed_for_display(card)
+    return G and G.boss_is_card_debuffed_for_scoring and G:boss_is_card_debuffed_for_scoring(card) == true
+end
+
+local function draw_debuff_x_overlay(draw_x, draw_y, w, h)
+    local inset = math.max(4, math.floor(math.min(w, h) * 0.14))
+    local x1 = draw_x + inset
+    local y1 = draw_y + inset
+    local x2 = draw_x + w - inset
+    local y2 = draw_y + h - inset
+    local prev_w = love.graphics.getLineWidth()
+    love.graphics.setLineWidth(5)
+    love.graphics.setColor(0.95, 0.2, 0.2, 0.95)
+    love.graphics.line(x1, y1, x2, y2)
+    love.graphics.line(x1, y2, x2, y1)
+    love.graphics.setLineWidth(prev_w)
+end
+
 local function rank_to_label(rank)
     if rank == 14 then return "Ace" end
     if rank == 13 then return "King" end
@@ -692,6 +710,10 @@ function Card:draw()
     -- top: seal overlay (`draw_layer` like rank; separate atlas + per-seal index)
     if self.face_up and self.seal_quad then
         self:draw_layer(self.seal_atlas, self.seal_quad, self.seal_w, self.seal_h, draw_x, draw_y)
+    end
+
+    if card_is_debuffed_for_display(self) then
+        draw_debuff_x_overlay(draw_x, draw_y, self.VT.w, self.VT.h)
     end
 
     love.graphics.pop()

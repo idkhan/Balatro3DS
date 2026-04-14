@@ -81,6 +81,30 @@ local function held_cards(ctx)
     return out
 end
 
+local function deep_copy_runtime_value(v)
+    if type(v) ~= "table" then return v end
+    local out = {}
+    for k, vv in pairs(v) do
+        out[k] = deep_copy_runtime_value(vv)
+    end
+    return out
+end
+
+local function copy_joker_runtime_state(dst, src)
+    if type(dst) ~= "table" or type(src) ~= "table" then return end
+    local skip = {
+        def = true, params = true, effect_impl = true,
+        T = true, VT = true, velocity = true, drag = true, hovering = true,
+        _hover_last = true, _touch_state = true, children = true, parent = true,
+        front_quads = true, back_quads = true, sprite_batch = true,
+    }
+    for k, v in pairs(src) do
+        if not skip[k] and type(v) ~= "function" then
+            dst[k] = deep_copy_runtime_value(v)
+        end
+    end
+end
+
 --- Lowest `card_data.rank` among cards still in hand but not in the current play (`ctx.cards` are played nodes).
 local function lowest_rank_among_held_not_played(ctx)
     local played = {}
@@ -325,7 +349,15 @@ local DEFAULT_IMPL = {
 }
 
 --- Blueprint / Brainstorm: only copy when `src` would fire; shake the copycat, not `src`.
+local function is_blueprint_copy_target(src)
+    if type(src) ~= "table" then return false end
+    local def = src.def
+    if type(def) ~= "table" then return false end
+    return def.blueprint_compat == true
+end
+
 local function delegate_joker_effect(delegator, src, ctx)
+    if not is_blueprint_copy_target(src) then return end
     if type(src) ~= "table" or type(src.apply_effect) ~= "function" then return end
     local en = type(ctx) == "table" and ctx.event_name or nil
     if type(en) == "string" and en ~= "" and type(src.matches_trigger) == "function" then
@@ -339,6 +371,7 @@ end
 
 local function delegate_joker_retrigger(delegator, src, ctx)
     if type(src) ~= "table" or src == delegator then return 0 end
+    if not is_blueprint_copy_target(src) then return 0 end
     if type(src.query_retrigger) ~= "function" then return 0 end
     return tonumber(src:query_retrigger(ctx)) or 0
 end
@@ -436,7 +469,19 @@ local SPECIAL = {
             end
             return 0
         end,
-        tooltip_lines = function() return { "Copies ability of Joker to the right" } end
+        tooltip_lines = function(joker)
+            if type(G and G.jokers) ~= "table" then return {} end
+            for i, jj in ipairs(G.jokers) do
+                if jj == joker then
+                    local src = G.jokers[i + 1]
+                    if type(src) == "table" and not is_blueprint_copy_target(src) then
+                        return { "Incompatible" }
+                    end
+                    break
+                end
+            end
+            return {}
+        end,
     },
     j_brainstorm = {
         matches_trigger = function(_, _, _) return true end,
@@ -449,7 +494,15 @@ local SPECIAL = {
             local src = G and G.jokers and G.jokers[1]
             return delegate_joker_retrigger(brainstorm, src, ctx)
         end,
-        tooltip_lines = function() return { "Copies ability of leftmost Joker" } end
+        tooltip_lines = function(joker)
+            if type(G and G.jokers) ~= "table" then return {} end
+            local src = G.jokers[1]
+            if src == joker then return {} end
+            if type(src) == "table" and not is_blueprint_copy_target(src) then
+                return { "Incompatible" }
+            end
+            return {}
+        end,
     },
     j_misprint = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
@@ -651,14 +704,31 @@ local SPECIAL = {
     j_riff_raff = {
         matches_trigger = function(_, e) return e == "on_blind_selected" end,
         apply_effect = function(_, ctx)
-            if not (G and G.add_joker_by_def and JOKER_DEFS) then return end
+            if not (G and G.add_joker_by_def and G.random_joker_def_id_by_rarity) then return end
             local spawned = 0
-            for id, def in pairs(JOKER_DEFS) do
-                if tonumber(def.rarity) == 1 and G:add_joker_by_def(id) then
-                    spawned = spawned + 1
-                    mark_effect_applied(ctx)
-                    mark_created_item(ctx)
-                    if spawned >= 2 then break end
+            local allow_duplicates = G.hasJoker and G:hasJoker("j_ring_master")
+            if allow_duplicates then
+                for _ = 1, 2 do
+                    local id = G:random_joker_def_id_by_rarity(1)
+                    if G:add_joker_by_def(id) then
+                        spawned = spawned + 1
+                        mark_effect_applied(ctx)
+                        mark_created_item(ctx)
+                    end
+                end
+            else
+                local picked = {}
+                local tries = 0
+                local max_tries = 20
+                while spawned < 2 and tries < max_tries do
+                    tries = tries + 1
+                    local id = G:random_joker_def_id_by_rarity(1)
+                    if id and not picked[id] and G:add_joker_by_def(id) then
+                        picked[id] = true
+                        spawned = spawned + 1
+                        mark_effect_applied(ctx)
+                        mark_created_item(ctx)
+                    end
                 end
             end
         end
@@ -1055,7 +1125,8 @@ local SPECIAL = {
         apply_effect = function(_, ctx)
             if ctx.event_name ~= "on_hand_scored" then return end
             if type(ctx.cards) ~= "table" or #ctx.cards ~= 1 then return end
-            local eff = G and G.get_effective_hands_per_round and G:get_effective_hands_per_round() or 5
+            local eff = G and G.get_effective_hands_per_round and G:get_effective_hands_per_round()
+            print(eff.." : "..G.hands)
             if (tonumber(G and G.hands) or 0) ~= eff - 1 then return end
 
             local node = ctx.cards[1]
@@ -1341,6 +1412,12 @@ local SPECIAL = {
             end
         end
     },
+    j_matador = {
+        matches_trigger = function(_, e) return e == "on_boss_effect_triggered" end,
+        apply_effect = function(_, ctx)
+            add_money(ctx, 8)
+        end
+    },
 
     j_swashbuckler = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
@@ -1520,6 +1597,86 @@ local SPECIAL = {
                 G:add_consumable(tid)
                 mark_created_item(ctx)
             end
+        end
+    },
+
+    j_perkeo = {
+        matches_trigger = function(_, e) return e == "on_blind_selected" end,
+        apply_effect = function(_, ctx)
+            if ctx.event_name ~= "on_blind_selected" then return end
+            if not (G and G.add_consumable and type(G.consumables) == "table") then return end
+            if #G.consumables < 1 then return end
+            local src = G.consumables[math.random(1, #G.consumables)]
+            if type(src) ~= "table" or type(src.id) ~= "string" or src.id == "" then return end
+            local params = {}
+            for k, v in pairs(src) do
+                if k ~= "edition" then
+                    if type(v) == "table" then
+                        if G.deep_copy_card_data then
+                            params[k] = G:deep_copy_card_data(v)
+                        else
+                            params[k] = v
+                        end
+                    else
+                        params[k] = v
+                    end
+                end
+            end
+            params.edition = "negative"
+            if G:add_consumable(src.id, params) then
+                mark_effect_applied(ctx)
+                mark_created_item(ctx)
+            end
+        end
+    },
+
+    j_burnt = {
+        matches_trigger = function(_, e) return e == "on_discard" or e == "on_round_begin" or e == "on_blind_selected" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_round_begin" or ctx.event_name == "on_blind_selected" then
+                j._burnt_used_this_round = false
+                return
+            end
+            if ctx.event_name ~= "on_discard" or ctx.discard_reason ~= "discard" then return end
+            if j._burnt_used_this_round == true then return end
+            local hand_idx = tonumber(G and G.selectedHand)
+            if not hand_idx or hand_idx < 1 then return end
+            if G and G.upgrade_hand_level_at_index and G:upgrade_hand_level_at_index(hand_idx) then
+                j._burnt_used_this_round = true
+                mark_effect_applied(ctx)
+            end
+        end
+    },
+
+    j_invisible = {
+        matches_trigger = function(_, e) return e == "on_round_end" or e == "on_joker_sold" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_round_end" then
+                j.runtime_counter = math.min(2, (tonumber(j.runtime_counter) or 0) + 1)
+                mark_effect_applied(ctx)
+                return
+            end
+            if ctx.invisible_duplicated == true then return end
+            if ctx.event_name ~= "on_joker_sold" or ctx.joker ~= j then return end
+            if not (G and G.add_joker_by_def and type(G.jokers) == "table") then return end
+            local required = math.max(1, math.floor(tonumber(j.def and j.def.config and j.def.config.extra) or 2))
+            if (tonumber(j.runtime_counter) or 0) < required then return end
+            if #G.jokers <= 0 then return end
+
+            local src = G.jokers[math.random(1, #G.jokers)]
+            if not (src and src.def and src.def.id) then return end
+
+            local src_edition = Joker and Joker.normalize_edition and Joker.normalize_edition(src.edition) or tostring(src.edition or "base")
+            local clone_edition = (src_edition == "negative") and "base" or src_edition
+            if not G:add_joker_by_def(src.def.id, { edition = clone_edition }) then return end
+
+            local clone = G.jokers[#G.jokers]
+            if not clone then return end
+            copy_joker_runtime_state(clone, src)
+            clone.edition = clone_edition
+            if clone.refresh_quads then clone:refresh_quads() end
+            mark_effect_applied(ctx)
+            mark_created_item(ctx)
         end
     },
 

@@ -6,6 +6,13 @@ JOKER_DEFS = {
     j_joker = {
         id = "j_joker",
         name = "Joker",
+        order = 1,
+        unlocked = true,
+        start_alerted = true,
+        discovered = true,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 2,
 
@@ -13,7 +20,7 @@ JOKER_DEFS = {
         effect = "Mult",
         config = { mult = 4 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 0
         }
     },
@@ -22,6 +29,12 @@ JOKER_DEFS = {
     j_greedy_joker = {
         id = "j_greedy_joker",
         name = "Greedy Joker",
+        order = 2,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -29,7 +42,7 @@ JOKER_DEFS = {
         effect = "Suit Mult",
         config = { extra = { s_mult = 3, suit = "Diamonds" } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 16
         }
     },
@@ -38,6 +51,12 @@ JOKER_DEFS = {
     j_lusty_joker = {
         id = "j_lusty_joker",
         name = "Lusty Joker",
+        order = 3,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -45,7 +64,7 @@ JOKER_DEFS = {
         effect = "Suit Mult",
         config = { extra = { s_mult = 3, suit = "Hearts" } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 17
         }
     },
@@ -54,6 +73,12 @@ JOKER_DEFS = {
     j_wrathful_joker = {
         id = "j_wrathful_joker",
         name = "Wrathful Joker",
+        order = 4,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -61,7 +86,7 @@ JOKER_DEFS = {
         effect = "Suit Mult",
         config = { extra = { s_mult = 3, suit = "Spades" } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 18
         }
     },
@@ -70,6 +95,12 @@ JOKER_DEFS = {
     j_gluttenous_joker = {
         id = "j_gluttenous_joker",
         name = "Gluttonous Joker",
+        order = 5,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -77,7 +108,7 @@ JOKER_DEFS = {
         effect = "Suit Mult",
         config = { extra = { s_mult = 3, suit = "Clubs" } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 19
         }
     },
@@ -86,6 +117,12 @@ JOKER_DEFS = {
     j_jolly = {
         id = "j_jolly",
         name = "Jolly Joker",
+        order = 6,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 3,
 
@@ -93,7 +130,7 @@ JOKER_DEFS = {
         effect = "Type Mult",
         config = { t_mult = 8, type = "Pair" },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 2
         }
     },
@@ -102,6 +139,12 @@ JOKER_DEFS = {
     j_zany = {
         id = "j_zany",
         name = "Zany Joker",
+        order = 7,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -109,7 +152,7 @@ JOKER_DEFS = {
         effect = "Type Mult",
         config = { t_mult = 12, type = "Three of a Kind" },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 3
         }
     },
@@ -118,6 +161,12 @@ JOKER_DEFS = {
     j_mad = {
         id = "j_mad",
         name = "Mad Joker",
+        order = 8,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -125,7 +174,7 @@ JOKER_DEFS = {
         effect = "Type Mult",
         config = { t_mult = 10, type = "Two Pair" },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 4
         }
     },
@@ -134,6 +183,12 @@ JOKER_DEFS = {
     j_crazy = {
         id = "j_crazy",
         name = "Crazy Joker",
+        order = 9,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -141,7 +196,7 @@ JOKER_DEFS = {
         effect = "Type Mult",
         config = { t_mult = 12, type = "Straight" },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 5
         }
     },
@@ -150,6 +205,12 @@ JOKER_DEFS = {
     j_droll = {
         id = "j_droll",
         name = "Droll Joker",
+        order = 10,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -157,7 +218,7 @@ JOKER_DEFS = {
         effect = "Type Mult",
         config = { t_mult = 10, type = "Flush" },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 6
         }
     },
@@ -165,76 +226,112 @@ JOKER_DEFS = {
     j_sly = {
         id = "j_sly",
         name = "Sly Joker",
+        order = 11,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 3,
 
         sell_cost = 1,
         config = { t_chips = 50, type = "Pair" },
         pos = {
-            atlas = "Joker2",
-            index = 50
+            atlas = "Joker2_p3",
+            index = 2
         }
     },
 
     j_wily = {
         id = "j_wily",
         name = "Wily Joker",
+        order = 12,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { t_chips = 100, type = "Three of a Kind" },
         pos = {
-            atlas = "Joker2",
-            index = 51
+            atlas = "Joker2_p3",
+            index = 3
         }
     },
 
     j_clever = {
         id = "j_clever",
         name = "Clever Joker",
+        order = 13,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { t_chips = 80, type = "Two Pair" },
         pos = {
-            atlas = "Joker2",
-            index = 52
+            atlas = "Joker2_p3",
+            index = 4
         }
     },
 
     j_devious = {
         id = "j_devious",
         name = "Devious Joker",
+        order = 14,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { t_chips = 100, type = "Straight" },
         pos = {
-            atlas = "Joker2",
-            index = 53
+            atlas = "Joker2_p3",
+            index = 5
         }
     },
 
     j_crafty = {
         id = "j_crafty",
         name = "Crafty Joker",
+        order = 15,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { t_chips = 80, type = "Flush" },
         pos = {
-            atlas = "Joker2",
-            index = 54
+            atlas = "Joker2_p3",
+            index = 6
         }
     },
 
     j_half = {
         id = "j_half",
         name = "Half Joker",
+        order = 16,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -242,7 +339,7 @@ JOKER_DEFS = {
         effect = "Hand Size Mult",
         config = { extra = { mult = 20, size = 3 } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 7
         }
     },
@@ -250,6 +347,12 @@ JOKER_DEFS = {
     j_stencil = {
         id = "j_stencil",
         name = "Joker Stencil",
+        order = 17,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 8,
 
@@ -257,28 +360,40 @@ JOKER_DEFS = {
         effect = "Stencil Mult",
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 52
+            atlas = "Joker1_p3",
+            index = 4
         }
     },
 
     j_four_fingers = {
         id = "j_four_fingers",
         name = "Four Fingers",
+        order = 18,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 66
+            atlas = "Joker1_p3",
+            index = 18
         }
     },
 
     j_mime = {
         id = "j_mime",
         name = "Mime",
+        order = 19,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
@@ -286,7 +401,7 @@ JOKER_DEFS = {
         effect = "Hand card double",
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 14
         }
     },
@@ -294,6 +409,12 @@ JOKER_DEFS = {
     j_credit_card = {
         id = "j_credit_card",
         name = "Credit Card",
+        order = 20,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 1,
 
@@ -301,7 +422,7 @@ JOKER_DEFS = {
         effect = "Credit",
         config = { extra = 20 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 15
         }
     },
@@ -309,6 +430,12 @@ JOKER_DEFS = {
     j_ceremonial = {
         id = "j_ceremonial",
         name = "Ceremonial Dagger",
+        order = 21,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -316,14 +443,20 @@ JOKER_DEFS = {
         effect = "Destroy Joker",
         config = { mult = 0 },
         pos = {
-            atlas = "Joker1",
-            index = 55
+            atlas = "Joker1_p3",
+            index = 7
         }
     },
 
     j_banner = {
         id = "j_banner",
         name = "Banner",
+        order = 22,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -331,7 +464,7 @@ JOKER_DEFS = {
         effect = "Discard Chips",
         config = { extra = 30 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 21
         }
     },
@@ -339,6 +472,12 @@ JOKER_DEFS = {
     j_mystic_summit = {
         id = "j_mystic_summit",
         name = "Mystic Summit",
+        order = 23,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -346,7 +485,7 @@ JOKER_DEFS = {
         effect = "No Discard Mult",
         config = { extra = { mult = 15, d_remaining = 0 } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 22
         }
     },
@@ -354,6 +493,12 @@ JOKER_DEFS = {
     j_marble = {
         id = "j_marble",
         name = "Marble Joker",
+        order = 24,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -361,7 +506,7 @@ JOKER_DEFS = {
         effect = "Stone card hands",
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 23
         }
     },
@@ -369,6 +514,12 @@ JOKER_DEFS = {
     j_loyalty_card = {
         id = "j_loyalty_card",
         name = "Loyalty Card",
+        order = 25,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
@@ -376,14 +527,20 @@ JOKER_DEFS = {
         effect = "1 in 6 mult",
         config = { extra = { Xmult = 4, every = 6, remaining = 6 } },
         pos = {
-            atlas = "Joker1",
-            index = 24
+            atlas = "Joker1_p2",
+            index = 0
         }
     },
 
     j_8_ball = {
         id = "j_8_ball",
         name = "8 Ball",
+        order = 26,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -391,14 +548,20 @@ JOKER_DEFS = {
         effect = "Spawn Tarot",
         config = { extra = 4 },
         pos = {
-            atlas = "Joker1",
-            index = 50
+            atlas = "Joker1_p3",
+            index = 2
         }
     },
 
     j_misprint = {
         id = "j_misprint",
         name = "Misprint",
+        order = 27,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -406,28 +569,40 @@ JOKER_DEFS = {
         effect = "Random Mult",
         config = { extra = { max = 23, min = 0 } },
         pos = {
-            atlas = "Joker1",
-            index = 26
+            atlas = "Joker1_p2",
+            index = 2
         }
     },
 
     j_dusk = {
         id = "j_dusk",
         name = "Dusk",
+        order = 28,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 74
+            atlas = "Joker1_p4",
+            index = 2
         }
     },
 
     j_raised_fist = {
         id = "j_raised_fist",
         name = "Raised Fist",
+        order = 29,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -435,14 +610,20 @@ JOKER_DEFS = {
         effect = "Socialized Mult",
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 28
+            atlas = "Joker1_p2",
+            index = 4
         }
     },
 
     j_chaos = {
         id = "j_chaos",
         name = "Chaos the Clown",
+        order = 30,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -450,7 +631,7 @@ JOKER_DEFS = {
         effect = "Bonus Rerolls",
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 1
         }
     },
@@ -458,6 +639,12 @@ JOKER_DEFS = {
     j_fibonacci = {
         id = "j_fibonacci",
         name = "Fibonacci",
+        order = 31,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 8,
 
@@ -465,14 +652,20 @@ JOKER_DEFS = {
         effect = "Card Mult",
         config = { extra = 8 },
         pos = {
-            atlas = "Joker1",
-            index = 51
+            atlas = "Joker1_p3",
+            index = 3
         }
     },
 
     j_steel_joker = {
         id = "j_steel_joker",
         name = "Steel Joker",
+        order = 32,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
@@ -480,14 +673,20 @@ JOKER_DEFS = {
         effect = "Steel Card Buff",
         config = { extra = 0.2 },
         pos = {
-            atlas = "Joker1",
-            index = 27
+            atlas = "Joker1_p2",
+            index = 3
         }
     },
 
     j_scary_face = {
         id = "j_scary_face",
         name = "Scary Face",
+        order = 33,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -495,14 +694,20 @@ JOKER_DEFS = {
         effect = "Scary Face Cards",
         config = { extra = 30 },
         pos = {
-            atlas = "Joker1",
-            index = 32
+            atlas = "Joker1_p2",
+            index = 8
         }
     },
 
     j_abstract = {
         id = "j_abstract",
         name = "Abstract Joker",
+        order = 34,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -510,14 +715,20 @@ JOKER_DEFS = {
         effect = "Joker Mult",
         config = { extra = 3 },
         pos = {
-            atlas = "Joker1",
-            index = 33
+            atlas = "Joker1_p2",
+            index = 9
         }
     },
 
     j_delayed_grat = {
         id = "j_delayed_grat",
         name = "Delayed Gratification",
+        order = 35,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -525,14 +736,20 @@ JOKER_DEFS = {
         effect = "Discard dollars",
         config = { extra = 2 },
         pos = {
-            atlas = "Joker1",
-            index = 34
+            atlas = "Joker1_p2",
+            index = 10
         }
     },
 
     j_hack = {
         id = "j_hack",
         name = "Hack",
+        order = 36,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -540,14 +757,20 @@ JOKER_DEFS = {
         effect = "Low Card double",
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 25
+            atlas = "Joker1_p2",
+            index = 1
         }
     },
 
     j_pareidolia = {
         id = "j_pareidolia",
         name = "Pareidolia",
+        order = 37,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
@@ -555,28 +778,40 @@ JOKER_DEFS = {
         effect = "All face cards",
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 36
+            atlas = "Joker1_p2",
+            index = 12
         }
     },
 
     j_gros_michel = {
         id = "j_gros_michel",
         name = "Gros Michel",
+        order = 38,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 1,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = { odds = 6, mult = 15 } },
         pos = {
-            atlas = "Joker1",
-            index = 67
+            atlas = "Joker1_p3",
+            index = 19
         }
     },
 
     j_even_steven = {
         id = "j_even_steven",
         name = "Even Steven",
+        order = 39,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -584,14 +819,20 @@ JOKER_DEFS = {
         effect = "Even Card Buff",
         config = { extra = 4 },
         pos = {
-            atlas = "Joker1",
-            index = 38
+            atlas = "Joker1_p2",
+            index = 14
         }
     },
 
     j_odd_todd = {
         id = "j_odd_todd",
         name = "Odd Todd",
+        order = 40,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -599,14 +840,20 @@ JOKER_DEFS = {
         effect = "Odd Card Buff",
         config = { extra = 31 },
         pos = {
-            atlas = "Joker1",
-            index = 39
+            atlas = "Joker1_p2",
+            index = 15
         }
     },
 
     j_scholar = {
         id = "j_scholar",
         name = "Scholar",
+        order = 41,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -614,14 +861,20 @@ JOKER_DEFS = {
         effect = "Ace Buff",
         config = { extra = { mult = 4, chips = 20 } },
         pos = {
-            atlas = "Joker1",
-            index = 40
+            atlas = "Joker1_p2",
+            index = 16
         }
     },
 
     j_business = {
         id = "j_business",
         name = "Business Card",
+        order = 42,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -629,14 +882,20 @@ JOKER_DEFS = {
         effect = "Face Card dollar Chance",
         config = { extra = 2 },
         pos = {
-            atlas = "Joker1",
-            index = 41
+            atlas = "Joker1_p2",
+            index = 17
         }
     },
 
     j_supernova = {
         id = "j_supernova",
         name = "Supernova",
+        order = 43,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -644,28 +903,40 @@ JOKER_DEFS = {
         effect = "Hand played mult",
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 42
+            atlas = "Joker1_p2",
+            index = 18
         }
     },
 
     j_ride_the_bus = {
         id = "j_ride_the_bus",
         name = "Ride the Bus",
+        order = 44,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 1,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 61
+            atlas = "Joker1_p3",
+            index = 13
         }
     },
 
     j_space = {
         id = "j_space",
         name = "Space Joker",
+        order = 45,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
@@ -673,21 +944,27 @@ JOKER_DEFS = {
         effect = "Upgrade Hand chance",
         config = { extra = 4 },
         pos = {
-            atlas = "Joker1",
-            index = 53
+            atlas = "Joker1_p3",
+            index = 5
         }
     },
 
     j_egg = {
         id = "j_egg",
         name = "Egg",
+        order = 46,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = 3 },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 10
         }
     },
@@ -695,13 +972,19 @@ JOKER_DEFS = {
     j_burglar = {
         id = "j_burglar",
         name = "Burglar",
+        order = 47,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 3 },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 11
         }
     },
@@ -709,13 +992,19 @@ JOKER_DEFS = {
     j_blackboard = {
         id = "j_blackboard",
         name = "Blackboard",
+        order = 48,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 3 },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 12
         }
     },
@@ -723,13 +1012,19 @@ JOKER_DEFS = {
     j_runner = {
         id = "j_runner",
         name = "Runner",
+        order = 49,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = { chips = 0, chip_mod = 15 } },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 13
         }
     },
@@ -737,13 +1032,19 @@ JOKER_DEFS = {
     j_ice_cream = {
         id = "j_ice_cream",
         name = "Ice Cream",
+        order = 50,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 1,
         cost = 5,
 
         sell_cost = 2,
         config = { chips = 100, chip_mod = 5 },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 14
         }
     },
@@ -751,13 +1052,19 @@ JOKER_DEFS = {
     j_dna = {
         id = "j_dna",
         name = "DNA",
+        order = 51,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
         sell_cost = 4,
         config = {},
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 15
         }
     },
@@ -765,13 +1072,19 @@ JOKER_DEFS = {
     j_splash = {
         id = "j_splash",
         name = "Splash",
+        order = 52,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 3,
 
         sell_cost = 1,
         config = {},
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 16
         }
     },
@@ -779,13 +1092,19 @@ JOKER_DEFS = {
     j_blue_joker = {
         id = "j_blue_joker",
         name = "Blue Joker",
+        order = 53,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 17
         }
     },
@@ -793,13 +1112,19 @@ JOKER_DEFS = {
     j_sixth_sense = {
         id = "j_sixth_sense",
         name = "Sixth Sense",
+        order = 54,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = {},
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 18
         }
     },
@@ -807,13 +1132,19 @@ JOKER_DEFS = {
     j_constellation = {
         id = "j_constellation",
         name = "Constellation",
+        order = 55,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 0.1, Xmult = 1 },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 19
         }
     },
@@ -821,13 +1152,19 @@ JOKER_DEFS = {
     j_hiker = {
         id = "j_hiker",
         name = "Hiker",
+        order = 56,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = 5 },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 20
         }
     },
@@ -835,13 +1172,19 @@ JOKER_DEFS = {
     j_faceless = {
         id = "j_faceless",
         name = "Faceless Joker",
+        order = 57,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = { dollars = 5, faces = 3 } },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 21
         }
     },
@@ -849,13 +1192,19 @@ JOKER_DEFS = {
     j_green_joker = {
         id = "j_green_joker",
         name = "Green Joker",
+        order = 58,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = { hand_add = 1, discard_sub = 1 } },
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 22
         }
     },
@@ -863,13 +1212,19 @@ JOKER_DEFS = {
     j_superposition = {
         id = "j_superposition",
         name = "Superposition",
+        order = 59,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = {},
         pos = {
-            atlas = "Joker2",
+            atlas = "Joker2_p1",
             index = 23
         }
     },
@@ -877,383 +1232,551 @@ JOKER_DEFS = {
     j_todo_list = {
         id = "j_todo_list",
         name = "To Do List",
+        order = 60,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = { dollars = 4, poker_hand = "High Card" } },
         pos = {
-            atlas = "Joker2",
-            index = 24
+            atlas = "Joker2_p2",
+            index = 0
         }
     },
 
     j_cavendish = {
         id = "j_cavendish",
         name = "Cavendish",
+        order = 61,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = { odds = 1000, Xmult = 3 } },
         pos = {
-            atlas = "Joker2",
-            index = 25
+            atlas = "Joker2_p2",
+            index = 1
         }
     },
 
     j_card_sharp = {
         id = "j_card_sharp",
         name = "Card Sharp",
+        order = 62,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = { Xmult = 3 } },
         pos = {
-            atlas = "Joker2",
-            index = 26
+            atlas = "Joker2_p2",
+            index = 2
         }
     },
 
     j_red_card = {
         id = "j_red_card",
         name = "Red Card",
+        order = 63,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = 3 },
         pos = {
-            atlas = "Joker2",
-            index = 27
+            atlas = "Joker2_p2",
+            index = 3
         }
     },
 
     j_madness = {
         id = "j_madness",
         name = "Madness",
+        order = 64,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 0.5 },
         pos = {
-            atlas = "Joker2",
-            index = 28
+            atlas = "Joker2_p2",
+            index = 4
         }
     },
 
     j_square = {
         id = "j_square",
         name = "Square Joker",
+        order = 65,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = { chips = 0, chip_mod = 4 } },
         pos = {
-            atlas = "Joker2",
-            index = 29
+            atlas = "Joker2_p2",
+            index = 5
         }
     },
 
     j_seance = {
         id = "j_seance",
         name = "Seance",
+        order = 66,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = { poker_hand = "Straight Flush" } },
         pos = {
-            atlas = "Joker2",
-            index = 30
+            atlas = "Joker2_p2",
+            index = 6
         }
     },
 
     j_riff_raff = {
         id = "j_riff_raff",
         name = "Riff-raff",
+        order = 67,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker2",
-            index = 31
+            atlas = "Joker2_p2",
+            index = 7
         }
     },
 
     j_vampire = {
         id = "j_vampire",
         name = "Vampire",
+        order = 68,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 0.1, Xmult = 1 },
         pos = {
-            atlas = "Joker2",
-            index = 32
+            atlas = "Joker2_p2",
+            index = 8
         }
     },
 
     j_shortcut = {
         id = "j_shortcut",
         name = "Shortcut",
+        order = 69,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = {},
         pos = {
-            atlas = "Joker2",
-            index = 33
+            atlas = "Joker2_p2",
+            index = 9
         }
     },
 
     j_hologram = {
         id = "j_hologram",
         name = "Hologram",
+        order = 70,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 0.25, Xmult = 1 },
         pos = {
-            atlas = "Joker2",
-            index = 34
+            atlas = "Joker2_p2",
+            index = 10
         }
     },
 
     j_vagabond = {
         id = "j_vagabond",
         name = "Vagabond",
+        order = 71,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
         sell_cost = 4,
         config = { extra = 4 },
         pos = {
-            atlas = "Joker2",
-            index = 35
+            atlas = "Joker2_p2",
+            index = 11
         }
     },
 
     j_baron = {
         id = "j_baron",
         name = "Baron",
+        order = 72,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
         sell_cost = 4,
         config = { extra = 1.5 },
         pos = {
-            atlas = "Joker2",
-            index = 36
+            atlas = "Joker2_p2",
+            index = 12
         }
     },
 
     j_cloud_9 = {
         id = "j_cloud_9",
         name = "Cloud 9",
+        order = 73,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker2",
-            index = 37
+            atlas = "Joker2_p2",
+            index = 13
         }
     },
 
     j_rocket = {
         id = "j_rocket",
         name = "Rocket",
+        order = 74,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = { dollars = 1, increase = 2 } },
         pos = {
-            atlas = "Joker2",
-            index = 38
+            atlas = "Joker2_p2",
+            index = 14
         }
     },
 
     j_obelisk = {
         id = "j_obelisk",
         name = "Obelisk",
+        order = 75,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
         sell_cost = 4,
         config = { extra = 0.2, Xmult = 1 },
         pos = {
-            atlas = "Joker2",
-            index = 39
+            atlas = "Joker2_p2",
+            index = 15
         }
     },
 
     j_midas_mask = {
         id = "j_midas_mask",
         name = "Midas Mask",
+        order = 76,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = {},
         pos = {
-            atlas = "Joker2",
-            index = 40
+            atlas = "Joker2_p2",
+            index = 16
         }
     },
 
     j_luchador = {
         id = "j_luchador",
         name = "Luchador",
+        order = 77,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 2,
         cost = 5,
 
         sell_cost = 2,
         config = {},
         pos = {
-            atlas = "Joker2",
-            index = 41
+            atlas = "Joker2_p2",
+            index = 17
         }
     },
 
     j_photograph = {
         id = "j_photograph",
         name = "Photograph",
+        order = 78,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker2",
-            index = 42
+            atlas = "Joker2_p2",
+            index = 18
         }
     },
 
     j_gift = {
         id = "j_gift",
         name = "Gift Card",
+        order = 79,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker2",
-            index = 43
+            atlas = "Joker2_p2",
+            index = 19
         }
     },
 
     j_turtle_bean = {
         id = "j_turtle_bean",
         name = "Turtle Bean",
+        order = 80,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = { h_size = 5, h_mod = 1 } },
         pos = {
-            atlas = "Joker2",
-            index = 44
+            atlas = "Joker2_p2",
+            index = 20
         }
     },
 
     j_erosion = {
         id = "j_erosion",
         name = "Erosion",
+        order = 81,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 4 },
         pos = {
-            atlas = "Joker2",
-            index = 45
+            atlas = "Joker2_p2",
+            index = 21
         }
     },
 
     j_reserved_parking = {
         id = "j_reserved_parking",
         name = "Reserved Parking",
+        order = 82,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = { odds = 2, dollars = 1 } },
         pos = {
-            atlas = "Joker2",
-            index = 46
+            atlas = "Joker2_p2",
+            index = 22
         }
     },
 
     j_mail = {
         id = "j_mail",
         name = "Mail-In Rebate",
+        order = 83,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = 5 },
         pos = {
-            atlas = "Joker2",
-            index = 47
+            atlas = "Joker2_p2",
+            index = 23
         }
     },
 
     j_to_the_moon = {
         id = "j_to_the_moon",
         name = "To the Moon",
+        order = 84,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker2",
-            index = 48
+            atlas = "Joker2_p3",
+            index = 0
         }
     },
 
     j_hallucination = {
         id = "j_hallucination",
         name = "Hallucination",
+        order = 85,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker2",
-            index = 49
+            atlas = "Joker2_p3",
+            index = 1
         }
     },
 
     j_smiley_face = { 
         id = "j_smiley_face",
         name = "Smiley Face", 
+        order = 104,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1, 
         cost = 4, 
         sell_cost = 2,
 
         pos = { 
-            atlas = "Joker2", 
-            index = 66 
+            atlas = "Joker2_p3", 
+            index = 18 
         } 
     },
 
     j_ticket = {
         id = "j_ticket",
         name = "Golden Ticket",
+        order = 106,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
@@ -1261,14 +1784,20 @@ JOKER_DEFS = {
         effect = "dollars for Gold cards",
         config = { extra = 4 },
         pos = {
-            atlas = "Joker1",
-            index = 35
+            atlas = "Joker1_p2",
+            index = 11
         }
     },
 
     j_mr_bones = {
         id = "j_mr_bones",
         name = "Mr. Bones",
+        order = 107,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 2,
         cost = 5,
 
@@ -1276,14 +1805,20 @@ JOKER_DEFS = {
         effect = "Prevent Death",
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 43
+            atlas = "Joker1_p2",
+            index = 19
         }
     },
 
     j_acrobat = {
         id = "j_acrobat",
         name = "Acrobat",
+        order = 108,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -1291,7 +1826,7 @@ JOKER_DEFS = {
         effect = "Shop size",
         config = { extra = 3 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 12
         }
     },
@@ -1299,6 +1834,12 @@ JOKER_DEFS = {
     j_sock_and_buskin = {
         id = "j_sock_and_buskin",
         name = "Sock and Buskin",
+        order = 109,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -1306,7 +1847,7 @@ JOKER_DEFS = {
         effect = "Face card double",
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 13
         }
     },
@@ -1314,6 +1855,12 @@ JOKER_DEFS = {
     j_swashbuckler = {
         id = "j_swashbuckler",
         name = "Swashbuckler",
+        order = 110,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
@@ -1321,14 +1868,20 @@ JOKER_DEFS = {
         effect = "Set Mult",
         config = { mult = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 59
+            atlas = "Joker1_p3",
+            index = 11
         }
     },
 
     j_troubadour = {
         id = "j_troubadour",
         name = "Troubadour",
+        order = 111,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -1336,7 +1889,7 @@ JOKER_DEFS = {
         effect = "Hand Size, Plays",
         config = { extra = { h_size = 2, h_plays = -1 } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 20
         }
     },
@@ -1344,118 +1897,172 @@ JOKER_DEFS = {
     j_certificate = {
         id = "j_certificate",
         name = "Certificate",
+        order = 112,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 88
+            atlas = "Joker1_p4",
+            index = 16
         }
     },
 
     j_smeared = {
         id = "j_smeared",
         name = "Smeared Joker",
+        order = 113,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 64
+            atlas = "Joker1_p3",
+            index = 16
         }
     },
 
     j_throwback = {
         id = "j_throwback",
         name = "Throwback",
+        order = 114,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 0.25 },
         pos = {
-            atlas = "Joker1",
-            index = 75
+            atlas = "Joker1_p4",
+            index = 3
         }
     },
 
     j_hanging_chad = {
         id = "j_hanging_chad",
         name = "Hanging Chad",
+        order = 115,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4,
 
         sell_cost = 2,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker1",
-            index = 69
+            atlas = "Joker1_p3",
+            index = 21
         }
     },
 
     j_rough_gem = {
         id = "j_rough_gem",
         name = "Rough Gem",
+        order = 116,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 79
+            atlas = "Joker1_p4",
+            index = 7
         }
     },
 
     j_bloodstone = {
         id = "j_bloodstone",
         name = "Bloodstone",
+        order = 117,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = { odds = 2, Xmult = 1.5 } },
         pos = {
-            atlas = "Joker1",
-            index = 80
+            atlas = "Joker1_p4",
+            index = 8
         }
     },
 
     j_arrowhead = {
         id = "j_arrowhead",
         name = "Arrowhead",
+        order = 118,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 50 },
         pos = {
-            atlas = "Joker1",
-            index = 81
+            atlas = "Joker1_p4",
+            index = 9
         }
     },
 
     j_onyx_agate = {
         id = "j_onyx_agate",
         name = "Onyx Agate",
+        order = 119,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 7 },
         pos = {
-            atlas = "Joker1",
-            index = 82
+            atlas = "Joker1_p4",
+            index = 10
         }
     },
 
     j_glass = {
         id = "j_glass",
         name = "Glass Joker",
+        order = 120,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -1463,42 +2070,60 @@ JOKER_DEFS = {
         effect = "Glass Card",
         config = { extra = 0.75, Xmult = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 31
+            atlas = "Joker1_p2",
+            index = 7
         }
     },
 
     j_ring_master = {
         id = "j_ring_master",
         name = "Showman",
+        order = 121,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 5,
 
         sell_cost = 2,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 56
+            atlas = "Joker1_p3",
+            index = 8
         }
     },
 
     j_flower_pot = {
         id = "j_flower_pot",
         name = "Flower Pot",
+        order = 122,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 3 },
         pos = {
-            atlas = "Joker1",
-            index = 60
+            atlas = "Joker1_p3",
+            index = 12
         }
     },
 
     j_blueprint = {
         id = "j_blueprint",
         name = "Blueprint",
+        order = 123,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 10,
 
@@ -1506,21 +2131,27 @@ JOKER_DEFS = {
         effect = "Copycat",
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 30
+            atlas = "Joker1_p2",
+            index = 6
         }
     },
 
     j_wee = {
         id = "j_wee",
         name = "Wee Joker",
+        order = 124,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
         sell_cost = 4,
         config = { extra = { chips = 0, chip_mod = 8 } },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 0
         }
     },
@@ -1528,13 +2159,19 @@ JOKER_DEFS = {
     j_merry_andy = {
         id = "j_merry_andy",
         name = "Merry Andy",
+        order = 125,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { d_size = 3, h_size = -1 },
         pos = {
-            atlas = "Joker1",
+            atlas = "Joker1_p1",
             index = 8
         }
     },
@@ -1542,34 +2179,52 @@ JOKER_DEFS = {
     j_oops = {
         id = "j_oops",
         name = "Oops! All 6s",
+        order = 126,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 4,
 
         sell_cost = 2,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 65
+            atlas = "Joker1_p3",
+            index = 17
         }
     },
 
     j_idol = {
         id = "j_idol",
         name = "The Idol",
+        order = 127,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker1",
-            index = 76
+            atlas = "Joker1_p4",
+            index = 4
         }
     },
 
     j_seeing_double = {
         id = "j_seeing_double",
         name = "Seeing Double",
+        order = 128,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -1577,28 +2232,40 @@ JOKER_DEFS = {
         effect = "X1.5 Mult club 7",
         config = { extra = 2 },
         pos = {
-            atlas = "Joker1",
-            index = 44
+            atlas = "Joker1_p2",
+            index = 20
         }
     },
 
     j_matador = {
         id = "j_matador",
         name = "Matador",
+        order = 129,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 8 },
         pos = {
-            atlas = "Joker1",
-            index = 54
+            atlas = "Joker1_p3",
+            index = 6
         }
     },
 
     j_hit_the_road = {
         id = "j_hit_the_road",
         name = "Hit the Road",
+        order = 130,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
@@ -1606,14 +2273,20 @@ JOKER_DEFS = {
         effect = "Jack Discard Effect",
         config = { extra = 0.5 },
         pos = {
-            atlas = "Joker1",
-            index = 58
+            atlas = "Joker1_p3",
+            index = 10
         }
     },
 
     j_duo = {
         id = "j_duo",
         name = "The Duo",
+        order = 131,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
@@ -1621,14 +2294,20 @@ JOKER_DEFS = {
         effect = "X1.5 Mult",
         config = { Xmult = 2, type = "Pair" },
         pos = {
-            atlas = "Joker1",
-            index = 45
+            atlas = "Joker1_p2",
+            index = 21
         }
     },
 
     j_trio = {
         id = "j_trio",
         name = "The Trio",
+        order = 132,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
@@ -1636,14 +2315,20 @@ JOKER_DEFS = {
         effect = "X2 Mult",
         config = { Xmult = 3, type = "Three of a Kind" },
         pos = {
-            atlas = "Joker1",
-            index = 46
+            atlas = "Joker1_p2",
+            index = 22
         }
     },
 
     j_family = {
         id = "j_family",
         name = "The Family",
+        order = 133,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
@@ -1651,14 +2336,20 @@ JOKER_DEFS = {
         effect = "X3 Mult",
         config = { Xmult = 4, type = "Four of a Kind" },
         pos = {
-            atlas = "Joker1",
-            index = 47
+            atlas = "Joker1_p2",
+            index = 23
         }
     },
 
     j_order = {
         id = "j_order",
         name = "The Order",
+        order = 134,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
@@ -1666,14 +2357,20 @@ JOKER_DEFS = {
         effect = "X3 Mult",
         config = { Xmult = 3, type = "Straight" },
         pos = {
-            atlas = "Joker1",
-            index = 48
+            atlas = "Joker1_p3",
+            index = 0
         }
     },
 
     j_tribe = {
         id = "j_tribe",
         name = "The Tribe",
+        order = 135,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
@@ -1681,42 +2378,60 @@ JOKER_DEFS = {
         effect = "X3 Mult",
         config = { Xmult = 2, type = "Flush" },
         pos = {
-            atlas = "Joker1",
-            index = 49
+            atlas = "Joker1_p3",
+            index = 1
         }
     },
 
     j_stuntman = {
         id = "j_stuntman",
         name = "Stuntman",
+        order = 136,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = { h_size = 2, chip_mod = 250 } },
         pos = {
-            atlas = "Joker1",
-            index = 68
+            atlas = "Joker1_p3",
+            index = 20
         }
     },
 
     j_invisible = {
         id = "j_invisible",
         name = "Invisible Joker",
+        order = 137,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 3,
         cost = 8,
 
         sell_cost = 4,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker1",
-            index = 71
+            atlas = "Joker1_p3",
+            index = 23
         }
     },
 
     j_brainstorm = {
         id = "j_brainstorm",
         name = "Brainstorm",
+        order = 138,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 10,
 
@@ -1724,56 +2439,80 @@ JOKER_DEFS = {
         effect = "Copycat",
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 77
+            atlas = "Joker1_p4",
+            index = 5
         }
     },
 
     j_satellite = {
         id = "j_satellite",
         name = "Satellite",
+        order = 139,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
         sell_cost = 3,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 78
+            atlas = "Joker1_p4",
+            index = 6
         }
     },
 
     j_shoot_the_moon = {
         id = "j_shoot_the_moon",
         name = "Shoot the Moon",
+        order = 140,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 5,
 
         sell_cost = 2,
         config = { extra = 13 },
         pos = {
-            atlas = "Joker1",
-            index = 62
+            atlas = "Joker1_p3",
+            index = 14
         }
     },
 
     j_drivers_license = {
         id = "j_drivers_license",
         name = "Driver's License",
+        order = 141,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = 3 },
         pos = {
-            atlas = "Joker1",
-            index = 70
+            atlas = "Joker1_p3",
+            index = 22
         }
     },
 
     j_cartomancer = {
         id = "j_cartomancer",
         name = "Cartomancer",
+        order = 142,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 6,
 
@@ -1781,144 +2520,204 @@ JOKER_DEFS = {
         effect = "Tarot Buff",
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 37
+            atlas = "Joker1_p2",
+            index = 13
         }
     },
 
     j_astronomer = {
         id = "j_astronomer",
         name = "Astronomer",
+        order = 143,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 8,
 
         sell_cost = 4,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 72
+            atlas = "Joker1_p4",
+            index = 0
         }
     },
 
     j_burnt = {
         id = "j_burnt",
         name = "Burnt Joker",
+        order = 144,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 8,
 
         sell_cost = 4,
         config = { h_size = 0, extra = 4 },
         pos = {
-            atlas = "Joker1",
-            index = 73
+            atlas = "Joker1_p4",
+            index = 1
         }
     },
 
     j_bootstraps = {
         id = "j_bootstraps",
         name = "Bootstraps",
+        order = 145,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2,
         cost = 7,
 
         sell_cost = 3,
         config = { extra = { mult = 2, dollars = 5 } },
         pos = {
-            atlas = "Joker1",
-            index = 89
+            atlas = "Joker1_p4",
+            index = 17
         }
     },
 
     j_canio = {
         id = "j_canio",
         name = "Canio",
+        order = 146,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 4,
         cost = 20,
 
         sell_cost = 10,
         config = { extra = 1 },
         pos = {
-            atlas = "Joker1",
-            index = 83
+            atlas = "Joker1_p4",
+            index = 11
         }
     },
 
     j_triboulet = {
         id = "j_triboulet",
         name = "Triboulet",
+        order = 147,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 4,
         cost = 20,
 
         sell_cost = 10,
         config = { extra = 2 },
         pos = {
-            atlas = "Joker1",
-            index = 84
+            atlas = "Joker1_p4",
+            index = 12
         }
     },
 
     j_yorick = {
         id = "j_yorick",
         name = "Yorick",
+        order = 148,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 4,
         cost = 20,
 
         sell_cost = 10,
         config = { extra = { xmult = 1, discards = 23 } },
         pos = {
-            atlas = "Joker1",
-            index = 85
+            atlas = "Joker1_p4",
+            index = 13
         }
     },
 
     j_chicot = {
         id = "j_chicot",
         name = "Chicot",
+        order = 149,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 4,
         cost = 20,
 
         sell_cost = 10,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 86
+            atlas = "Joker1_p4",
+            index = 14
         }
     },
 
     j_perkeo = {
         id = "j_perkeo",
         name = "Perkeo",
+        order = 150,
+        unlocked = false,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 4,
         cost = 20,
 
         sell_cost = 10,
         config = {},
         pos = {
-            atlas = "Joker1",
-            index = 87
+            atlas = "Joker1_p4",
+            index = 15
         }
     },
 
     j_fortune_teller = { 
         id = "j_fortune_teller",
         name = "Fortune Teller", 
+        order = 86,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1, 
         cost = 6, 
 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker1", 
-            index = 57 
+            atlas = "Joker1_p3", 
+            index = 9 
         } 
     },
     
     j_juggler = { 
         id = "j_juggler",
         name = "Juggler", 
+        order = 87,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1, 
         cost = 4, 
         sell_cost = 2,
         pos = { 
-            atlas = "Joker1", 
+            atlas = "Joker1_p1", 
             index = 10 
         } 
     },
@@ -1926,11 +2725,17 @@ JOKER_DEFS = {
     j_drunkard = { 
         id = "j_drunkard",
         name = "Drunkard",
+        order = 88,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1,
         cost = 4, 
         sell_cost = 2,
         pos = { 
-            atlas = "Joker1", 
+            atlas = "Joker1_p1", 
             index = 11 
         } 
     },
@@ -1938,188 +2743,289 @@ JOKER_DEFS = {
     j_stone_joker = { 
         id = "j_stone_joker",
         name = "Stone Joker",
+        order = 89,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker1", 
+            atlas = "Joker1_p1", 
             index = 9 
         } 
     },
     j_golden_joker = { 
         id = "j_golden_joker",
         name = "Golden Joker", 
+        order = 90,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1, 
         cost = 6, 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker1", 
-            index = 29 
+            atlas = "Joker1_p2", 
+            index = 5 
         } 
     },
     
     j_lucky_cat = { 
         id = "j_lucky_cat",
         name = "Lucky Cat", 
+        order = 91,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker2", 
-            index = 55 
+            atlas = "Joker2_p3", 
+            index = 7 
         } 
     },
     
     j_bull = { 
         id = "j_bull",
         name = "Bull", 
+        order = 93,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker2", 
-            index = 57 
+            atlas = "Joker2_p3", 
+            index = 9 
         } 
     },
 
     j_baseball_card = { 
         id = "j_baseball_card",
         name = "Baseball Card", 
+        order = 92,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3, 
         cost = 8, 
         sell_cost = 4,
         pos = { 
-            atlas = "Joker2", 
-            index = 56 
+            atlas = "Joker2_p3", 
+            index = 8 
         } 
     },
 
     j_trading_card = { 
         id = "j_trading_card",
         name = "Trading Card", 
+        order = 95,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = false,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker2", 
-            index = 59 
+            atlas = "Joker2_p3", 
+            index = 11 
         } 
     },
 
     j_flash_card = { 
         id = "j_flash_card",
         name = "Flash Card", 
+        order = 96,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2, 
         cost = 5, 
         sell_cost = 2,
         pos = { 
-            atlas = "Joker2", 
-            index = 60 
+            atlas = "Joker2_p3", 
+            index = 12 
         } 
     },
 
     j_popcorn = { 
         id = "j_popcorn",
         name = "Popcorn", 
+        order = 97,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 1, 
         cost = 5, 
         sell_cost = 2,
         pos = { 
-            atlas = "Joker2", 
-            index = 61 
+            atlas = "Joker2_p3", 
+            index = 13 
         } 
     },
 
     j_spare_trousers = { 
         id = "j_spare_trousers",
         name = "Spare Trousers", 
+        order = 98,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker2", 
-            index = 64 
+            atlas = "Joker2_p3", 
+            index = 16 
         } 
     },
 
     j_ancient_joker = { 
         id = "j_ancient_joker",
         name = "Ancient Joker", 
+        order = 99,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3, 
         cost = 8, 
         sell_cost = 4,
         pos = { 
-            atlas = "Joker2", 
-            index = 67 
+            atlas = "Joker2_p3", 
+            index = 19 
         } 
     },
 
     j_ramen = { 
         id = "j_ramen",
         name = "Ramen", 
+        order = 100,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         config = { Xmult = 2},
         pos = { 
-            atlas = "Joker2", 
-            index = 62 
+            atlas = "Joker2_p3", 
+            index = 14 
         } 
     },
 
     j_walkie_talkie = { 
         id = "j_walkie_talkie",
         name = "Walkie Talkie", 
+        order = 101,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 1, 
         cost = 4, 
         sell_cost = 2,
         pos = { 
-            atlas = "Joker2", 
-            index = 68 
+            atlas = "Joker2_p3", 
+            index = 20 
         } 
     },
 
     j_seltzer = { 
         id = "j_seltzer",
         name = "Seltzer", 
+        order = 102,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         config = {duration = 10},
         pos = { 
-            atlas = "Joker2", 
-            index = 63
+            atlas = "Joker2_p3", 
+            index = 15
         } 
     },
 
     j_castle = { 
         id = "j_castle",
         name = "Castle", 
+        order = 103,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = false,
+        eternal_compat = true,
         rarity = 2, 
         cost = 6, 
         sell_cost = 3,
         pos = { 
-            atlas = "Joker2", 
-            index = 69 
+            atlas = "Joker2_p3", 
+            index = 21 
         } 
     },
     
     j_campfire = {
         id = "j_campfire",
         name = "Campfire",
+        order = 105,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = true,
         rarity = 3,
         cost = 9,
         sell_cost = 4,
         pos = {
-            atlas = "Joker2",
-            index = 65
+            atlas = "Joker2_p3",
+            index = 17
         }
     },    
 
 }
 -- Missing jokers that were previously injected from CSV metadata are now explicit.
 local MISSING_JOKERS = {
-    j_diet_cola = { name = "Diet Cola", rarity = 2, cost = 6, pos = { atlas = "Joker1", index = 26 } },
+    j_diet_cola = {
+        name = "Diet Cola",
+        order = 94,
+        unlocked = true,
+        discovered = false,
+        blueprint_compat = true,
+        perishable_compat = true,
+        eternal_compat = false,
+        rarity = 2,
+        cost = 6,
+        pos = { atlas = "Joker1_p2", index = 2 },
+    },
 }
 
 -- Catalog-owned tooltip text (Balatro-style; *word* used for emphasis in UI).
