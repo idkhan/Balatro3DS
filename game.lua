@@ -162,7 +162,7 @@ function Game:get_effective_hand_size_limit()
 end
 
 function Game:get_effective_hands_per_round()
-    local hands = 5
+    local hands = 4
     for _, j in ipairs(self.jokers or {}) do
         local id = j and j.def and j.def.id
         if id == "j_burglar" then hands = hands + 3 end
@@ -172,7 +172,7 @@ function Game:get_effective_hands_per_round()
 end
 
 function Game:get_effective_discards_per_round()
-    local discards = 5
+    local discards = 4
     for _, j in ipairs(self.jokers or {}) do
         local id = j and j.def and j.def.id
         if id == "j_drunkard" then discards = discards + 1 end
@@ -2714,11 +2714,11 @@ function Game:init_jokers()
     --     self:add_joker_by_def(pool[i])
     -- end
     -- self:add_joker_by_def("j_swashbuckler")
-    self:add_joker_by_def("j_invisible")
-    self:add_joker_by_def("j_smeared")
-    self:add_joker_by_def("j_popcorn")
-    self:add_joker_by_def("j_troubadour")
-    self:add_joker_by_def("j_dna")
+    -- self:add_joker_by_def("j_invisible")
+    -- self:add_joker_by_def("j_smeared")
+    -- self:add_joker_by_def("j_popcorn")
+    -- self:add_joker_by_def("j_troubadour")
+    -- self:add_joker_by_def("j_dna")
     -- for _, jj in ipairs(self.jokers) do
     --     if jj and jj.refresh_quads then jj:refresh_quads() end
     -- end
@@ -3214,7 +3214,7 @@ function Game:initialize_run_loop()
     self.STAGE = self.STAGES.RUN
     self.ante = 1
     self.round = 1
-    self.money = 10
+    self.money = 4
     self.hands = self:get_effective_hands_per_round()
     self.discards = self:get_effective_discards_per_round()
     self.round_score = 0
