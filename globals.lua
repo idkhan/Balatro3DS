@@ -244,6 +244,8 @@ function Game:set_globals()
         STANDARD_PACK = 17,
         BUFFOON_PACK = 18,
         NEW_ROUND = 19,
+        --- Opening a booster from the shop (single state for all pack types).
+        OPEN_BOOSTER = 20,
     }
 
     self.STAGES = {

@@ -100,11 +100,15 @@ end
 ---@param edition string|nil raw edition
 ---@return string|nil
 function Joker.resolve_front_atlas_key(base_atlas, edition)
-    local base = base_atlas and tostring(base_atlas) or "Joker1"
+    local base = base_atlas and tostring(base_atlas) or "Joker1_p1"
     local ed = Joker.normalize_edition(edition)
     if ed == "negative" then
         if base == "Joker1" then return "Joker1_negative" end
         if base == "Joker2" then return "Joker2_negative" end
+        local p = string.match(base, "^Joker1_p(%d+)$")
+        if p then return "Joker1_negative_p" .. p end
+        p = string.match(base, "^Joker2_p(%d+)$")
+        if p then return "Joker2_negative_p" .. p end
     end
     return base
 end
@@ -144,6 +148,24 @@ local function compute_quad(atlas, index)
 
     local quad = love.graphics.newQuad(sx, sy, cell_w, cell_h, iw, ih)
     return quad, cell_w, cell_h
+end
+
+local function joker_is_debuffed_for_display(joker)
+    return G and G.boss_is_joker_debuffed and G:boss_is_joker_debuffed(joker) == true
+end
+
+local function draw_debuff_x_overlay(draw_x, draw_y, w, h)
+    local inset = math.max(4, math.floor(math.min(w, h) * 0.14))
+    local x1 = draw_x + inset
+    local y1 = draw_y + inset
+    local x2 = draw_x + w - inset
+    local y2 = draw_y + h - inset
+    local prev_w = love.graphics.getLineWidth()
+    love.graphics.setLineWidth(5)
+    love.graphics.setColor(0.95, 0.2, 0.2, 0.95)
+    love.graphics.line(x1, y1, x2, y2)
+    love.graphics.line(x1, y2, x2, y1)
+    love.graphics.setLineWidth(prev_w)
 end
 
 local function resolve_atlas(name)
@@ -252,6 +274,34 @@ function Joker:init(X, Y, W, H, def, params)
             self.runtime_counter = self.def.config.chips or 100 -- Starts at 100
         elseif self.def.id == "j_turtle_bean" then
             self.runtime_counter = self.def.config.extra.h_size or 5
+        elseif self.def.id == "j_todo_list" then
+            local found = false
+            while not found do
+                local pos = math.random(1, #G.handlist)
+                if (pos < 4) then -- Secret hands only show if played before
+                    if (G.hand_play_counts[pos] and G.hand_play_counts[pos] > 0) then
+                        found = true
+                    end
+                else
+                    found = true
+                end
+                self.random_hand = G.handlist[pos]
+            end
+        elseif self.def.id == "j_rocket" then
+            local ex = type(self.def.config) == "table" and self.def.config.extra
+            self.running_count = math.max(1, math.floor(tonumber(ex and ex.dollars) or 1))
+        elseif self.def.id == "j_mail" then
+            self.random_rank = math.random(2, 14)
+        elseif self.def.id == "j_idol" then
+            local card = G.deck and G.deck.random_card and G.deck:random_card()
+            if card then
+                self.random_rank = card.rank
+                self.random_suit = card.suit
+            else
+                local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
+                self.random_rank = math.random(2, 14)
+                self.random_suit = suits[math.random(1, #suits)]
+            end
         end
     end
 
@@ -269,7 +319,7 @@ function Joker:init(X, Y, W, H, def, params)
     -- Define which atlas cells represent the front/back joker art.
     -- Expected structure in def:
     --   def.pos = { atlas = "Joker1", index = 0 }
-    self.front_atlas_name = (self.params.pos and self.params.pos.atlas) or (self.def.pos and self.def.pos.atlas) or "Joker1"
+    self.front_atlas_name = (self.params.pos and self.params.pos.atlas) or (self.def.pos and self.def.pos.atlas) or "Joker1_p1"
     self.back_atlas_name = "centers"
 
     self.front_index = (self.params.pos and self.params.pos.index) or (self.def.pos and self.def.pos.index) or 0
@@ -281,6 +331,7 @@ function Joker:init(X, Y, W, H, def, params)
 end
 
 function Joker:refresh_quads()
+    local old_front_atlas_name = self._front_atlas_ref_name
     local base_name = self.front_atlas_name
     local want_key = Joker.resolve_front_atlas_key(base_name, self.edition)
     local base_atlas = resolve_atlas(base_name)
@@ -302,6 +353,7 @@ function Joker:refresh_quads()
         end
     end
     self.back_quad, self.back_w, self.back_h = compute_quad(self.back_atlas, self.back_index)
+    self._front_atlas_ref_name = (self.front_atlas and self.front_atlas.name) or want_key or base_name
 
     -- Sync node transform size with sprite cell so it doesn't render tiny.
     local base_w = self.front_w or self.back_w
@@ -316,6 +368,9 @@ function Joker:refresh_quads()
     end
 
     self._quads_refresh_signature = joker_front_quads_signature(self)
+    if G and G.on_joker_front_atlas_resolved then
+        G:on_joker_front_atlas_resolved(self, old_front_atlas_name, self._front_atlas_ref_name)
+    end
 end
 
 function Joker:set_face_up(face_up)
@@ -696,6 +751,46 @@ function Joker:get_live_current_tooltip_text(base_text)
     if id == "j_cloud_9" then
         return string.format("(Currently $%d)", count_full_deck(function(c) return tonumber(c.rank) == 9 end))
     end
+    if id == "j_rocket" then
+        local n = math.max(1, math.floor(tonumber(self.running_count) or 1))
+        return string.format("(Currently $%d)", n)
+    end
+    if id == "j_mail" then
+        local r = tonumber(self.random_rank)
+        local label = "—"
+        if r == 14 then
+            label = "Ace"
+        elseif r == 13 then
+            label = "King"
+        elseif r == 12 then
+            label = "Queen"
+        elseif r == 11 then
+            label = "Jack"
+        elseif r ~= nil then
+            label = tostring(r)
+        end
+        return string.format("Earn *$5* for each discarded *%s*,", label)
+    end
+    if id == "j_idol" then
+        local r = tonumber(self.random_rank)
+        local label = "—"
+        if r == 14 then
+            label = "Ace"
+        elseif r == 13 then
+            label = "King"
+        elseif r == 12 then
+            label = "Queen"
+        elseif r == 11 then
+            label = "Jack"
+        elseif r ~= nil then
+            label = tostring(r)
+        end
+        local s = self.random_suit
+        if type(s) ~= "string" or s == "" then
+            s = "—"
+        end
+        return string.format("Each played *%s* of *%s* gives *X3 Mult* when scored,", label, s)
+    end
     if id == "j_invisible" then
         return string.format("(Currently %d/2)", math.floor(tonumber(self.runtime_counter) or 0))
     end
@@ -736,6 +831,13 @@ function Joker:get_live_current_tooltip_text(base_text)
         end
         return string.format("This Joker gains +3 Chips per discarded %s", s)
     end
+    if id == "j_todo_list" then
+        local rh = self.random_hand
+        if type(rh) ~= "string" or rh == "" then
+            rh = "—"
+        end
+        return string.format("Earn *$4* if poker hand is a *%s*,", rh)
+    end
     return base_text
 end
 
@@ -768,7 +870,21 @@ function Joker:get_tooltip_body_lines()
                 table.insert(out, l)
             end
         end
-        if #out > 0 then return append_edition(out) end
+        if #out > 0 then
+            if impl and type(impl.tooltip_lines) == "function" then
+                local extra = impl.tooltip_lines(self)
+                if type(extra) == "table" then
+                    for _, line in ipairs(extra) do
+                        if type(line) == "string" then
+                            table.insert(out, { kind = "text", text = line })
+                        elseif type(line) == "table" then
+                            table.insert(out, line)
+                        end
+                    end
+                end
+            end
+            return append_edition(out)
+        end
     end
     if type(def.tooltip) == "string" then
         local lines = split_tooltip_override(def.tooltip)
@@ -1008,7 +1124,11 @@ function Joker:get_layout_draw_xy()
 end
 
 function Joker:should_draw_tooltip()
-    return self.face_up and G and G.active_tooltip_joker == self
+    if not self.face_up or not G then return false end
+    if self._booster_choice_index and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
+        return tonumber(G.booster_session.active_choice_index) == self._booster_choice_index
+    end
+    return G.active_tooltip_joker == self
         and (G.jokers_on_bottom == true or self.shop_offer_slot ~= nil)
 end
 
@@ -1061,6 +1181,10 @@ function Joker:draw()
         if self.back_atlas and self.back_atlas.image and self.back_quad then
             love.graphics.draw(self.back_atlas.image, self.back_quad, draw_x, draw_y, 0, 1, 1)
         end
+    end
+
+    if joker_is_debuffed_for_display(self) then
+        draw_debuff_x_overlay(draw_x, draw_y, self.VT.w, self.VT.h)
     end
 
     love.graphics.pop()

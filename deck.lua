@@ -101,6 +101,16 @@ function Deck:draw()
     return table.remove(self.cards)
 end
 
+--- Return a **copy** of a uniformly random card's data from the draw pile (`self.cards`).
+--- Does not remove the card. Does **not** include the discard pile. Returns nil if empty.
+---@return table|nil
+function Deck:random_card()
+    local n = #self.cards
+    if n == 0 then return nil end
+    local i = math.random(1, n)
+    return Deck.copy_card_data(self.cards[i])
+end
+
 --- Draw a card and add it to the given hand list. Returns the card or nil.
 ---@param hand table
 ---@return table|nil
@@ -114,6 +124,16 @@ end
 
 function Deck:size()
     return #self.cards
+end
+
+--- Insert a copy of `card_data` at a random position in the draw pile (1 .. #cards+1).
+---@param card_data table|nil
+function Deck:insert_random(card_data)
+    local c = Deck.copy_card_data(card_data)
+    if not c then return end
+    local n = #self.cards
+    local pos = math.random(1, n + 1)
+    table.insert(self.cards, pos, c)
 end
 
 function Deck:empty()

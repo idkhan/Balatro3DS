@@ -44,7 +44,7 @@ function TopUI.draw()
         end
     end
     local blind_index = G.selected_blind_index or G.current_blind_index or 1
-    if G.STATE == G.STATES.SELECTING_HAND or G.STATE == G.STATES.ROUND_EVAL then
+    if G.STATE == G.STATES.SELECTING_HAND or G.STATE == G.STATES.ROUND_EVAL or G.STATE == G.STATES.GAME_OVER then
         blind_index = G.current_blind_index or blind_index
     end
     local blind_name = (G.get_blind_display_name and G:get_blind_display_name(blind_index)) or ((blind_def and blind_def.name) or (G.current_blind_name or "Blind"))
@@ -102,7 +102,14 @@ function TopUI.draw()
         TopUI.center_text("Round won!", ix, iy - 6, iw, math.floor(ih * 0.55))
         local bi = G.current_blind_index or 1
         G:draw_blind_chip_anim(bi, ix + math.floor(iw / 2), iy + math.floor(ih * 0.72), 1.05)
-        
+
+    elseif G.STATE == G.STATES.GAME_OVER then
+        love.graphics.setColor(G.C.MULT or G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        TopUI.center_text("Game Over", ix, iy - 6, iw, math.floor(ih * 0.55))
+        local bi = G.current_blind_index or 1
+        G:draw_blind_chip_anim(bi, ix + math.floor(iw / 2), iy + math.floor(ih * 0.72), 0.9)
+
     elseif G.STATE == G.STATES.SHOP then
         local cell_w = 113
         local cell_h = 60
@@ -114,6 +121,16 @@ function TopUI.draw()
         local s = math.min(iw / cell_w, ih / cell_h) * 0.92
         if s > 1.25 then s = 1.25 end
         G:draw_shop_sign_anim(ix + math.floor(iw / 2), iy + math.floor(ih / 2), s)
+
+    elseif G.STATE == G.STATES.OPEN_BOOSTER then
+        love.graphics.setColor(G.C.WHITE)
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        local sess = G.booster_session
+        local t1 = (sess and sess.title) or "Booster Pack"
+        TopUI.center_text(t1, ix, iy - 4, iw, math.floor(ih * 0.45))
+        love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+        local pr = sess and tonumber(sess.picks_remaining) or 0
+        TopUI.center_text("Picks left: " .. tostring(pr), ix, iy + math.floor(ih * 0.6), iw, math.floor(ih * 0.35))
 
     else
         -- Score Requirements Box
@@ -253,21 +270,23 @@ function TopUI.draw()
     slot_h = slot_h + (panel_pad * 2)
 
     -- Dark panel background.
-    if _G.draw_rect_with_shadow then
-        draw_rect_with_shadow(
-            start_x,
-            slot_y,
-            total_w,
-            slot_h,
-            4,
-            2,
-            G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
-            G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
-            2
-        )
-    else
-        love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
-        love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
+    if #G.jokers > 0 then
+        if _G.draw_rect_with_shadow then
+            draw_rect_with_shadow(
+                start_x,
+                slot_y,
+                total_w,
+                slot_h,
+                4,
+                2,
+                G and G.C and G.C.BLOCK and G.C.BLOCK.BACK or { 0, 0, 0, 1 },
+                G and G.C and G.C.BLOCK and G.C.BLOCK.SHADOW or { 0, 0, 0, 1 },
+                2
+            )
+        else
+            love.graphics.setColor(G and G.C and G.C.PANEL or { 0.2, 0.2, 0.2, 1 })
+            love.graphics.rectangle("fill", start_x, slot_y, total_w, slot_h, 4, 4)
+        end
     end
     if G and G.jokers_on_bottom ~= true and n > 0 then
 

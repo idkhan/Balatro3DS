@@ -310,6 +310,24 @@ local TOOLTIP_SECTION_GAP = 2
 local TOOLTIP_OUTER_PAD_X = 3
 local TOOLTIP_OUTER_PAD_Y = 3
 
+local function card_is_debuffed_for_display(card)
+    return G and G.boss_is_card_debuffed_for_scoring and G:boss_is_card_debuffed_for_scoring(card) == true
+end
+
+local function draw_debuff_x_overlay(draw_x, draw_y, w, h)
+    local inset = math.max(4, math.floor(math.min(w, h) * 0.14))
+    local x1 = draw_x + inset
+    local y1 = draw_y + inset
+    local x2 = draw_x + w - inset
+    local y2 = draw_y + h - inset
+    local prev_w = love.graphics.getLineWidth()
+    love.graphics.setLineWidth(5)
+    love.graphics.setColor(0.95, 0.2, 0.2, 0.95)
+    love.graphics.line(x1, y1, x2, y2)
+    love.graphics.line(x1, y2, x2, y1)
+    love.graphics.setLineWidth(prev_w)
+end
+
 local function rank_to_label(rank)
     if rank == 14 then return "Ace" end
     if rank == 13 then return "King" end
@@ -641,6 +659,9 @@ end
 
 function Card:should_draw_tooltip()
     if not self.face_up then return false end
+    if self._booster_choice_index and G and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
+        return tonumber(G.booster_session.active_choice_index) == self._booster_choice_index
+    end
     return self.states.drag.is or (G and G.active_tooltip_card == self)
 end
 
@@ -689,6 +710,10 @@ function Card:draw()
     -- top: seal overlay (`draw_layer` like rank; separate atlas + per-seal index)
     if self.face_up and self.seal_quad then
         self:draw_layer(self.seal_atlas, self.seal_quad, self.seal_w, self.seal_h, draw_x, draw_y)
+    end
+
+    if card_is_debuffed_for_display(self) then
+        draw_debuff_x_overlay(draw_x, draw_y, self.VT.w, self.VT.h)
     end
 
     love.graphics.pop()
@@ -745,32 +770,46 @@ function Card:held_trigger_total(seq)
     return math.max(1, 1 + extra + R)
 end
 
-function Card:matches_trigger(event_name)
-    if event_name == "held_in_hand" then    
-        return self.enhancement == "gold" or self.enhancement == "steel" or self.seal == "blue"
-    elseif event_name == "card_played" then
-        return self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone" or self.seal == "gold" or self.seal == "red"
-    end
-    return false
-end
-
 --- Dispatch a hand/scoring event to this card (e.g. `"card_played"` → `do_enhancement` / `do_seal` when it matches).
+--- Known events: `"card_played"`, `"held_in_hand"`, `"on_round_end"` (e.g. Gold card, Blue seal — see `do_enhancement` / `do_seal`).
 --- Shakes the card when an enhancement or seal actually triggers (same timing as joker scoring shake).
 ---@param event_name string
 ---@param ctx table|nil
 function Card:emit_hand_event(event_name, ctx)
     if type(ctx) ~= "table" then ctx = {} end
-    if not (self.matches_trigger and self:matches_trigger(event_name)) then
-        return
-    end
-    if self.do_enhancement then
-        self:do_enhancement(ctx)
+    local ev = ctx.event_name or event_name
+    ctx.event_name = ev
+    local trigger = false
+    if self.enhancement and self.enhancement ~= "none" and self.do_enhancement then
+        if self.enhancement == "gold" and ev == "on_round_end" then
+            self:do_enhancement(ctx)
+            trigger = true
+
+        elseif self.enhancement == "steel" and ev == "held_in_hand" then
+            self:do_enhancement(ctx)
+            trigger = true
+
+        elseif (self.enhancement == "bonus" or self.enhancement == "mult" or  self.enhancement == "glass" or self.enhancement == "lucky" or self.enhancement == "stone") and ev == "card_played" then
+            self:do_enhancement(ctx)
+            trigger = true
+
+        end
     end
     if self.seal and self.do_seal then
-        self:do_seal(ctx)
+        if ev == "on_round_end" and self.seal == "blue" then
+            self:do_seal(ctx)
+            trigger = true
+
+        elseif ev == "card_played" and self.seal == "gold" then
+            self.do_seal(ctx)
+            trigger = true
+
+        end
     end
-    self.scoring_shake_timer = SHAKE_MAX_DURATION
-    self.scoring_shake_t0 = love.timer.getTime()
+    if trigger then
+        self.scoring_shake_timer = SHAKE_MAX_DURATION
+        self.scoring_shake_t0 = love.timer.getTime()
+    end
 end
 
 function Card:do_enhancement(ctx)
@@ -792,6 +831,7 @@ function Card:do_enhancement(ctx)
         ctx.mult = mult * 2
         Sfx.play_mult()
         if G:do_random(1, 4, 1) then
+            G:emit_joker_event("glass_broken")
             ctx.glass_broken_node = self
         end
     elseif self.enhancement == "steel" then

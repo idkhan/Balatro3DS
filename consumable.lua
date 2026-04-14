@@ -8,6 +8,7 @@ local TOOLTIP_SPACING = 1
 local TOOLTIP_SECTION_GAP = 2
 local TOOLTIP_OUTER_PAD_X = 3
 local TOOLTIP_OUTER_PAD_Y = 3
+local _consumable_missing_atlas_reported = {}
 
 local function consumable_resolve_atlas(name)
     if not name or not G or not G.ASSET_ATLAS then return nil end
@@ -34,6 +35,13 @@ local function consumable_compute_quad(atlas, index)
     return quad, cell_w, cell_h
 end
 
+local function consumable_normalize_edition(raw)
+    if raw == nil or raw == "" then return "base" end
+    local e = string.lower(tostring(raw))
+    if e == "e_negative" or e == "negative" then return "negative" end
+    return "base"
+end
+
 ---@param X number
 ---@param Y number
 ---@param def table  -- entry from CONSUMABLE_DEFS
@@ -42,9 +50,13 @@ function Consumable:init(X, Y, def)
     self.id = self.def.id
     self.kind = self.def.kind
     self.name = self.def.name or "Consumable"
-    self.sell_cost = tonumber(self.def.sell_cost) or 0
+    self.sell_cost = (self.kind == "spectral") and 2 or 1
+    self.edition = consumable_normalize_edition(self.def.edition)
     self.atlas_name = self.def.atlas or "Tarot"
     self.index = tonumber(self.def.index) or 0
+    if self.edition == "negative" then
+        self.index = self.index + 56
+    end
 
     local cw, ch = 72, 95
     Moveable.init(self, X or 0, Y or 0, cw, ch)
@@ -56,6 +68,16 @@ function Consumable:init(X, Y, def)
 
     self.atlas = consumable_resolve_atlas(self.atlas_name)
     self.quad, self.w, self.h = consumable_compute_quad(self.atlas, self.index)
+
+    if (not self.atlas or not self.atlas.image or not self.quad) and G and self.atlas_name then
+        local key = tostring(self.atlas_name) .. ":" .. tostring(self.index)
+        if not _consumable_missing_atlas_reported[key] then
+            _consumable_missing_atlas_reported[key] = true
+            local err = (self.atlas and self.atlas.load_error) and tostring(self.atlas.load_error) or "unknown atlas/quad failure"
+            print(string.format("[Consumable] draw fallback for '%s' atlas='%s' idx=%s err=%s",
+                tostring(self.name), tostring(self.atlas_name), tostring(self.index), err))
+        end
+    end
 
     if self.w and self.h and self.w > 0 and self.h > 0 then
         self.T.w = self.w
@@ -95,10 +117,11 @@ end
 
 function Consumable:draw()
     if not self.states.visible then return end
-    if not (self.atlas and self.atlas.image and self.quad) then return end
 
     local draw_x = self.VT.x + self.collision_offset.x
     local draw_y = self.VT.y + self.collision_offset.y
+    local draw_w = (self.VT and self.VT.w) or (self.T and self.T.w) or 72
+    local draw_h = (self.VT and self.VT.h) or (self.T and self.T.h) or 95
 
     love.graphics.push()
 
@@ -109,8 +132,15 @@ function Consumable:draw()
     love.graphics.scale(self.VT.scale, self.VT.scale)
     love.graphics.translate(-cx, -cy)
 
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(self.atlas.image, self.quad, draw_x, draw_y, 0, 1, 1)
+    if self.atlas and self.atlas.image and self.quad then
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.draw(self.atlas.image, self.quad, draw_x, draw_y, 0, 1, 1)
+    else
+        -- Visual fallback helps distinguish "not drawn" vs "texture failed."
+        love.graphics.setColor(0.9, 0.25, 0.25, 0.9)
+        love.graphics.rectangle("line", draw_x, draw_y, draw_w, draw_h)
+        love.graphics.setColor(1, 1, 1, 1)
+    end
 
     love.graphics.pop()
 end
@@ -152,6 +182,9 @@ function Consumable:tooltip_is_active()
     if not G then return false end
     if self.shop_offer_slot and G.STATE == G.STATES.SHOP and G.active_tooltip_joker == self then
         return true
+    end
+    if self._booster_choice_index and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
+        return tonumber(G.booster_session.active_choice_index) == self._booster_choice_index
     end
     if G.jokers_on_bottom == true then return false end
     if self.states.drag.is then return true end
