@@ -57,6 +57,7 @@ You can either download a release or package it yourself.
 2. Zip everything and rename the file to Game.love
 3. Download Lovepotion from the [releases](https://github.com/lovebrew/lovepotion/releases/latest) page and copy it into the main directory.
 4. Fuse the .love file with Lovepotion.3dsx
+
 Linux:
 ```bash
    cat lovepotion.3dsx Game.love > Balatro3DS.3dsx
