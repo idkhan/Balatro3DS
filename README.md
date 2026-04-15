@@ -49,26 +49,6 @@ You can either download a release or package it yourself.
 7. Copy the files into the 3ds folder on the root of your 3DS
 8. Open Homebrew Launcher and play the game
 
-##### No Bundler
-1. Clone this repository
-```bash
-   git clone https://github.com/idkhan/Balatro3DS.git
-   ```
-2. Zip everything and rename the file to Game.love
-3. Download Lovepotion from the [releases](https://github.com/lovebrew/lovepotion/releases/latest) page and copy it into the main directory.
-4. Fuse the .love file with Lovepotion.3dsx
-
-Linux:
-```bash
-   cat lovepotion.3dsx Game.love > Balatro3DS.3dsx
-```
-Windows:
-```batch
-   copy /b lovepotion.3dsx+Game.love Balatro3DS.3dsx
-```
-5. Copy the file to the 3ds folder in the root of your SD card
-6. Open the Homebrew Launcher to play the game (It will show up as LOVE Potion)
-
 ### License
 
 This project is provided as-is for educational and fan purposes. Check the repository license file for details before redistribution.
