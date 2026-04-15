@@ -12,12 +12,12 @@ Balatro3DS is a fan-made port/implementation of the game Balatro targeting the N
 
 #### Controls
 
-Play - R or Y
-Discard - L or X
-Sort by Rank - D Pad Left  
-Sort by Suit - D Pad Right
-Show Jokers - D Pad Up
-Hide Jokers - D Pad Down
+- Play - R or Y
+- Discard - L or X
+- Sort by Rank - D Pad Left  
+- Sort by Suit - D Pad Right
+- Show Jokers - D Pad Up
+- Hide Jokers - D Pad Down
 
 #### Running on the 3DS
 
