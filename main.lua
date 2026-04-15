@@ -112,8 +112,6 @@ function love.gamepadpressed(_, button)
         end
     end
     if G.STATE == G.STATES.BLIND_SELECT then
-        if button == "dpleft" then G:move_blind_select_cursor(-1) end
-        if button == "dpright" then G:move_blind_select_cursor(1) end
         if button == "y" or button == "a" then
             G:start_selected_blind()
         end
