@@ -26,7 +26,7 @@ end
 
 function Deck:fill()
     self.cards = {}
-    --local enhancements = { "mult", "steel", "none", "bonus", "gold", "glass", "lucky", "stone"}
+    --local enhancements = { "mult", "steel", "none", "bonus", "gold", "glass", "lucky", "stone", "wild"}
     --local seals = { "gold", "red", "blue", "purple", "none" }
     for _, suit in ipairs(SUITS) do
         for rank = MIN_RANK, MAX_RANK do

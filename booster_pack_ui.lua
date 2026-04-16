@@ -256,6 +256,7 @@ function BoosterPackUI.try_skip_press(game, x, y)
     local r = game._booster_skip_rect
     if not r or not game:_point_in_rect_simple(x, y, r) then return false end
     if game.end_booster_session then
+        game:emit_joker_event("on_booster_skip",{})
         game:end_booster_session()
     end
     return true

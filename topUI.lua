@@ -235,7 +235,15 @@ function TopUI.draw()
     draw_rect_with_shadow(ChipX + totalW - ChipWidth, ChipY, ChipWidth, ChipHeight, 4, 2, G.C.MULT, G.C.MULT_DARK, 2)
 
     local handChips = tostring(G.selectedHandChips or 0)
-    local handMult = tostring(G.selectedHandMult or 0)
+    local rawMult = tonumber(G.selectedHandMult) or 0
+    local handMult
+    if math.abs(rawMult) >= 100000 then
+        handMult = string.format("%.1e", rawMult)
+    elseif rawMult % 1 == 0 then
+        handMult = string.format("%.0f", rawMult)
+    else
+        handMult = string.format("%.1f", rawMult)
+    end
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
     love.graphics.setColor(G.C.WHITE)
     TopUI.center_text(handChips, ChipX, ChipY - 1, ChipWidth, ChipHeight)

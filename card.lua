@@ -868,8 +868,7 @@ function Card:do_enhancement(ctx)
             ctx.glass_broken_node = self
         end
     elseif self.enhancement == "steel" then
-        -- x1.5 mult when held in hand
-        ctx.mult = math.floor((tonumber(ctx.mult) or 1) * 1.5)
+        ctx.mult = (tonumber(ctx.mult) or 1) * 1.5
         Sfx.play_mult()
     elseif self.enhancement == "stone" then
         -- +50 chip

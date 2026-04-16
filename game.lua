@@ -5,9 +5,70 @@ local ShopUI = require("shop_ui")
 local RoundWinUI = require("round_win_ui")
 local GameOverUI = require("game_over_ui")
 local BoosterPackUI = require("booster_pack_ui")
+local MainMenuUI = require("main_menu_ui")
 
 --- Seconds between revealing each payout line on the round-win screen.
 local ROUND_WIN_LINE_DELAY = 0.38
+local RUN_SAVE_PATH = "sdmc/Balatro3DS_run_save_1.lua"
+local RUN_SAVE_DIR = "sdmc"
+
+local function table_shallow_copy(src)
+    if type(src) ~= "table" then return nil end
+    local out = {}
+    for k, v in pairs(src) do
+        out[k] = v
+    end
+    return out
+end
+
+local function table_array_deep_copy(src)
+    if type(src) ~= "table" then return {} end
+    local out = {}
+    for i, v in ipairs(src) do
+        if type(v) == "table" then
+            out[i] = copy_table(v)
+        else
+            out[i] = v
+        end
+    end
+    return out
+end
+
+local function encode_lua_string(s)
+    return string.format("%q", tostring(s))
+end
+
+local function serialize_lua_value(v)
+    local tv = type(v)
+    if tv == "nil" then return "nil" end
+    if tv == "number" then
+        if v ~= v or v == math.huge or v == -math.huge then
+            return "0"
+        end
+        return tostring(v)
+    end
+    if tv == "boolean" then return v and "true" or "false" end
+    if tv == "string" then return encode_lua_string(v) end
+    if tv ~= "table" then return "nil" end
+
+    local parts = {}
+    local n = #v
+    for i = 1, n do
+        parts[#parts + 1] = serialize_lua_value(v[i])
+    end
+    for k, val in pairs(v) do
+        if not (type(k) == "number" and k >= 1 and k <= n and math.floor(k) == k) then
+            local key_expr
+            if type(k) == "string" and k:match("^[%a_][%w_]*$") then
+                key_expr = k
+            else
+                key_expr = "[" .. serialize_lua_value(k) .. "]"
+            end
+            parts[#parts + 1] = key_expr .. "=" .. serialize_lua_value(val)
+        end
+    end
+    return "{" .. table.concat(parts, ",") .. "}"
+end
 
 ---@param seed number|nil Optional seed for the RNG. If nil, a seed is generated (os.time()).
 function Game:init(seed)
@@ -36,6 +97,12 @@ function Game:init(seed)
     self._shop_buy_button_hit = nil
     --- Hit rect + payload for Use control under selected shop consumable.
     self._shop_use_button_hit = nil
+    self._pause_prev_state = nil
+    self._pause_continue_rect = nil
+    self._pause_new_run_rect = nil
+    self._pause_save_quit_rect = nil
+    self._pause_save_error = nil
+    self._main_menu_continue_rect = nil
     self.round_score = 0
     self.last_hand_score = 0
     self.last_played_hand_index = nil
@@ -462,10 +529,11 @@ function Game:boss_is_card_debuffed_for_scoring(node)
     local d = node.card_data or {}
     local rank = tonumber(d.rank) or 0
     local suit = d.suit
-    if boss_id == "bl_club" and suit == "Clubs" then return true end
-    if boss_id == "bl_goad" and suit == "Spades" then return true end
-    if boss_id == "bl_window" and suit == "Diamonds" then return true end
-    if boss_id == "bl_head" and suit == "Hearts" then return true end
+    local is_wild = d.enhancement == "wild"
+    if boss_id == "bl_club" and (suit == "Clubs" or is_wild) then return true end
+    if boss_id == "bl_goad" and (suit == "Spades" or is_wild) then return true end
+    if boss_id == "bl_window" and (suit == "Diamonds" or is_wild) then return true end
+    if boss_id == "bl_head" and (suit == "Hearts" or is_wild) then return true end
     if boss_id == "bl_plant" and (rank >= 11 and rank <= 13) or self:hasJoker("j_pareidolia") then return true end
     if boss_id == "bl_pillar" and d.uid and self._ante_played_card_uids[d.uid] then return true end
     if boss_id == "bl_final_leaf" and self.boss_runtime.verdant_leaf_active == true then return true end
@@ -744,6 +812,379 @@ function Game:set_state(state_id)
     self.STATE = state_id
 end
 
+function Game:is_hand_scoring_active()
+    return self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() == true
+end
+
+function Game:can_pause_now()
+    local s = self.STATE
+    if s == self.STATES.MENU or s == self.STATES.GAME_OVER then return false end
+    if s == self.STATES.PAUSED then return true end
+    return s == self.STATES.BLIND_SELECT
+        or s == self.STATES.SELECTING_HAND
+        or s == self.STATES.SHOP
+        or s == self.STATES.ROUND_EVAL
+end
+
+function Game:enter_pause_menu()
+    if not self:can_pause_now() then return false end
+    if self.STATE ~= self.STATES.PAUSED then
+        self._pause_prev_state = self.STATE
+    end
+    self.dragging = nil
+    self._pause_save_error = nil
+    self._pause_continue_rect = nil
+    self._pause_new_run_rect = nil
+    self._pause_save_quit_rect = nil
+    self:set_state(self.STATES.PAUSED)
+    return true
+end
+
+function Game:exit_pause_menu()
+    if self.STATE ~= self.STATES.PAUSED then return false end
+    local resume = self._pause_prev_state or self.STATES.SELECTING_HAND
+    self._pause_continue_rect = nil
+    self._pause_new_run_rect = nil
+    self._pause_save_quit_rect = nil
+    self._pause_save_error = nil
+    self._pause_prev_state = nil
+    self:set_state(resume)
+    return true
+end
+
+function Game:toggle_pause()
+    if self.STATE == self.STATES.PAUSED then
+        return self:exit_pause_menu()
+    end
+    return self:enter_pause_menu()
+end
+
+function Game:current_resume_state()
+    local s = self.STATE
+    if s == self.STATES.PAUSED then
+        s = self._pause_prev_state or self.STATES.SELECTING_HAND
+    end
+    if s == self.STATES.MENU or s == self.STATES.GAME_OVER then
+        return self.STATES.BLIND_SELECT
+    end
+    return s
+end
+
+function Game:has_saved_run()
+    return love and love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(RUN_SAVE_PATH, "file") ~= nil
+end
+
+function Game:clear_run_snapshot()
+    if not (love and love.filesystem and love.filesystem.remove) then return false end
+    if not self:has_saved_run() then return true end
+    return love.filesystem.remove(RUN_SAVE_PATH) and true or false
+end
+
+function Game:build_run_snapshot()
+    local jokers = {}
+    for _, j in ipairs(self.jokers or {}) do
+        local def = j and j.def
+        local jid = def and def.id
+        if type(jid) == "string" then
+            jokers[#jokers + 1] = {
+                id = jid,
+                edition = j.edition,
+                stored_mult = tonumber(j.stored_mult) or 0,
+                stored_chips = tonumber(j.stored_chips) or 0,
+                stored_xmult = tonumber(j.stored_xmult) or 1,
+                runtime_counter = tonumber(j.runtime_counter) or 0,
+                sell_cost = tonumber(j.sell_cost) or 0,
+                loyalty_remaining = j.loyalty_remaining,
+                free_joker_slots = j.free_joker_slots,
+            }
+        end
+    end
+    local hand_cards = {}
+    if self.hand and type(self.hand.cards) == "table" then
+        hand_cards = table_array_deep_copy(self.hand.cards)
+    end
+    local hand_draw_queue = {}
+    local hand_sort_mode = nil
+    if self.hand then
+        hand_sort_mode = self.hand.sort_mode
+        if type(self.hand._draw_queue) == "table" then
+            hand_draw_queue = table_array_deep_copy(self.hand._draw_queue)
+        end
+    end
+    local selected_uids = {}
+    if self.hand and type(self.hand.selected) == "table" then
+        for _, node in ipairs(self.hand.selected) do
+            local uid = node and node.card_data and node.card_data.uid
+            if uid ~= nil then
+                selected_uids[#selected_uids + 1] = uid
+            end
+        end
+    end
+    return {
+        version = 1,
+        seed = tonumber(self.SEED) or os.time(),
+        resume_state = self:current_resume_state(),
+        stage = self.STAGES.RUN,
+        ante = tonumber(self.ante) or 1,
+        round = tonumber(self.round) or 1,
+        money = tonumber(self.money) or 0,
+        hands = tonumber(self.hands) or 0,
+        discards = tonumber(self.discards) or 0,
+        round_score = tonumber(self.round_score) or 0,
+        last_hand_score = tonumber(self.last_hand_score) or 0,
+        selectedHand = tonumber(self.selectedHand) or -1,
+        selectedHandHidden = self.selectedHandHidden == true,
+        selectedHandLevel = tonumber(self.selectedHandLevel) or 1,
+        selectedHandChips = tonumber(self.selectedHandChips) or 0,
+        selectedHandMult = tonumber(self.selectedHandMult) or 0,
+        _next_card_uid = tonumber(self._next_card_uid) or 1,
+        current_blind_index = tonumber(self.current_blind_index) or 1,
+        selected_blind_index = tonumber(self.selected_blind_index) or 1,
+        current_blind_target = tonumber(self.current_blind_target) or 0,
+        current_blind_reward = tonumber(self.current_blind_reward) or 0,
+        current_blind_name = tostring(self.current_blind_name or "Small Blind"),
+        current_boss_blind_id = self.current_boss_blind_id,
+        _last_completed_blind_was_boss = self._last_completed_blind_was_boss == true,
+        hand_size_delta_spectral = tonumber(self.hand_size_delta_spectral) or 0,
+        last_consumable_use_id = self.last_consumable_use_id,
+        hand_play_counts = copy_table(self.hand_play_counts or {}),
+        blind_hand_play_counts = copy_table(self.blind_hand_play_counts or {}),
+        _ante_played_card_uids = copy_table(self._ante_played_card_uids or {}),
+        boss_runtime = copy_table(self.boss_runtime or {}),
+        jokers_on_bottom = self.jokers_on_bottom == true,
+        jokers = jokers,
+        consumables = copy_table(self.consumables or {}),
+        consumable_base_capacity = tonumber(self.consumable_base_capacity) or 2,
+        deck_cards = table_array_deep_copy(self.deck and self.deck.cards or {}),
+        deck_discard_pile = table_array_deep_copy(self.deck and self.deck.discard_pile or {}),
+        hand_cards = hand_cards,
+        hand_draw_queue = hand_draw_queue,
+        hand_sort_mode = hand_sort_mode,
+        hand_selected_uids = selected_uids,
+        shop_offer_queue = copy_table(self.shop_offer_queue or {}),
+        _shop_rng_state = tonumber(self._shop_rng_state) or 0,
+        shop_reroll_count = tonumber(self.shop_reroll_count) or 0,
+        shop_offers = copy_table(self.shop_offers or {}),
+        shop_booster_offers = copy_table(self.shop_booster_offers or {}),
+        shop_offer_slots = tonumber(self.shop_offer_slots) or 2,
+        shop_booster_slots = tonumber(self.shop_booster_slots) or 2,
+        active_shop_booster_slot = self.active_shop_booster_slot,
+    }
+end
+
+function Game:write_run_snapshot(snapshot)
+    if type(snapshot) ~= "table" then return false, "invalid_snapshot" end
+    if not (love and love.filesystem and love.filesystem.write and love.filesystem.createDirectory) then
+        return false, "filesystem_unavailable"
+    end
+    love.filesystem.createDirectory(RUN_SAVE_DIR)
+    local encoded = "return " .. serialize_lua_value(snapshot)
+    local ok, err = love.filesystem.write(RUN_SAVE_PATH, encoded)
+    if not ok then
+        return false, tostring(err or "write_failed")
+    end
+    return true
+end
+
+function Game:read_run_snapshot()
+    if not self:has_saved_run() then return nil, "missing" end
+    if not (love and love.filesystem and love.filesystem.load) then
+        return nil, "filesystem_unavailable"
+    end
+    local chunk, err = love.filesystem.load(RUN_SAVE_PATH)
+    if not chunk then return nil, tostring(err or "load_failed") end
+    local ok, data = pcall(chunk)
+    if not ok or type(data) ~= "table" then
+        return nil, "decode_failed"
+    end
+    return data, nil
+end
+
+function Game:load_run_snapshot(snapshot)
+    if type(snapshot) ~= "table" then return false, "invalid_snapshot" end
+    local seed = tonumber(snapshot.seed)
+    if seed == nil then return false, "missing_seed" end
+
+    self.SEED = seed
+    math.randomseed(self.SEED)
+    self.STAGE = self.STAGES.RUN
+
+    if type(self.jokers) == "table" then
+        for i = #self.jokers, 1, -1 do
+            self:remove_owned_joker_at(i)
+        end
+    end
+    if type(self.consumables) == "table" then
+        for i = #self.consumables, 1, -1 do
+            self:remove_consumable_at(i)
+        end
+    end
+    for _, n in ipairs(self.shop_offer_nodes or {}) do
+        if n then self:remove(n) end
+    end
+    self.shop_offer_nodes = {}
+    if self.hand and self.hand.clear then
+        self.hand:clear()
+    end
+    self.pending_discard = {}
+    self.dragging = nil
+    self.active_tooltip_card = nil
+    self.active_tooltip_joker = nil
+    self.active_tooltip_consumable_index = nil
+
+    if not self.deck and Deck then
+        self.deck = Deck()
+    end
+    if self.deck then
+        self.deck.cards = table_array_deep_copy(snapshot.deck_cards or {})
+        self.deck.discard_pile = table_array_deep_copy(snapshot.deck_discard_pile or {})
+    end
+    if not self.hand and Hand then
+        self.hand = Hand(self)
+    end
+    if self.hand then
+        self.hand:clear()
+        local saved_sort_mode = snapshot.hand_sort_mode
+        self.hand.sort_mode = false
+        for _, card_data in ipairs(snapshot.hand_cards or {}) do
+            self.hand:add_card(copy_table(card_data), true)
+        end
+        self.hand._draw_queue = table_array_deep_copy(snapshot.hand_draw_queue or {})
+        self.hand.sort_mode = saved_sort_mode or "rank"
+        if self.hand.layout then
+            self.hand:layout(true)
+        end
+    end
+
+    self.ante = tonumber(snapshot.ante) or 1
+    self.round = tonumber(snapshot.round) or 1
+    self.money = tonumber(snapshot.money) or 0
+    self.hands = tonumber(snapshot.hands) or self:get_effective_hands_per_round()
+    self.discards = tonumber(snapshot.discards) or self:get_effective_discards_per_round()
+    self.round_score = tonumber(snapshot.round_score) or 0
+    self.last_hand_score = tonumber(snapshot.last_hand_score) or 0
+    self.selectedHand = tonumber(snapshot.selectedHand) or -1
+    self.selectedHandHidden = snapshot.selectedHandHidden == true
+    self.selectedHandLevel = tonumber(snapshot.selectedHandLevel) or 1
+    self.selectedHandChips = tonumber(snapshot.selectedHandChips) or 0
+    self.selectedHandMult = tonumber(snapshot.selectedHandMult) or 0
+    self._next_card_uid = tonumber(snapshot._next_card_uid) or 1
+    self.current_blind_index = tonumber(snapshot.current_blind_index) or 1
+    self.selected_blind_index = tonumber(snapshot.selected_blind_index) or self.current_blind_index
+    self.current_blind_target = tonumber(snapshot.current_blind_target) or 0
+    self.current_blind_reward = tonumber(snapshot.current_blind_reward) or 0
+    self.current_blind_name = snapshot.current_blind_name or "Small Blind"
+    self.current_boss_blind_id = snapshot.current_boss_blind_id
+    self._last_completed_blind_was_boss = snapshot._last_completed_blind_was_boss == true
+    self.hand_size_delta_spectral = tonumber(snapshot.hand_size_delta_spectral) or 0
+    self.last_consumable_use_id = snapshot.last_consumable_use_id
+    self.hand_play_counts = copy_table(snapshot.hand_play_counts or {})
+    self.blind_hand_play_counts = copy_table(snapshot.blind_hand_play_counts or {})
+    self._ante_played_card_uids = copy_table(snapshot._ante_played_card_uids or {})
+    self.boss_runtime = copy_table(snapshot.boss_runtime or {})
+    self.jokers_on_bottom = snapshot.jokers_on_bottom == true
+    self.shop_offer_queue = copy_table(snapshot.shop_offer_queue or {})
+    self._shop_rng_state = tonumber(snapshot._shop_rng_state) or self._shop_rng_state
+    self.shop_reroll_count = tonumber(snapshot.shop_reroll_count) or 0
+    self.shop_offers = copy_table(snapshot.shop_offers or {})
+    self.shop_booster_offers = copy_table(snapshot.shop_booster_offers or {})
+    self.shop_offer_slots = tonumber(snapshot.shop_offer_slots) or self.shop_offer_slots or 2
+    self.shop_booster_slots = tonumber(snapshot.shop_booster_slots) or self.shop_booster_slots or 2
+    self.active_shop_booster_slot = snapshot.active_shop_booster_slot
+    self.consumable_base_capacity = tonumber(snapshot.consumable_base_capacity) or 2
+
+    for _, jrec in ipairs(snapshot.jokers or {}) do
+        local params = nil
+        if jrec.edition and jrec.edition ~= "base" then
+            params = { edition = jrec.edition }
+        end
+        local ok = self:add_joker_by_def(jrec.id, params)
+        if ok then
+            local j = self.jokers[#self.jokers]
+            if j then
+                j.stored_mult = tonumber(jrec.stored_mult) or j.stored_mult
+                j.stored_chips = tonumber(jrec.stored_chips) or j.stored_chips
+                j.stored_xmult = tonumber(jrec.stored_xmult) or j.stored_xmult
+                j.runtime_counter = tonumber(jrec.runtime_counter) or j.runtime_counter
+                j.sell_cost = tonumber(jrec.sell_cost) or j.sell_cost
+                j.loyalty_remaining = jrec.loyalty_remaining
+                j.free_joker_slots = jrec.free_joker_slots
+            end
+        end
+    end
+
+    for _, c in ipairs(snapshot.consumables or {}) do
+        local cid = c and c.id
+        if type(cid) == "string" and cid ~= "" then
+            local params = copy_table(c)
+            params.id = nil
+            self:add_consumable(cid, params)
+        end
+    end
+
+    self:refresh_consumable_capacity_from_negatives()
+    self:refresh_joker_capacity_from_negatives()
+
+    if self.hand and type(snapshot.hand_selected_uids) == "table" then
+        local sel_set = {}
+        for _, uid in ipairs(snapshot.hand_selected_uids) do
+            sel_set[uid] = true
+        end
+        self.hand.selected = {}
+        for _, node in ipairs(self.hand.card_nodes or {}) do
+            if node and node.card_data and sel_set[node.card_data.uid] then
+                node.selected = true
+                self.hand.selected[#self.hand.selected + 1] = node
+            end
+        end
+        if self.hand.calculate_play then
+            self.hand:calculate_play()
+        end
+    end
+
+    if self.sync_shop_offer_nodes then
+        self:sync_shop_offer_nodes()
+    end
+
+    local resume_state = tonumber(snapshot.resume_state) or self.STATES.BLIND_SELECT
+    if resume_state == self.STATES.PAUSED or resume_state == self.STATES.MENU then
+        resume_state = self.STATES.BLIND_SELECT
+    elseif resume_state == self.STATES.OPEN_BOOSTER then
+        resume_state = self.STATES.SHOP
+    end
+    self._pause_prev_state = nil
+    self:set_state(resume_state)
+    return true
+end
+
+function Game:continue_saved_run_from_main_menu()
+    local snapshot, err = self:read_run_snapshot()
+    if not snapshot then return false, err end
+    return self:load_run_snapshot(snapshot)
+end
+
+function Game:start_new_run_from_main_menu()
+    self:clear_run_snapshot()
+    return self:start_run_from_main_menu()
+end
+
+function Game:pause_save_and_quit()
+    if self:is_hand_scoring_active() then
+        self._pause_save_error = "Cannot save while scoring."
+        return false
+    end
+    local snapshot = self:build_run_snapshot()
+    local ok, err = self:write_run_snapshot(snapshot)
+    if not ok then
+        self._pause_save_error = "Save failed: " .. tostring(err or "unknown")
+        return false
+    end
+    self._pause_prev_state = nil
+    self._pause_save_error = nil
+    self:enter_main_menu()
+    return true
+end
+
 function Game:get_base_requirement_for_ante(ante)
     local base_table = self.BASE_REQUIREMENT_BY_ANTE or {}
     local a = math.max(1, tonumber(ante) or 1)
@@ -1020,7 +1461,9 @@ function Game:init_item_prototypes()
 end
 
 function Game:draw()
-    if self.STATE == self.STATES.BLIND_SELECT then
+    if self.STATE == self.STATES.MENU then
+        MainMenuUI.draw_bottom(self)
+    elseif self.STATE == self.STATES.BLIND_SELECT then
         self:draw_bottom_blind_select()
     elseif self.STATE == self.STATES.ROUND_EVAL then
         self:draw_bottom_round_win()
@@ -1163,6 +1606,11 @@ function Game:draw()
 
     -- Tooltips last so they paint over sprites, hand, and Use/Sell (etc.).
     self:draw_tooltips_on_top()
+
+    -- Pause menu must overlay every gameplay element, including hand/tooltips.
+    if self.STATE == self.STATES.PAUSED then
+        self:draw_bottom_pause()
+    end
 end
 
 --- Draw all bottom-screen card / joker / consumable tooltips after other UI.
@@ -2476,6 +2924,47 @@ function Game:draw_bottom_game_over()
     GameOverUI.draw_bottom(self)
 end
 
+function Game:draw_bottom_pause()
+    local panel_x, panel_y, panel_w, panel_h = 24, 26, 272, 188
+    if _G.draw_rect_with_shadow then
+        draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 6, 3, self.C.BLOCK.BACK, self.C.BLOCK.SHADOW, 3)
+    else
+        love.graphics.setColor(self.C.PANEL)
+        love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 6, 6)
+    end
+    love.graphics.setColor(self.C.WHITE)
+    love.graphics.setFont(self.FONTS.PIXEL.MEDIUM)
+    love.graphics.printf("Paused", panel_x, panel_y + 14, panel_w, "center")
+
+    local btn_w, btn_h = 176, 32
+    local btn_x = panel_x + math.floor((panel_w - btn_w) * 0.5 + 0.5)
+    self._pause_continue_rect = { x = btn_x, y = panel_y + 48, w = btn_w, h = btn_h }
+    self._pause_new_run_rect = { x = btn_x, y = panel_y + 88, w = btn_w, h = btn_h }
+    self._pause_save_quit_rect = { x = btn_x, y = panel_y + 128, w = btn_w, h = btn_h }
+
+    local can_save = not self:is_hand_scoring_active()
+    local function draw_btn(r, label, color)
+        love.graphics.setColor(color)
+        love.graphics.rectangle("fill", r.x, r.y, r.w, r.h, 4, 4)
+        love.graphics.setColor(self.C.WHITE)
+        local ty = r.y + math.floor((r.h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
+        love.graphics.printf(label, r.x, ty, r.w, "center")
+    end
+    draw_btn(self._pause_continue_rect, "Continue", self.C.GREEN)
+    draw_btn(self._pause_new_run_rect, "New Run", self.C.RED)
+    draw_btn(self._pause_save_quit_rect, "Save and Quit", can_save and self.C.BLUE or self.C.GREY)
+
+    if not can_save then
+        love.graphics.setColor(self.C.GREY)
+        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        love.graphics.printf("Finish hand scoring before saving.", panel_x, panel_y + 166, panel_w, "center")
+    elseif self._pause_save_error then
+        love.graphics.setColor(self.C.RED)
+        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        love.graphics.printf(tostring(self._pause_save_error), panel_x + 8, panel_y + 166, panel_w - 16, "center")
+    end
+end
+
 function Game:continue_from_game_over()
     self._game_over_blind_label = nil
     self._game_over_score = nil
@@ -2485,6 +2974,94 @@ function Game:continue_from_game_over()
     self._game_over_continue_rect = nil
     self._blind_resolution_pending = false
     self.dragging = nil
+    -- Start the next run from a fully fresh state.
+    if type(self.jokers) == "table" then
+        for i = #self.jokers, 1, -1 do
+            self:remove_owned_joker_at(i)
+        end
+    end
+    self.jokers_on_bottom = false
+    if Deck then
+        self.deck = Deck()
+    else
+        self.deck = nil
+    end
+    local run_seed = os.time()
+    if love and love.timer and love.timer.getTime then
+        run_seed = run_seed + math.floor((love.timer.getTime() % 1) * 1000000)
+    end
+    self.SEED = run_seed
+    math.randomseed(self.SEED)
+    self:enter_main_menu()
+end
+
+function Game:enter_main_menu()
+    self.STAGE = self.STAGES.MAIN_MENU
+    self:set_state(self.STATES.MENU)
+    self.dragging = nil
+    self._main_menu_start_rect = nil
+    self._main_menu_continue_rect = nil
+    self._pause_prev_state = nil
+    self._blind_resolution_pending = false
+    if self.hand and self.hand.clear then
+        self.hand:clear()
+    end
+    if type(self.jokers) == "table" then
+        for i = #self.jokers, 1, -1 do
+            self:remove_owned_joker_at(i)
+        end
+    end
+    if type(self.consumables) == "table" then
+        for i = #self.consumables, 1, -1 do
+            self:remove_consumable_at(i)
+        end
+    end
+    if type(self.shop_offer_nodes) == "table" then
+        for _, n in ipairs(self.shop_offer_nodes) do
+            if n then self:remove(n) end
+        end
+    end
+    self.shop_offer_nodes = {}
+    self.pending_discard = {}
+    self.jokers_on_bottom = false
+    self.active_tooltip_card = nil
+    self.active_tooltip_joker = nil
+    self.active_tooltip_consumable_index = nil
+end
+
+function Game:start_run_from_main_menu()
+    if self.unload_asset_atlas then
+        self:unload_asset_atlas("balatro")
+    end
+    -- Starting a new run should always clear any existing run objects (especially owned jokers).
+    if type(self.jokers) == "table" then
+        for i = #self.jokers, 1, -1 do
+            self:remove_owned_joker_at(i)
+        end
+    end
+    if type(self.consumables) == "table" then
+        for i = #self.consumables, 1, -1 do
+            self:remove_consumable_at(i)
+        end
+    end
+    if self.hand and self.hand.clear then
+        self.hand:clear()
+    end
+    if Deck then
+        self.deck = Deck()
+    end
+    -- Fresh run: new seed and RNG.
+    local run_seed = os.time()
+    if love and love.timer and love.timer.getTime then
+        run_seed = run_seed + math.floor((love.timer.getTime() % 1) * 1000000)
+    end
+    self.SEED = run_seed
+    math.randomseed(self.SEED)
+    -- Reset shop RNG/queue so offers change with the new seed.
+    self.shop_offer_queue = nil
+    self._shop_rng_state = nil
+    self._pause_prev_state = nil
+    self._pause_save_error = nil
     self:initialize_run_loop()
 end
 
@@ -2497,6 +3074,9 @@ function Game:handle_shop_touch(x, y)
 end
 
 function Game:update(dt)
+    if self.STATE == self.STATES.PAUSED then
+        return
+    end
     self:_update_joker_emit_queue(dt)
     if self.STATE == self.STATES.ROUND_EVAL then
         self:update_round_win_eval(dt)
@@ -3681,6 +4261,7 @@ function Game:roll_shop_offers()
     local slots = math.max(1, math.floor(tonumber(self.shop_offer_slots) or 2))
     local guard = 0
     local guard_limit = math.max(250, slots * 125)
+    local seen_ids = {}
     while #self.shop_offers < slots and guard < guard_limit do
         guard = guard + 1
         local entry = self:_pop_shop_queue_entry()
@@ -3689,10 +4270,18 @@ function Game:roll_shop_offers()
             if entry.kind == nil then
                 entry.kind = "joker"
             end
-            if (not allow_duplicates) and self:_shop_joker_owned(entry.id) then
-                -- Owned: consume queue slot, no visible offer.
-            else
+            local id = entry.id
+            local dup = false
+            if (not allow_duplicates) then
+                if self:_shop_joker_owned(id) then
+                    dup = true
+                elseif id ~= nil and seen_ids[id] then
+                    dup = true
+                end
+            end
+            if not dup then
                 self.shop_offers[#self.shop_offers + 1] = entry
+                if id ~= nil then seen_ids[id] = true end
             end
         else
             if (not allow_duplicates) and self:_shop_consumable_owned(entry.id) then
@@ -4129,7 +4718,6 @@ function Game:begin_booster_session(offer)
 end
 
 function Game:end_booster_session()
-    self:emit_joker_event("on_booster_skip",{})
     local sess = self.booster_session
     if sess and sess.hand_for_tarot then
         if self.hand and self.hand.send_entire_hand_to_discard_pile then
@@ -4652,6 +5240,14 @@ function Game:handle_failed_blind_reset()
     self.active_tooltip_joker = nil
     self.active_tooltip_consumable_index = nil
     self.dragging = nil
+    if type(self.consumables) == "table" then
+        for i = #self.consumables, 1, -1 do
+            self:remove_consumable_at(i)
+        end
+    end
+    if self.hand and self.hand.clear then
+        self.hand:clear()
+    end
     if Sfx and Sfx.play then
         Sfx.play("resources/sounds/cancel.ogg")
     end
@@ -4829,16 +5425,30 @@ local function node_is_owned_consumable(self, node)
 end
 
 function Game:touchpressed(id, x, y)
+    if self.STATE == self.STATES.MENU then
+        MainMenuUI.handle_touch(self, x, y)
+        return
+    end
+    if self.STATE == self.STATES.PAUSED then
+        if self._pause_continue_rect and self:_point_in_rect_simple(x, y, self._pause_continue_rect) then
+            self:exit_pause_menu()
+            return
+        end
+        if self._pause_new_run_rect and self:_point_in_rect_simple(x, y, self._pause_new_run_rect) then
+            self:start_new_run_from_main_menu()
+            return
+        end
+        if self._pause_save_quit_rect and self:_point_in_rect_simple(x, y, self._pause_save_quit_rect) then
+            self:pause_save_and_quit()
+            return
+        end
+        return
+    end
     if self.STATE == self.STATES.GAME_OVER then
         return
     end
     if self.STATE == self.STATES.OPEN_BOOSTER then
-        if self:try_sell_button_press(x, y) then
-            return
-        end
-        if BoosterPackUI.handle_touch_pressed(self, id, x, y) then
-            return
-        end
+        -- Jokers at bottom always take touch priority over booster controls.
         if self.jokers_on_bottom == true then
             self.touch_start_x = x
             self.touch_start_y = y
@@ -4851,6 +5461,12 @@ function Game:touchpressed(id, x, y)
                 end
                 return
             end
+        end
+        if self:try_sell_button_press(x, y) then
+            return
+        end
+        if BoosterPackUI.handle_touch_pressed(self, id, x, y) then
+            return
         end
         if self.booster_session and self.booster_session.hand_for_tarot and self.hand and self.hand.card_nodes then
             self.touch_start_x = x
@@ -4984,6 +5600,9 @@ function Game:touchpressed(id, x, y)
 end
 
 function Game:touchmoved(id, x, y, dx, dy)
+    if self.STATE == self.STATES.PAUSED then
+        return
+    end
     if self.STATE == self.STATES.GAME_OVER then
         return
     end
@@ -5012,6 +5631,10 @@ function Game:touchmoved(id, x, y, dx, dy)
 end
 
 function Game:touchreleased(id, x, y)
+    if self.STATE == self.STATES.PAUSED then
+        self.dragging = nil
+        return
+    end
     if self.STATE == self.STATES.GAME_OVER then
         GameOverUI.handle_touch(self, x, y)
         self.dragging = nil
@@ -5197,6 +5820,18 @@ function Game:ensure_asset_atlas_loaded(name)
     atlas.image = ok and img or nil
     atlas.load_error = ok and nil or tostring(err)
     return atlas
+end
+
+function Game:unload_asset_atlas(name)
+    if not name or not self.ASSET_ATLAS then return false end
+    local atlas = self.ASSET_ATLAS[name]
+    if not atlas or not atlas.image then return false end
+    if atlas.image.release then
+        pcall(function() atlas.image:release() end)
+    end
+    atlas.image = nil
+    atlas.load_error = nil
+    return true
 end
 
 function Game:set_render_settings()

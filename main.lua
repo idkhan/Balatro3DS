@@ -9,10 +9,10 @@ local nest_ok, nest = pcall(function()
     return require("nest").init({ console = "3ds" })
 end)
 
-require "engine/object"
-require "engine/node"
-require "engine/moveable"
-require "engine/sprite"
+require "engine.object"
+require "engine.node"
+require "engine.moveable"
+require "engine.sprite"
 require "card"
 require "deck"
 require "hand"
@@ -23,6 +23,7 @@ require "game"
 require "globals"
 require "consumable_catalog"
 require "topUI"
+local MainMenuUI = require "main_menu_ui"
 Sfx = require "sfx"
 
 function love.load()
@@ -32,7 +33,7 @@ function love.load()
     end
 
     G = Game()
-    G:initialize_run_loop()
+    G:enter_main_menu()
 
     G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
     if G.music then
@@ -46,12 +47,20 @@ function love.update(dt)
 end
 
 function love.draw(screen)
-    love.graphics.clear(unpack(G.C.BLIND.Big))
+    if G and G.STATE == G.STATES.MENU then
+        MainMenuUI.draw_background(G, screen)
+    else
+        love.graphics.clear(unpack(G.C.BLIND.Big))
+    end
     if screen == "bottom" then
         love.graphics.setColor(1, 1, 1)
         G:draw()
     else
-        TopUI.draw()
+        if G and G.STATE == G.STATES.MENU then
+            MainMenuUI.draw_top(G)
+        else
+            TopUI.draw()
+        end
     end
 end
 
@@ -60,6 +69,31 @@ function love.keypressed(key)
         if G then G.DEBUG = not G.DEBUG end
     end
     if not G then return end
+    if key == "escape" then
+        if G.toggle_pause then
+            G:toggle_pause()
+            return
+        end
+    end
+    if G.STATE == G.STATES.MENU then
+        if key == "return" or key == "space" or key == "z" then
+            if G.has_saved_run and G:has_saved_run() and G.continue_saved_run_from_main_menu then
+                G:continue_saved_run_from_main_menu()
+            elseif G.start_new_run_from_main_menu then
+                G:start_new_run_from_main_menu()
+            else
+                G:start_run_from_main_menu()
+            end
+            return
+        end
+        return
+    end
+    if G.STATE == G.STATES.PAUSED then
+        if key == "return" or key == "space" or key == "z" then
+            G:exit_pause_menu()
+        end
+        return
+    end
     if G.set_jokers_location then
         -- Allow joker row screen toggle in every gameplay state.
         if key == "up" then
@@ -97,10 +131,31 @@ end
 
 function love.gamepadpressed(_, button)
     if button == "start" and G then
-        G.DEBUG = not G.DEBUG
+        if G.toggle_pause then
+            G:toggle_pause()
+            return
+        end
     end
 
     if not G then return end
+    if G.STATE == G.STATES.MENU then
+        if button == "a" or button == "y" then
+            if G.has_saved_run and G:has_saved_run() and G.continue_saved_run_from_main_menu then
+                G:continue_saved_run_from_main_menu()
+            elseif G.start_new_run_from_main_menu then
+                G:start_new_run_from_main_menu()
+            else
+                G:start_run_from_main_menu()
+            end
+        end
+        return
+    end
+    if G.STATE == G.STATES.PAUSED then
+        if button == "a" or button == "y" then
+            G:exit_pause_menu()
+        end
+        return
+    end
     if G.set_jokers_location then
         if button == "up" or button == "dpup" then
             G:set_jokers_location(true)

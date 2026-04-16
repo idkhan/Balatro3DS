@@ -618,16 +618,20 @@ function Hand:build_contained_hand_types(nodes)
 
     local rank_counts = {}
     local suit_counts = {}
+    local wild_count = 0
     local n = 0
 
     for _, node in ipairs(nodes) do
         local data = (node and node.card_data) or {}
         local rank = data.rank
         local suit = data.suit
+        local enhancement = data.enhancement
         if rank ~= nil then
             rank_counts[rank] = (rank_counts[rank] or 0) + 1
         end
-        if suit ~= nil then
+        if enhancement == "wild" then
+            wild_count = wild_count + 1
+        elseif suit ~= nil then
             suit_counts[suit] = (suit_counts[suit] or 0) + 1
         end
         n = n + 1
@@ -640,11 +644,18 @@ function Hand:build_contained_hand_types(nodes)
         if c == 2 then pairs_count = pairs_count + 1 end
     end
 
-    local suit_kinds = 0
-    for _ in pairs(suit_counts) do
-        suit_kinds = suit_kinds + 1
+    local flush = false
+    if n > 0 then
+        if wild_count == n then
+            flush = true
+        else
+            local suit_kinds = 0
+            for _ in pairs(suit_counts) do
+                suit_kinds = suit_kinds + 1
+            end
+            flush = (suit_kinds == 1)
+        end
     end
-    local flush = (suit_kinds == 1 and n > 0)
 
     if pairs_count >= 1 then contained["Pair"] = true end
     if pairs_count >= 2 or (max_of_a_kind >= 3 and pairs_count >= 1) then
@@ -1307,6 +1318,7 @@ function Hand:calculate_play()
     local suits = {}
     local rank_counts = {}
     local suit_counts = {}
+    local wild_count = 0
     local max_rank_for_high = nil
     local has_face_down_selected = false
 
@@ -1314,6 +1326,7 @@ function Hand:calculate_play()
         local data = node.card_data or {}
         local rank = data.rank
         local suit = data.suit
+        local enhancement = data.enhancement
         if node and node.face_up == false then
             has_face_down_selected = true
         end
@@ -1322,8 +1335,12 @@ function Hand:calculate_play()
         table.insert(suits, suit)
 
         rank_counts[rank] = (rank_counts[rank] or 0) + 1
-        local normalized_suit = normalized_suit_for_scoring(suit)
-        suit_counts[normalized_suit] = (suit_counts[normalized_suit] or 0) + 1
+        if enhancement == "wild" then
+            wild_count = wild_count + 1
+        else
+            local normalized_suit = normalized_suit_for_scoring(suit)
+            suit_counts[normalized_suit] = (suit_counts[normalized_suit] or 0) + 1
+        end
 
         if type(rank) == "number" then
             if max_rank_for_high == nil or rank > max_rank_for_high then
@@ -1336,6 +1353,7 @@ function Hand:calculate_play()
 
     local function is_flush()
         if n < min_straight_flush_cards then return false end
+        if wild_count == n then return true end
         return next(suit_counts) ~= nil and next(suit_counts, next(suit_counts)) == nil
     end
 

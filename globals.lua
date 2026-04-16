@@ -246,6 +246,8 @@ function Game:set_globals()
         NEW_ROUND = 19,
         --- Opening a booster from the shop (single state for all pack types).
         OPEN_BOOSTER = 20,
+        --- In-run pause menu overlay.
+        PAUSED = 21,
     }
 
     self.STAGES = {
