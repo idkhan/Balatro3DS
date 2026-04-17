@@ -1695,6 +1695,15 @@ local SPECIAL = {
             end
         end
     },
+    
+    j_stuntman = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                add_chips(ctx, j.config and j.config.extra and j.config.extra.chip_mod or 250)
+            end
+        end
+    },
 
 
 }

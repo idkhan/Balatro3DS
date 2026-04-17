@@ -3908,6 +3908,7 @@ function Game:initialize_run_loop()
     self.last_consumable_use_id = nil
     self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
+    self:add_joker_by_def("j_stuntman")
 end
 
 function Game:enter_blind_select()
