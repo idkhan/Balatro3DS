@@ -155,6 +155,7 @@ function Game:init(seed)
     self.consumable_capacity = 2
     self._consumable_rects = {}
     self.consumable_nodes = {}
+    self.tarots_used = 0
     --- Last consumable id used this run (Tarot except Fool, or Planet); for The Fool duplicate.
     self.last_consumable_use_id = nil
 
@@ -969,6 +970,7 @@ function Game:build_run_snapshot()
         shop_offer_slots = tonumber(self.shop_offer_slots) or 2,
         shop_booster_slots = tonumber(self.shop_booster_slots) or 2,
         active_shop_booster_slot = self.active_shop_booster_slot,
+        tarots_used = tonumber(self.tarots_used) or 0,
     }
 end
 
@@ -1092,6 +1094,7 @@ function Game:load_run_snapshot(snapshot)
     self.shop_booster_slots = tonumber(snapshot.shop_booster_slots) or self.shop_booster_slots or 2
     self.active_shop_booster_slot = snapshot.active_shop_booster_slot
     self.consumable_base_capacity = tonumber(snapshot.consumable_base_capacity) or 2
+    self.tarots_used = tonumber(snapshot.tarots_used) or 0
 
     for _, jrec in ipairs(snapshot.jokers or {}) do
         local params = nil
@@ -2351,6 +2354,20 @@ function Game:apply_consumable_effect(c)
     end
 end
 
+--- Shared bookkeeping for any consumable that gets used (owned, shop instant-use, booster pick/use).
+---@param c Consumable|table|nil
+function Game:track_consumable_use(c)
+    if type(c) ~= "table" then return end
+    if c.kind == "tarot" then
+        self.tarots_used = (tonumber(self.tarots_used) or 0) + 1
+    end
+    self:emit_joker_event("on_consumable_used", {
+        consumable = c,
+        consumable_id = c.id,
+        consumable_kind = c.kind,
+    })
+end
+
 --- Use (consume) a Consumable at the given index.
 ---@param index integer
 ---@return boolean
@@ -2358,11 +2375,7 @@ function Game:use_consumable(index)
     if not self:consumable_use_enabled(index) then return false end
     local c = self:remove_consumable_at(index)
     if not c then return false end
-    self:emit_joker_event("on_consumable_used", {
-        consumable = c,
-        consumable_id = c.id,
-        consumable_kind = c.kind,
-    })
+    self:track_consumable_use(c)
     self:apply_consumable_effect(c)
     return true
 end
@@ -3247,6 +3260,19 @@ function Game:get_node_at(x, y)
     return nil
 end
 
+--- Topmost owned joker under (x, y), or nil. Booster pack choice cards overlap the joker row; `get_node_at`
+--- would prefer those nodes, so input that should hit owned jokers must test them first.
+function Game:get_owned_joker_at(x, y)
+    if not self.jokers then return nil end
+    for i = #self.jokers, 1, -1 do
+        local j = self.jokers[i]
+        if j and j.states and j.states.click.can and self:point_in_rect(x, y, j) then
+            return j
+        end
+    end
+    return nil
+end
+
 --- Horizontal step and span for `n` jokers in `screen_w`, overlapping (fanned) when natural width exceeds `screen_wdt`.
 ---@return number step x-distance between successive joker left edges
 ---@return number total_span width from first to last joker's right edge
@@ -3874,6 +3900,7 @@ function Game:initialize_run_loop()
     self.shop_reroll_count = 0
     self.hand_play_counts = {}
     self.blind_hand_play_counts = {}
+    self.tarots_used = 0
     if self.hand and self.hand.clear then
         self.hand:clear()
     end
@@ -4828,6 +4855,7 @@ function Game:pick_booster_choice(idx)
     if ch.kind == "planet" then
         local c = ch.consumable_def
         if not self:pack_consumable_can_apply(c) then return false end
+        self:track_consumable_use(c)
         self:apply_consumable_effect(c)
     elseif ch.kind == "joker" then
         local ed = ch.edition or "base"
@@ -4841,6 +4869,7 @@ function Game:pick_booster_choice(idx)
     elseif ch.kind == "tarot" or ch.kind == "spectral" then
         local c = ch.consumable_def
         if not self:pack_consumable_can_apply(c) then return false end
+        self:track_consumable_use(c)
         self:apply_consumable_effect(c)
     else
         return false
@@ -4875,6 +4904,7 @@ function Game:use_booster_tarot_choice(idx)
     if not c then return false end
     if not self:pack_consumable_can_apply(c) then return false end
 
+    self:track_consumable_use(c)
     self:apply_consumable_effect(c)
 
     ch.taken = true
@@ -5119,6 +5149,7 @@ function Game:buy_and_use_shop_consumable(slot_index)
         offer_id = offer.id,
         offer_price = tonumber(offer.price) or 0,
     })
+    self:track_consumable_use(c)
     self:apply_consumable_effect(c)
 
     table.remove(self.shop_offers, slot_index)
@@ -5448,11 +5479,14 @@ function Game:touchpressed(id, x, y)
         return
     end
     if self.STATE == self.STATES.OPEN_BOOSTER then
-        -- Jokers at bottom always take touch priority over booster controls.
+        if self:try_sell_button_press(x, y) then
+            return
+        end
+        -- Jokers at bottom take touch priority over booster card controls.
         if self.jokers_on_bottom == true then
             self.touch_start_x = x
             self.touch_start_y = y
-            local node = self:get_node_at(x, y)
+            local node = self:get_owned_joker_at(x, y)
             if node and node_is_owned_joker(self, node) then
                 if node.touchpressed then
                     node:touchpressed(id, x, y)
@@ -5461,9 +5495,6 @@ function Game:touchpressed(id, x, y)
                 end
                 return
             end
-        end
-        if self:try_sell_button_press(x, y) then
-            return
         end
         if BoosterPackUI.handle_touch_pressed(self, id, x, y) then
             return
@@ -5751,6 +5782,11 @@ function Game:touchreleased(id, x, y)
     if not released and dist < TAP_THRESHOLD then
         local node_at = self:get_node_at(x, y)
         if node_at and (node_is_shop_offer_joker(self, node_at) or node_is_owned_joker(self, node_at)) then
+            self.dragging = nil
+            return
+        end
+        local sell_hit = self._sell_button_hit
+        if sell_hit and self:_point_in_rect_simple(x, y, sell_hit) then
             self.dragging = nil
             return
         end

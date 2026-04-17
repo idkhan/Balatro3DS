@@ -850,15 +850,15 @@ local SPECIAL = {
         end
     },
     j_fortune_teller = {
-        matches_trigger = function(_, e) return e == "on_consumable_used" or e == "on_hand_scored" end,
-        apply_effect = function(j, ctx)
-            if ctx.event_name == "on_consumable_used" and ctx.consumable_kind == "tarot" then
-                j.stored_mult = (tonumber(j.stored_mult) or 0) + 1
-            elseif ctx.event_name == "on_hand_scored" and j.stored_mult ~= 0 then
-                add_mult(ctx, tonumber(j.stored_mult) or 0)
-            end
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx)
+            local tarot_uses = tonumber(G and G.tarots_used) or 0
+            if tarot_uses <= 0 then return end
+            add_mult(ctx, tarot_uses)
+            mark_effect_applied(ctx)
         end
     },
+
     j_baseball_card = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(_, ctx)

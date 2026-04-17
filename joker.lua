@@ -726,7 +726,7 @@ function Joker:get_live_current_tooltip_text(base_text)
         j_bootstraps = function() return string.format("(Currently +%d Mult)", math.floor((tonumber(G and G.money) or 0) / 5) * 2) end,
         j_flash_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
         j_spare_trousers = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
-        j_fortune_teller = function(j) return string.format("(Currently +%d)", math.floor(tonumber(j.stored_mult) or 0)) end,
+        j_fortune_teller = function() return string.format("(Currently +%d)", math.floor(tonumber(G and G.tarots_used) or 0)) end,
     }
     if mults[id] then
         return mults[id](self)

@@ -616,6 +616,29 @@ function Hand:build_contained_hand_types(nodes)
     local contained = {}
     if type(nodes) ~= "table" then return contained end
 
+    local cached = self._last_play_hand_flags
+    local use_cached = false
+    if type(cached) == "table" and type(cached.nodes) == "table" and #cached.nodes == #nodes then
+        use_cached = true
+        for i = 1, #nodes do
+            if cached.nodes[i] ~= nodes[i] then
+                use_cached = false
+                break
+            end
+        end
+    end
+
+    local pairs_count = 0
+    local max_of_a_kind = 0
+    local flush = false
+    local straight = false
+    if use_cached then
+        pairs_count = tonumber(cached.pairs_count) or 0
+        max_of_a_kind = tonumber(cached.max_of_a_kind) or 0
+        flush = cached.flush == true
+        straight = cached.straight == true
+    end
+
     local rank_counts = {}
     local suit_counts = {}
     local wild_count = 0
@@ -637,23 +660,21 @@ function Hand:build_contained_hand_types(nodes)
         n = n + 1
     end
 
-    local pairs_count = 0
-    local max_of_a_kind = 0
-    for _, c in pairs(rank_counts) do
-        if c > max_of_a_kind then max_of_a_kind = c end
-        if c == 2 then pairs_count = pairs_count + 1 end
-    end
-
-    local flush = false
-    if n > 0 then
-        if wild_count == n then
-            flush = true
-        else
-            local suit_kinds = 0
-            for _ in pairs(suit_counts) do
-                suit_kinds = suit_kinds + 1
+    if not use_cached then
+        for _, c in pairs(rank_counts) do
+            if c > max_of_a_kind then max_of_a_kind = c end
+            if c == 2 then pairs_count = pairs_count + 1 end
+        end
+        if n > 0 then
+            if wild_count == n then
+                flush = true
+            else
+                local suit_kinds = 0
+                for _ in pairs(suit_counts) do
+                    suit_kinds = suit_kinds + 1
+                end
+                flush = (suit_kinds == 1)
             end
-            flush = (suit_kinds == 1)
         end
     end
 
@@ -664,6 +685,7 @@ function Hand:build_contained_hand_types(nodes)
     if max_of_a_kind >= 3 then contained["Three of a Kind"] = true end
     if max_of_a_kind >= 4 then contained["Four of a Kind"] = true end
     if flush then contained["Flush"] = true end
+    if straight then contained["Straight"] = true end
 
     return contained
 end
@@ -1264,6 +1286,7 @@ end
 function Hand:calculate_play()
     local n_sel = #self.selected
     if n_sel == 0 then
+        self._last_play_hand_flags = nil
         for _, node in ipairs(self.card_nodes) do
             node.counts_for_play_score = false
         end
@@ -1432,6 +1455,13 @@ function Hand:calculate_play()
 
     local flush = is_flush()
     local straight = is_straight()
+    self._last_play_hand_flags = {
+        nodes = ordered,
+        pairs_count = pairs_count,
+        max_of_a_kind = max_of_a_kind,
+        flush = flush and true or false,
+        straight = straight and true or false,
+    }
 
     -- Determine hand according to Balatro order in globals.handlist:
     -- 1  Flush Five      (five of same rank & same suit)
