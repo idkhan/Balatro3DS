@@ -546,6 +546,26 @@ function ShopUI.draw_bottom_shop(game)
     love.graphics.setColor(game.C.PANEL)
     love.graphics.rectangle("fill", boosterPanel.x, boosterPanel.y, boosterPanel.w, boosterPanel.h, 4, 4)
     ShopUI.layout_shop_booster_slots(game, boosterPanel)
+
+    --Voucher
+    local voucherPanel = {
+        x = panel_x + padding,
+        y = boosterPanel.y,
+        w = 177,
+        h = bp_h,
+    }
+    love.graphics.setColor(game.C.PANEL)
+    love.graphics.rectangle("fill", voucherPanel.x, voucherPanel.y, voucherPanel.w, voucherPanel.h, 4, 4)
+    ShopUI.layout_shop_voucher_panel(game, voucherPanel)
+
+    love.graphics.setColor(game.C.BLOCK.BACK)
+    love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
+    local text = "VOUCHER"
+    love.graphics.print(text, panel_x -1 , voucherPanel.y + love.graphics.getFont():getWidth(text) / 2 + voucherPanel.h / 2 ,math.rad(-90))
+end
+
+function ShopUI.layout_shop_voucher_panel(game, voucherPanel)
+    
 end
 
 function ShopUI.handle_touch(game, x, y)

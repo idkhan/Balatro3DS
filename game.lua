@@ -3910,6 +3910,7 @@ function Game:initialize_run_loop()
     self.last_consumable_use_id = nil
     self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
+    self:enter_shop_after_blind()
 end
 
 function Game:enter_blind_select()

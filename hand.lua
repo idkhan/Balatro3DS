@@ -684,7 +684,7 @@ function Hand:build_contained_hand_types(nodes)
         end
     end
 
-    if pairs_count >= 1 then contained["Pair"] = true end
+    if max_of_a_kind >= 2 then contained["Pair"] = true end
     if pairs_count >= 2 or (max_of_a_kind >= 3 and pairs_count >= 1) then
         contained["Two Pair"] = true
     end
