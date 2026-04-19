@@ -23,6 +23,47 @@ function BoosterPackUI.display_label(pack, size)
     return pn
 end
 
+--- Shop tooltip body (Balatro-style): "Choose X of Y Type Cards …".
+function BoosterPackUI.shop_tooltip_description(offer)
+    if type(offer) ~= "table" then return "" end
+    local pack = tostring(offer.pack or "")
+    local n = tonumber(offer.card_count)
+    if not n or n <= 0 then
+        n = BoosterPackUI.card_count_for_size(offer.size)
+    end
+    local picks = tonumber(offer.picks_granted)
+    if picks == nil or picks < 0 then
+        picks = BoosterPackUI.picks_for_size(offer.size)
+    end
+
+    local kind_label
+    local tail
+    if pack == "standard" then
+        kind_label = "Playing"
+        tail = "to add to your Deck."
+    elseif pack == "arcana" then
+        kind_label = "Tarot"
+        tail = "to be used immediately."
+    elseif pack == "celestial" then
+        kind_label = "Planet"
+        tail = "to be used immediately."
+    elseif pack == "spectral" then
+        kind_label = "Spectral"
+        tail = "to be used immediately."
+    elseif pack == "buffoon" then
+        kind_label = "Joker"
+        tail = "to add to your Jokers."
+    else
+        kind_label = "Cards"
+        tail = "to be used immediately."
+    end
+
+    if picks == 2 then
+        return string.format("Choose up to %d of %d %s Cards %s", picks, n, kind_label, tail)
+    end
+    return string.format("Choose %d of %d %s Cards %s", picks, n, kind_label, tail)
+end
+
 function BoosterPackUI.pack_needs_hand(pack)
     return pack == "arcana" or pack == "tarot" or pack == "spectral"
 end

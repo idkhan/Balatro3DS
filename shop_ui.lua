@@ -121,7 +121,8 @@ function ShopUI.draw_shop_offer_buy_button(game)
     local by = rect.y + math.floor((rect.h - btn_h) * 0.5 + 0.5)
     if by < margin then by = margin end
     local is_consumable_offer = offer.kind == "tarot" or offer.kind == "planet"
-    local can_buy = can_afford and (not is_consumable_offer or game:can_add_consumable())
+    local is_playing_card = offer.kind == "playing_card"
+    local can_buy = can_afford and ((not is_consumable_offer and not is_playing_card) or (is_consumable_offer and game:can_add_consumable()) or is_playing_card)
     local fill_c = can_buy and game.C.MONEY or game.C.GREY
     local shadow_c = game.C and game.C.BLOCK and game.C.BLOCK.SHADOW
 
@@ -327,7 +328,7 @@ function ShopUI.layout_shop_booster_slots(game, param)
     local px, py = 72, 95
     local max_sw = ((area_w - (n - 1) * gap) / n) / px
     local max_sh = (area_h - 2) / py
-    local scale = math.max(0.8, max_sw, max_sh)
+    local scale = 1
     local pack_w = math.max(1, math.floor(px * scale))
     local pack_h = math.max(1, math.floor(py * scale))
     local total_w = n * pack_w + (n - 1) * gap
@@ -466,6 +467,7 @@ function ShopUI.try_shop_booster_slot_press(game, x, y)
             game.active_tooltip_joker = nil
             game.active_tooltip_card = nil
             game.active_tooltip_consumable_index = nil
+            game.active_tooltip_shop_voucher = false
             return true
         end
     end
@@ -565,7 +567,167 @@ function ShopUI.draw_bottom_shop(game)
 end
 
 function ShopUI.layout_shop_voucher_panel(game, voucherPanel)
-    
+    game._shop_voucher_rect = nil
+    if type(voucherPanel) ~= "table" then return end
+    if not (game.shop_voucher_offer and type(game.shop_voucher_offer) == "table") then return end
+
+    local padding = 4
+    local area_x = voucherPanel.x + padding
+    local area_y = voucherPanel.y + padding
+    local area_w = voucherPanel.w - 2 * padding
+    local area_h = voucherPanel.h - 2 * padding
+
+    local px, py = 71, 95
+    local scale = 1
+    local w = math.floor(px * scale)
+    local h = math.floor(py * scale)
+    local x = area_x + math.floor((area_w - w) * 0.5 + 0.5)
+    local y = area_y + math.floor((area_h - h) * 0.5 + 0.5)
+    game._shop_voucher_rect = { x = x, y = y, w = w, h = h }
+end
+
+function ShopUI.draw_shop_voucher_slot(game)
+    if game.STATE ~= game.STATES.SHOP then return end
+    local rect = game._shop_voucher_rect
+    local offer = game.shop_voucher_offer
+    if not rect then return end
+    if not offer then return end
+    local drew = false
+    local def = VOUCHER_DEFS and offer.id and VOUCHER_DEFS[offer.id]
+    local pos = def and tonumber(def.pos)
+    if pos and game.ensure_asset_atlas_loaded and game.ASSET_ATLAS and game.ASSET_ATLAS.Voucher then
+        game:ensure_asset_atlas_loaded("Voucher")
+        local atlas = game.ASSET_ATLAS.Voucher
+        if atlas and atlas.image then
+            local cell_w = tonumber(atlas.px) or 71
+            local cell_h = tonumber(atlas.py) or 95
+            local iw, ih = atlas.image:getDimensions()
+            local cols = math.max(1, math.floor(iw / cell_w))
+            local idx = math.max(0, math.floor(pos))
+            local col = idx % cols
+            local row = math.floor(idx / cols)
+            local qx, qy = col * cell_w, row * cell_h
+            if qx + cell_w <= iw + 0.5 and qy + cell_h <= ih + 0.5 then
+                atlas._voucher_quads = atlas._voucher_quads or {}
+                local quad = atlas._voucher_quads[idx]
+                if not quad then
+                    quad = love.graphics.newQuad(qx, qy, cell_w, cell_h, iw, ih)
+                    atlas._voucher_quads[idx] = quad
+                end
+                local s = math.min(rect.w / cell_w, rect.h / cell_h) * 0.85
+                local dw, dh = cell_w * s, cell_h * s
+                local dx = rect.x + math.floor((rect.w - dw) * 0.5 + 0.5)
+                local dy = rect.y + math.floor((rect.h - dh) * 0.5 + 0.5)
+                love.graphics.setColor(1, 1, 1, 1)
+                love.graphics.draw(atlas.image, quad, dx, dy, 0, s, s)
+                drew = true
+            end
+        end
+    end
+    if not drew then
+        love.graphics.setColor(game.C.WHITE)
+        love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+        love.graphics.printf(offer.name or "Voucher", rect.x + 2, rect.y + math.floor(rect.h * 0.35), rect.w - 4, "center")
+    end
+end
+
+function ShopUI.draw_shop_voucher_price_tags(game)
+    if game.STATE ~= game.STATES.SHOP then return end
+    local offer = game.shop_voucher_offer
+    local rect = game._shop_voucher_rect
+    if not offer or not rect then return end
+    local label = "$" .. tostring(offer.price or 0)
+    local font = game.FONTS.PIXEL.SMALL
+    local tw = font:getWidth(label)
+    local tag_w = tw + 12
+    local tag_h = font:getHeight() + 4
+    local tx = rect.x + math.floor((rect.w - tag_w) * 0.5 + 0.5)
+    local ty = rect.y - tag_h - 2
+    if _G.draw_rect_with_shadow then
+        draw_rect_with_shadow(tx, ty, tag_w, tag_h, 3, 2, game.C.BLOCK.BACK, game.C.BLOCK.SHADOW, 1)
+    else
+        love.graphics.setColor(game.C.BLOCK.BACK)
+        love.graphics.rectangle("fill", tx, ty, tag_w, tag_h, 3, 3)
+    end
+    love.graphics.setFont(font)
+    love.graphics.setColor(game.C.MONEY)
+    love.graphics.printf(label, tx, ty + 2, tag_w, "center")
+end
+
+function ShopUI.draw_shop_voucher_buy_button(game)
+    if game.STATE ~= game.STATES.SHOP then return end
+    if not game.active_tooltip_shop_voucher then return end
+    local offer = game.shop_voucher_offer
+    local rect = game._shop_voucher_rect
+    if not offer or not rect then return end
+
+    local font = (game.FONTS and game.FONTS.PIXEL and game.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local prev_font = love.graphics.getFont()
+    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
+    love.graphics.setFont(font)
+
+    local can_afford = game:can_afford_price(tonumber(offer.price) or 0)
+    local label = "Buy"
+    local btn_w = math.max(32, font:getWidth(label) + 14)
+    local btn_h = math.max(14, font:getHeight() + 4)
+    local gap = 4
+    local margin = 2
+    local sw = 320
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+    end
+    if not sw or sw <= 0 then sw = 320 end
+    local bx = rect.x + rect.w + gap
+    if bx + btn_w > (sw - margin) then
+        bx = rect.x - btn_w - gap
+    end
+    if bx < margin then bx = margin end
+    local by = rect.y + math.floor((rect.h - btn_h) * 0.5 + 0.5)
+    local fill_c = can_afford and game.C.MONEY or game.C.GREY
+    local shadow_c = game.C and game.C.BLOCK and game.C.BLOCK.SHADOW
+    if _G.draw_rect_with_shadow and fill_c and shadow_c then
+        draw_rect_with_shadow(bx, by, btn_w, btn_h, 3, 2, fill_c, shadow_c, 1)
+    else
+        love.graphics.setColor(0.3, 0.3, 0.3, 1)
+        love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
+    end
+    love.graphics.setColor(game.C.WHITE)
+    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
+    love.graphics.printf(label, bx, text_y, btn_w, "center")
+
+    if can_afford then
+        game._shop_voucher_buy_button_hit = { x = bx, y = by, w = btn_w, h = btn_h }
+    end
+
+    love.graphics.setFont(prev_font)
+    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+end
+
+---@return boolean
+function ShopUI.try_shop_voucher_buy_press(game, x, y)
+    local hit = game._shop_voucher_buy_button_hit
+    if not hit then return false end
+    if not game:_point_in_rect_simple(x, y, hit) then return false end
+    return game:buy_shop_voucher()
+end
+
+---@return boolean
+function ShopUI.try_shop_voucher_press(game, x, y)
+    if game.STATE ~= game.STATES.SHOP then return false end
+    local rect = game._shop_voucher_rect
+    if not rect or not game:_point_in_rect_simple(x, y, rect) then return false end
+    if not game.shop_voucher_offer then return false end
+    if game.active_tooltip_shop_voucher then
+        game.active_tooltip_shop_voucher = false
+    else
+        game.active_tooltip_shop_voucher = true
+    end
+    game.active_tooltip_joker = nil
+    game.active_tooltip_card = nil
+    game.active_tooltip_consumable_index = nil
+    game.active_shop_booster_slot = nil
+    return true
 end
 
 function ShopUI.handle_touch(game, x, y)

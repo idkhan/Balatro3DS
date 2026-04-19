@@ -6,6 +6,7 @@ local RoundWinUI = require("round_win_ui")
 local GameOverUI = require("game_over_ui")
 local BoosterPackUI = require("booster_pack_ui")
 local MainMenuUI = require("main_menu_ui")
+local TooltipDraw = require("tooltip_draw")
 
 --- Seconds between revealing each payout line on the round-win screen.
 local ROUND_WIN_LINE_DELAY = 0.38
@@ -134,6 +135,17 @@ function Game:init(seed)
     self.shop_offer_slots = 2
     self.shop_reroll_base_cost = 5
     self.shop_reroll_count = 0
+    --- Redeemed vouchers this run (array of ids); see `has_voucher` / `VOUCHER_DEFS`.
+    self.vouchers = {}
+    self.shop_voucher_offer = nil
+    self.shop_voucher_bought_pending_boss = false
+    self.active_tooltip_shop_voucher = false
+    self.hand_size_delta_voucher = 0
+    self.voucher_hands_delta = 0
+    self.voucher_discards_delta = 0
+    self.boss_rerolls_used_this_ante = 0
+    self._shop_voucher_buy_button_hit = nil
+    self._boss_reroll_btn_rect = nil
     self.hand_play_counts = {}
     self.blind_hand_play_counts = {}
     self._ante_played_card_uids = {}
@@ -217,6 +229,7 @@ end
 function Game:get_effective_hand_size_limit()
     local limit = 8
     limit = limit + (tonumber(self.hand_size_delta_spectral) or 0)
+    limit = limit + (tonumber(self.hand_size_delta_voucher) or 0)
     for _, j in ipairs(self.jokers or {}) do
         local id = j and j.def and j.def.id
         if id == "j_juggler" then limit = limit + 1 end
@@ -234,6 +247,7 @@ end
 
 function Game:get_effective_hands_per_round()
     local hands = 4
+    hands = hands + (tonumber(self.voucher_hands_delta) or 0)
     for _, j in ipairs(self.jokers or {}) do
         local id = j and j.def and j.def.id
         if id == "j_burglar" then hands = hands + 3 end
@@ -244,6 +258,9 @@ end
 
 function Game:get_effective_discards_per_round()
     local discards = 4
+    if self:has_voucher("v_wasteful") then discards = discards + 1 end
+    if self:has_voucher("v_recyclomancy") then discards = discards + 1 end
+    discards = discards + (tonumber(self.voucher_discards_delta) or 0)
     for _, j in ipairs(self.jokers or {}) do
         local id = j and j.def and j.def.id
         if id == "j_drunkard" then discards = discards + 1 end
@@ -638,16 +655,23 @@ function Game:sync_shop_offer_nodes()
         local node = self.shop_offer_nodes[i]
         local need_joker = (offer.kind == nil or offer.kind == "joker")
         local need_cons = (offer.kind == "tarot" or offer.kind == "planet")
+        local need_pc = (offer.kind == "playing_card")
 
         if node then
             local is_j = Joker and node.is and node:is(Joker)
             local is_c = Consumable and node.is and node:is(Consumable)
-            local ok = (need_joker and is_j) or (need_cons and is_c)
+            local is_pc = Card and node.is and node:is(Card)
+            local ok = (need_joker and is_j) or (need_cons and is_c) or (need_pc and is_pc)
             if ok and need_joker and is_j and node.def and offer.id and node.def.id ~= offer.id then
                 ok = false
             end
             if ok and need_cons and is_c and node.def and offer.id and node.def.id ~= offer.id then
                 ok = false
+            end
+            if ok and need_pc and is_pc and offer.card_data and node.card_data then
+                local a = offer.card_data.rank .. tostring(offer.card_data.suit)
+                local b = (node.card_data.rank or "") .. tostring(node.card_data.suit or "")
+                if a ~= b then ok = false end
             end
             if not ok then
                 if self.active_tooltip_joker == node then
@@ -671,6 +695,16 @@ function Game:sync_shop_offer_nodes()
                 local def = CONSUMABLE_DEFS[offer.id]
                 if type(def) == "table" and copy_table then
                     node = Consumable(0, 0, copy_table(def))
+                    self.shop_offer_nodes[i] = node
+                    self:add(node)
+                end
+            elseif need_pc and Card and copy_table then
+                local cd = copy_table(offer.card_data)
+                if type(cd) == "table" then
+                    node = Card(0, 0, self.joker_slot_w, self.joker_slot_h, cd, nil, { face_up = true })
+                    if node.sync_visual_from_card_data then
+                        node:sync_visual_from_card_data()
+                    end
                     self.shop_offer_nodes[i] = node
                     self:add(node)
                 end
@@ -730,6 +764,22 @@ end
 
 function Game:draw_shop_booster_buy_button()
     ShopUI.draw_shop_booster_buy_button(self)
+end
+
+function Game:draw_shop_voucher_slot()
+    ShopUI.draw_shop_voucher_slot(self)
+end
+
+function Game:draw_shop_voucher_price_tags()
+    ShopUI.draw_shop_voucher_price_tags(self)
+end
+
+function Game:draw_shop_voucher_buy_button()
+    ShopUI.draw_shop_voucher_buy_button(self)
+end
+
+function Game:try_shop_voucher_buy_press(x, y)
+    return ShopUI.try_shop_voucher_buy_press(self, x, y)
 end
 
 function Game:try_shop_booster_buy_press(x, y)
@@ -971,6 +1021,14 @@ function Game:build_run_snapshot()
         shop_booster_slots = tonumber(self.shop_booster_slots) or 2,
         active_shop_booster_slot = self.active_shop_booster_slot,
         tarots_used = tonumber(self.tarots_used) or 0,
+        vouchers = copy_table(self.vouchers or {}),
+        shop_voucher_offer = copy_table(self.shop_voucher_offer),
+        shop_voucher_bought_pending_boss = self.shop_voucher_bought_pending_boss == true,
+        hand_size_delta_voucher = tonumber(self.hand_size_delta_voucher) or 0,
+        voucher_hands_delta = tonumber(self.voucher_hands_delta) or 0,
+        voucher_discards_delta = tonumber(self.voucher_discards_delta) or 0,
+        boss_rerolls_used_this_ante = tonumber(self.boss_rerolls_used_this_ante) or 0,
+        joker_base_capacity = tonumber(self.joker_base_capacity) or 5,
     }
 end
 
@@ -1033,6 +1091,7 @@ function Game:load_run_snapshot(snapshot)
     self.active_tooltip_card = nil
     self.active_tooltip_joker = nil
     self.active_tooltip_consumable_index = nil
+    self.active_tooltip_shop_voucher = false
 
     if not self.deck and Deck then
         self.deck = Deck()
@@ -1095,6 +1154,14 @@ function Game:load_run_snapshot(snapshot)
     self.active_shop_booster_slot = snapshot.active_shop_booster_slot
     self.consumable_base_capacity = tonumber(snapshot.consumable_base_capacity) or 2
     self.tarots_used = tonumber(snapshot.tarots_used) or 0
+    self.vouchers = copy_table(snapshot.vouchers or {})
+    self.shop_voucher_offer = copy_table(snapshot.shop_voucher_offer)
+    self.shop_voucher_bought_pending_boss = snapshot.shop_voucher_bought_pending_boss == true
+    self.hand_size_delta_voucher = tonumber(snapshot.hand_size_delta_voucher) or 0
+    self.voucher_hands_delta = tonumber(snapshot.voucher_hands_delta) or 0
+    self.voucher_discards_delta = tonumber(snapshot.voucher_discards_delta) or 0
+    self.boss_rerolls_used_this_ante = tonumber(snapshot.boss_rerolls_used_this_ante) or 0
+    self.joker_base_capacity = tonumber(snapshot.joker_base_capacity) or self.joker_base_capacity or 5
 
     for _, jrec in ipairs(snapshot.jokers or {}) do
         local params = nil
@@ -1591,12 +1658,16 @@ function Game:draw()
         self:draw_shop_offer_price_tags()
         self:draw_shop_booster_slots()
         self:draw_shop_booster_price_tags()
+        self:draw_shop_voucher_slot()
+        self:draw_shop_voucher_price_tags()
         self._shop_buy_button_hit = nil
         self._shop_use_button_hit = nil
         self:draw_shop_offer_buy_button()
         self:draw_shop_offer_use_button()
         self._shop_booster_buy_button_hit = nil
+        self._shop_voucher_buy_button_hit = nil
         self:draw_shop_booster_buy_button()
+        self:draw_shop_voucher_buy_button()
     elseif self.STATE == self.STATES.OPEN_BOOSTER then
         BoosterPackUI.draw_action_buttons(self)
     end
@@ -1633,6 +1704,10 @@ function Game:draw_tooltips_on_top()
             if is_booster and Card and node and node.is and node:is(Card) and node._booster_choice_index and node.draw_tooltip_overlay then
                 node:draw_tooltip_overlay()
             end
+            local is_shop_pc = (self.STATE == self.STATES.SHOP) and Card and node and node.is and node:is(Card) and node.shop_offer_slot
+            if is_shop_pc and node.draw_tooltip_overlay then
+                node:draw_tooltip_overlay()
+            end
         end
     end
     if self.consumable_nodes then
@@ -1649,6 +1724,37 @@ function Game:draw_tooltips_on_top()
             end
         end
     end
+    if self.STATE == self.STATES.SHOP and self.active_tooltip_shop_voucher and self.shop_voucher_offer then
+        self:_draw_shop_voucher_tooltip()
+    end
+    if self.STATE == self.STATES.SHOP and tonumber(self.active_shop_booster_slot) then
+        local slot = tonumber(self.active_shop_booster_slot)
+        local offer = self.shop_booster_offers and self.shop_booster_offers[slot]
+        local rect = self._shop_booster_rects and self._shop_booster_rects[slot]
+        if offer and rect then
+            self:_draw_shop_booster_tooltip(offer, rect)
+        end
+    end
+end
+
+function Game:_draw_shop_voucher_tooltip()
+    local offer = self.shop_voucher_offer
+    local rect = self._shop_voucher_rect
+    if type(offer) ~= "table" or type(rect) ~= "table" then return end
+    local title = tostring(offer.name or "Voucher")
+    local desc = tostring(offer.description or "")
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
+    TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
+end
+
+function Game:_draw_shop_booster_tooltip(offer, rect)
+    if type(offer) ~= "table" or type(rect) ~= "table" then return end
+    local title = tostring(offer.name or "Booster Pack")
+    local desc = BoosterPackUI.shop_tooltip_description(offer)
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
+    TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
 
 --- Add a Consumable by definition id (see `CONSUMABLE_DEFS` in `consumable_catalog.lua`).
@@ -2904,6 +3010,29 @@ function Game:draw_bottom_blind_select()
         love.graphics.print("$"..string.rep("$", reward).."+", rx + love.graphics.getFont():getWidth("Reward: "), ty + 24)
         
     end
+
+    self._boss_reroll_btn_rect = nil
+    if (self:has_voucher("v_directors_cut") or self:has_voucher("v_retcon")) and tonumber(self.selected_blind_index) == 3 then
+        local bw, bh = 90, 24
+        local bx = 312 - bw - 6
+        local by = 8
+        local can_afford = self:can_afford_price(10)
+        local lim_ok = true
+        if self:has_voucher("v_directors_cut") and not self:has_voucher("v_retcon") then
+            lim_ok = (tonumber(self.boss_rerolls_used_this_ante) or 0) < 1
+        end
+        local col = (can_afford and lim_ok) and self.C.GREEN or self.C.GREY
+        if _G.draw_rect_with_shadow then
+            draw_rect_with_shadow(bx, by, bw, bh, 4, 2, col, self.C.BLOCK.SHADOW, 1)
+        else
+            love.graphics.setColor(col)
+            love.graphics.rectangle("fill", bx, by, bw, bh, 4, 4)
+        end
+        self._boss_reroll_btn_rect = { x = bx, y = by, w = bw, h = bh }
+        love.graphics.setColor(self.C.WHITE)
+        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        love.graphics.printf("Reroll $10", bx, by + 5, bw, "center")
+    end
 end
 
 function Game:draw_shop_button(param)
@@ -3042,6 +3171,7 @@ function Game:enter_main_menu()
     self.active_tooltip_card = nil
     self.active_tooltip_joker = nil
     self.active_tooltip_consumable_index = nil
+    self.active_tooltip_shop_voucher = false
 end
 
 function Game:start_run_from_main_menu()
@@ -3731,6 +3861,7 @@ function Game:emit_joker_event(event_name, ctx)
                 self:_sync_joker_ctx(ctx)
             end
         end
+        self:_apply_observatory_voucher_to_hand_scored_ctx(ctx)
         return
     end
 
@@ -3756,6 +3887,45 @@ function Game:_sync_joker_ctx(ctx)
     if type(ctx) ~= "table" then return end
     self.selectedHandChips = tonumber(ctx.chips) or self.selectedHandChips
     self.selectedHandMult = tonumber(ctx.mult) or self.selectedHandMult
+end
+
+function Game:_planet_consumable_id_for_most_played_hand()
+    if type(self.handlist) ~= "table" or type(self.hand_play_counts) ~= "table" or not CONSUMABLE_DEFS then
+        return nil
+    end
+    local best_i, best_c = nil, -1
+    for i, _ in ipairs(self.handlist) do
+        local c = tonumber(self.hand_play_counts[i]) or 0
+        if c > best_c then
+            best_c = c
+            best_i = i
+        end
+    end
+    if not best_i then return nil end
+    local hand_name = self.handlist[best_i]
+    if type(hand_name) ~= "string" then return nil end
+    for id, def in pairs(CONSUMABLE_DEFS) do
+        if type(def) == "table" and def.kind == "planet" and def.hand == hand_name and type(id) == "string" then
+            return id
+        end
+    end
+    return nil
+end
+
+function Game:_apply_observatory_voucher_to_hand_scored_ctx(ctx)
+    if not self:has_voucher("v_observatory") then return end
+    if type(ctx) ~= "table" or type(self.consumables) ~= "table" or not CONSUMABLE_DEFS then return end
+    local hand_type = ctx.hand_type
+    if type(hand_type) ~= "string" then return end
+    for _, c in ipairs(self.consumables) do
+        local id = c and c.id
+        local def = id and CONSUMABLE_DEFS[id]
+        if type(def) == "table" and def.kind == "planet" and def.hand == hand_type then
+            ctx.mult = (tonumber(ctx.mult) or 1) * 1.5
+            self:_sync_joker_ctx(ctx)
+            return
+        end
+    end
 end
 
 --- True while a staggered joker batch (from `begin_joker_emit`) is still resolving.
@@ -3787,6 +3957,9 @@ function Game:_apply_one_joker_emit()
     end
     self._joker_emit_next = self._joker_emit_next + 1
     if self._joker_emit_next > #q.list then
+        if q.event_name == "on_hand_scored" and q.ctx then
+            self:_apply_observatory_voucher_to_hand_scored_ctx(q.ctx)
+        end
         self._joker_emit_queue = nil
         self._joker_emit_timer = 0
     end
@@ -3900,6 +4073,14 @@ function Game:initialize_run_loop()
     self.shop_offers = {}
     self.shop_booster_offers = {}
     self.shop_reroll_count = 0
+    self.vouchers = {}
+    self.shop_voucher_offer = nil
+    self.shop_voucher_bought_pending_boss = false
+    self.active_tooltip_shop_voucher = false
+    self.hand_size_delta_voucher = 0
+    self.voucher_hands_delta = 0
+    self.voucher_discards_delta = 0
+    self.boss_rerolls_used_this_ante = 0
     self.hand_play_counts = {}
     self.blind_hand_play_counts = {}
     self.tarots_used = 0
@@ -3910,7 +4091,6 @@ function Game:initialize_run_loop()
     self.last_consumable_use_id = nil
     self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
-    self:enter_shop_after_blind()
 end
 
 function Game:enter_blind_select()
@@ -3964,6 +4144,7 @@ end
 
 function Game:advance_after_shop()
     if self._last_completed_blind_was_boss then
+        self.boss_rerolls_used_this_ante = 0
         self.ante = (tonumber(self.ante) or 1) + 1
         self._ante_played_card_uids = {}
         self.current_boss_blind_id = nil
@@ -3979,6 +4160,7 @@ end
 
 function Game:continue_from_shop()
     self.active_shop_booster_slot = nil
+    self.active_tooltip_shop_voucher = false
     self:advance_after_shop()
 end
 
@@ -4025,6 +4207,250 @@ function Game:has_voucher(voucher_id)
         end
     end
     return false
+end
+
+function Game:_voucher_already_owned(id)
+    return self:has_voucher(id)
+end
+
+--- Shop discount: Liquidation overrides Clearance.
+function Game:get_shop_discount_multiplier()
+    if self:has_voucher("v_liquidation") then return 0.5 end
+    if self:has_voucher("v_clearance_sale") then return 0.75 end
+    return 1
+end
+
+function Game:apply_shop_discount_to_price(base)
+    local p = math.max(0, math.floor(tonumber(base) or 0))
+    local m = self:get_shop_discount_multiplier()
+    return math.max(0, math.floor(p * m + 0.0001))
+end
+
+function Game:_shop_queue_tarot_planet_weights()
+    local t, pl = 4, 4
+    if self:has_voucher("v_tarot_tycoon") then
+        t = 16
+    elseif self:has_voucher("v_tarot_merchant") then
+        t = 8
+    end
+    if self:has_voucher("v_planet_tycoon") then
+        pl = 16
+    elseif self:has_voucher("v_planet_merchant") then
+        pl = 8
+    end
+    return t, pl
+end
+
+function Game:_roll_shop_playing_card_offer()
+    if not self:has_voucher("v_magic_trick") then return nil end
+    local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
+    local rank = self:_shop_rand_int(2, 14)
+    local suit = suits[self:_shop_rand_int(1, #suits)]
+    local data = { rank = rank, suit = suit, enhancement = nil, seal = nil }
+    if self:has_voucher("v_illusion") then
+        if self:_shop_rand_int(1, 100) <= 40 then
+            local enhs = { "bonus", "mult", "wild", "glass", "steel", "gold", "lucky" }
+            data.enhancement = enhs[self:_shop_rand_int(1, #enhs)]
+        end
+        if self:_shop_rand_int(1, 100) <= 25 then
+            local seals = { "gold", "red", "blue", "purple" }
+            data.seal = seals[self:_shop_rand_int(1, #seals)]
+        end
+        if self:_shop_rand_int(1, 100) <= 30 then
+            local r = self:_shop_rand_int(1, 100)
+            local ed = nil
+            if r <= 20 then ed = "foil"
+            elseif r <= 45 then ed = "holo"
+            elseif r <= 70 then ed = "polychrome"
+            end
+            if ed then
+                data.modifier = { edition = ed }
+            end
+        end
+    end
+    local rank_name = tostring(rank)
+    local name = string.format("%s %s", rank_name, suit)
+    local base_price = 4
+    return {
+        kind = "playing_card",
+        id = "playing_card",
+        name = name,
+        price = self:apply_shop_discount_to_price(base_price),
+        card_data = data,
+    }
+end
+
+function Game:maybe_roll_shop_voucher_on_shop_enter()
+    if self._last_completed_blind_was_boss == true then
+        self.shop_voucher_bought_pending_boss = false
+        self:roll_shop_voucher()
+        return
+    end
+    if self.shop_voucher_bought_pending_boss == true then
+        self.shop_voucher_offer = nil
+        return
+    end
+    if self.shop_voucher_offer == nil then
+        self:roll_shop_voucher()
+        return
+    end
+end
+
+function Game:roll_shop_voucher()
+    if type(VOUCHER_DEFS) ~= "table" then
+        self.shop_voucher_offer = nil
+        return
+    end
+    local candidates = {}
+    for vid, def in pairs(VOUCHER_DEFS) do
+        if type(def) == "table" and type(vid) == "string" then
+            local tier = tonumber(def.tier) or 1
+            if self:_voucher_already_owned(vid) then
+                -- skip
+            elseif tier == 2 then
+                local req = def.depends_on
+                if type(req) == "string" and req ~= "" and self:has_voucher(req) then
+                    candidates[#candidates + 1] = vid
+                end
+            else
+                candidates[#candidates + 1] = vid
+            end
+        end
+    end
+    table.sort(candidates)
+    if #candidates == 0 then
+        self.shop_voucher_offer = nil
+        return
+    end
+    local pick = candidates[self:_shop_rand_int(1, #candidates)]
+    local d = VOUCHER_DEFS[pick]
+    local price = tonumber(d and d.price) or 10
+    price = self:apply_shop_discount_to_price(price)
+    self.shop_voucher_offer = {
+        id = pick,
+        name = (d and d.name) or pick,
+        description = (d and d.description) or "",
+        price = price,
+    }
+end
+
+function Game:buy_shop_voucher()
+    if self.STATE ~= self.STATES.SHOP then return false end
+    local offer = self.shop_voucher_offer
+    if type(offer) ~= "table" or type(offer.id) ~= "string" then return false end
+    if not self:can_afford_price(tonumber(offer.price) or 0) then return false end
+    if self:_voucher_already_owned(offer.id) then return false end
+
+    self.money = (tonumber(self.money) or 0) - (tonumber(offer.price) or 0)
+    if not self.vouchers then self.vouchers = {} end
+    self.vouchers[#self.vouchers + 1] = offer.id
+    self:apply_voucher_effect(offer.id)
+    self.shop_voucher_offer = nil
+    self.shop_voucher_bought_pending_boss = true
+    self.active_tooltip_shop_voucher = false
+    self:emit_joker_event("on_shop_buy", {
+        offer = offer,
+        offer_kind = "voucher",
+        offer_id = offer.id,
+        offer_price = tonumber(offer.price) or 0,
+    })
+    return true
+end
+
+function Game:apply_voucher_effect(id)
+    if id == "v_wasteful" or id == "v_recyclomancy" then return end
+    if id == "v_tarot_merchant" or id == "v_tarot_tycoon" then return end
+    if id == "v_planet_merchant" or id == "v_planet_tycoon" then return end
+    if id == "v_seed_money" or id == "v_money_tree" then return end
+    if id == "v_blank" then return end
+    if id == "v_antimatter" then
+        self.joker_base_capacity = (tonumber(self.joker_base_capacity) or 5) + 1
+        if self.refresh_joker_capacity_from_negatives then
+            self:refresh_joker_capacity_from_negatives()
+        end
+        return
+    end
+    if id == "v_magic_trick" or id == "v_illusion" then return end
+    if id == "v_hieroglyph" then
+        self.ante = (tonumber(self.ante) or 1) - 1
+        self.voucher_hands_delta = (tonumber(self.voucher_hands_delta) or 0) - 1
+        self.boss_rerolls_used_this_ante = 0
+        if self.current_boss_blind_id and self.roll_boss_blind then
+            self:roll_boss_blind()
+        end
+        return
+    end
+    if id == "v_petroglyph" then
+        self.ante = (tonumber(self.ante) or 1) - 1
+        self.voucher_discards_delta = (tonumber(self.voucher_discards_delta) or 0) - 1
+        self.boss_rerolls_used_this_ante = 0
+        if self.current_boss_blind_id and self.roll_boss_blind then
+            self:roll_boss_blind()
+        end
+        return
+    end
+    if id == "v_directors_cut" or id == "v_retcon" then return end
+    if id == "v_paint_brush" or id == "v_palette" then
+        self.hand_size_delta_voucher = (tonumber(self.hand_size_delta_voucher) or 0) + 1
+        return
+    end
+    if id == "v_overstock" or id == "v_overstock_plus" then
+        self.shop_offer_slots = math.max(1, (tonumber(self.shop_offer_slots) or 2) + 1)
+        return
+    end
+    if id == "v_clearance_sale" or id == "v_liquidation" then return end
+    if id == "v_hone" or id == "v_glow_up" then return end
+    if id == "v_reroll" or id == "v_reroll_glut" then return end
+    if id == "v_crystal_ball" then
+        self.consumable_base_capacity = (tonumber(self.consumable_base_capacity) or 2) + 1
+        if self.refresh_consumable_capacity_from_negatives then
+            self:refresh_consumable_capacity_from_negatives()
+        end
+        return
+    end
+    if id == "v_omen_globe" then return end
+    if id == "v_telescope" or id == "v_observatory" then return end
+end
+
+function Game:get_interest_round_cap_dollars()
+    if self:has_voucher("v_money_tree") then return 20 end
+    if self:has_voucher("v_seed_money") then return 10 end
+    return 5
+end
+
+function Game:_deck_inject_playing_card(card_data)
+    if not Deck or not Deck.copy_card_data then return false end
+    local d = Deck.copy_card_data(card_data)
+    if not d then return false end
+    if self.ensure_card_uid then
+        self:ensure_card_uid(d, true)
+    end
+    local deck = self.deck
+    if not deck or type(deck.cards) ~= "table" then return false end
+    local n = #deck.cards
+    local pos = self:_shop_rand_int(1, math.max(1, n + 1))
+    if pos > n then
+        deck.cards[#deck.cards + 1] = d
+    else
+        table.insert(deck.cards, pos, d)
+    end
+    return true
+end
+
+function Game:try_boss_reroll_press(x, y)
+    if self.STATE ~= self.STATES.BLIND_SELECT then return false end
+    local r = self._boss_reroll_btn_rect
+    if not r or not self:_point_in_rect_simple(x, y, r) then return false end
+    if not (self:has_voucher("v_directors_cut") or self:has_voucher("v_retcon")) then return true end
+    if tonumber(self.selected_blind_index) ~= 3 then return true end
+    if not self:can_afford_price(10) then return true end
+    if self:has_voucher("v_directors_cut") and not self:has_voucher("v_retcon") then
+        if (tonumber(self.boss_rerolls_used_this_ante) or 0) >= 1 then return true end
+    end
+    self.money = (tonumber(self.money) or 0) - 10
+    self.boss_rerolls_used_this_ante = (tonumber(self.boss_rerolls_used_this_ante) or 0) + 1
+    self:roll_boss_blind()
+    return true
 end
 
 function Game:get_joker_edition_rates()
@@ -4125,17 +4551,23 @@ function Game:_shop_queue_emergency_joker_offer()
 end
 
 function Game:_generate_next_shop_queue_offer()
-    local roll = self:_shop_rand_int(1, 28)
+    local tw, pw = self:_shop_queue_tarot_planet_weights()
+    local total = 20 + tw + pw
+    local roll = self:_shop_rand_int(1, total)
     local kind = "planet"
     if roll <= 20 then
         kind = "joker"
-    elseif roll <= 24 then
+    elseif roll <= 20 + tw then
         kind = "tarot"
     else
         kind = "planet"
     end
 
     if kind == "joker" then
+        if self:has_voucher("v_magic_trick") and self:_shop_rand_int(1, 4) == 1 then
+            local pc = self:_roll_shop_playing_card_offer()
+            if pc then return pc end
+        end
         local joker_offer = self:_roll_shop_queue_joker_offer()
         if joker_offer then return joker_offer end
         kind = self:_shop_rand_int(1, 2) == 1 and "tarot" or "planet"
@@ -4267,10 +4699,11 @@ function Game:shop_price_for_joker_offer(def, edition)
     if type(def) ~= "table" then return 1 end
     local base = tonumber(def.cost) or 1
     if not Joker then
-        return math.max(1, base)
+        return self:apply_shop_discount_to_price(math.max(1, base))
     end
     local ec = select(1, Joker.edition_price_deltas(edition))
-    return math.max(1, base + (tonumber(ec) or 0))
+    local raw = math.max(1, base + (tonumber(ec) or 0))
+    return self:apply_shop_discount_to_price(raw)
 end
 
 ---@param def table|nil
@@ -4284,14 +4717,18 @@ function Game:shop_price_for_consumable_offer(def)
         planet = 3,
         spectral = 4,
     }
-    return by_kind[def.kind] or 3
+    local raw = by_kind[def.kind] or 3
+    return self:apply_shop_discount_to_price(raw)
 end
 
 function Game:shop_current_reroll_cost()
     local base = tonumber(self.shop_reroll_base_cost) or 5
     local n = math.max(0, math.floor(tonumber(self.shop_reroll_count) or 0))
-    if (self.shop_reroll_count == 0 and self:hasJoker("j_chaos")) then return 0 end 
-    return base + n
+    if (self.shop_reroll_count == 0 and self:hasJoker("j_chaos")) then return 0 end
+    local sub = 0
+    if self:has_voucher("v_reroll_glut") then sub = sub + 2 end
+    if self:has_voucher("v_reroll") then sub = sub + 2 end
+    return math.max(1, base + n - sub)
 end
 
 function Game:roll_shop_offers()
@@ -4325,6 +4762,8 @@ function Game:roll_shop_offers()
                 self.shop_offers[#self.shop_offers + 1] = entry
                 if id ~= nil then seen_ids[id] = true end
             end
+        elseif entry.kind == "playing_card" then
+            self.shop_offers[#self.shop_offers + 1] = entry
         else
             if (not allow_duplicates) and self:_shop_consumable_owned(entry.id) then
                 -- Owned: consume queue slot, no visible offer.
@@ -4349,6 +4788,7 @@ function Game:reroll_shop_offers()
         reroll_count = self.shop_reroll_count,
     })
     self.active_tooltip_joker = nil
+    self.active_tooltip_shop_voucher = false
     self:roll_shop_offers()
     return true
 end
@@ -4434,7 +4874,8 @@ function Game:_booster_offer_price(pack, size)
         jumbo = 6,
         mega = 8,
     }
-    return by_size[size] or 4
+    local raw = by_size[size] or 4
+    return self:apply_shop_discount_to_price(raw)
 end
 
 function Game:_booster_offer_display_name(pack, size)
@@ -4640,12 +5081,29 @@ function Game:_booster_build_choices(offer)
             if type(def) == "table" and copy_table then
                 local c = copy_table(def)
                 c.id = id
-                local kind, out_def = maybe_replace_with_rare_spectral("tarot", c)
+                local kind0, def0 = "tarot", c
+                if self:has_voucher("v_omen_globe") and self:_shop_rand_int(1, 4) == 1 then
+                    local sids = self:_shop_pick_unique_consumable_ids("spectral", 1)
+                    local sid = sids and sids[1]
+                    local sd = sid and CONSUMABLE_DEFS[sid]
+                    if type(sd) == "table" then
+                        local sc = copy_table(sd)
+                        sc.id = sid
+                        kind0, def0 = "spectral", sc
+                    end
+                end
+                local kind, out_def = maybe_replace_with_rare_spectral(kind0, def0)
                 choices[#choices + 1] = { kind = kind, consumable_def = out_def, taken = false }
             end
         end
     elseif pack == "celestial" then
         local ids = self:_shop_pick_unique_consumable_ids("planet", n)
+        if self:has_voucher("v_telescope") and #ids > 0 then
+            local pref = self:_planet_consumable_id_for_most_played_hand()
+            if pref and CONSUMABLE_DEFS[pref] then
+                ids[1] = pref
+            end
+        end
         for _, id in ipairs(ids) do
             local def = CONSUMABLE_DEFS and CONSUMABLE_DEFS[id]
             if type(def) == "table" and copy_table then
@@ -4971,14 +5429,16 @@ function Game:enter_round_win_after_blind()
     self:emit_hand_cards_event("on_round_end", ctx)
 
     self:recycle_full_deck_after_blind_win()
-    local interest_count_cap = 25
+    local cap_dollars = self:get_interest_round_cap_dollars()
+    local interest_count_cap = cap_dollars * 5
     local interest = math.floor(math.min(math.max(0, self.money), interest_count_cap) / 5)
+    interest = math.min(interest, cap_dollars)
     local blind_pay = math.max(0, math.floor(tonumber(self.current_blind_reward) or 0))
 
     self._round_win_display_lines = {
         { "Blind reward", blind_pay, "pending" },
         { string.format("Hands left (%d)", hands_left), hands_left, "pending" },
-        { "Interest ($1 / $5 held, max $25)", interest, "pending" },
+        { string.format("Interest ($1 / $5 held, max $%d)", cap_dollars), interest, "pending" },
     }
     for _, row in ipairs(self._round_win_joker_payout_lines) do
         self._round_win_display_lines[#self._round_win_display_lines + 1] = row
@@ -5046,6 +5506,7 @@ function Game:enter_shop_after_blind()
     self.shop_reroll_count = 0
     self:roll_shop_offers()
     self:roll_shop_boosters()
+    self:maybe_roll_shop_voucher_on_shop_enter()
     self:emit_joker_event("on_shop_enter", {
         offers = self.shop_offers,
         reroll_count = self.shop_reroll_count,
@@ -5113,6 +5574,8 @@ function Game:buy_shop_joker(slot_index)
     elseif k == "tarot" or k == "planet" then
         if not self:can_add_consumable() then return false end
         ok = self:add_consumable(offer.id)
+    elseif k == "playing_card" then
+        ok = self:_deck_inject_playing_card(offer.card_data)
     else
         return false
     end
@@ -5544,6 +6007,12 @@ function Game:touchpressed(id, x, y)
         return
     end
     if self.STATE == self.STATES.SHOP then
+        if self:try_shop_voucher_buy_press(x, y) then
+            return
+        end
+        if ShopUI.try_shop_voucher_press(self, x, y) then
+            return
+        end
         if self:try_shop_booster_buy_press(x, y) then
             return
         end
@@ -5552,6 +6021,9 @@ function Game:touchpressed(id, x, y)
         end
     end
     if self.STATE == self.STATES.BLIND_SELECT then
+        if self:try_boss_reroll_press(x, y) then
+            return
+        end
         -- When jokers are at the bottom, prioritize joker input over blind-select panel taps.
         if self.jokers_on_bottom == true then
             local node = self:get_node_at(x, y)
@@ -5589,6 +6061,7 @@ function Game:touchpressed(id, x, y)
         local node = self:get_node_at(x, y)
         if node and node_is_shop_offer_joker(self, node) then
             self.active_shop_booster_slot = nil
+            self.active_tooltip_shop_voucher = false
             if self.active_tooltip_joker == node then self.active_tooltip_joker = nil else self.active_tooltip_joker = node end
             self.active_tooltip_card = nil
             self.active_tooltip_consumable_index = nil
@@ -5618,6 +6091,7 @@ function Game:touchpressed(id, x, y)
     local node = self:get_node_at(x, y)
     if node and node_is_shop_offer_joker(self, node) then
         self.active_shop_booster_slot = nil
+        self.active_tooltip_shop_voucher = false
         if self.active_tooltip_joker == node then self.active_tooltip_joker = nil else self.active_tooltip_joker = node end
         self.active_tooltip_card = nil
         self.active_tooltip_consumable_index = nil
