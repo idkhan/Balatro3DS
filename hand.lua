@@ -670,10 +670,16 @@ function Hand:build_contained_hand_types(nodes)
                 flush = true
             else
                 local suit_kinds = 0
-                for _ in pairs(suit_counts) do
+                local max_suit_count = 0
+                for _, c in pairs(suit_counts) do
                     suit_kinds = suit_kinds + 1
+                    if c > max_suit_count then max_suit_count = c end
                 end
-                flush = (suit_kinds == 1)
+                if suit_kinds == 1 then
+                    flush = true
+                elseif self.game and self.game:hasJoker("j_four_fingers") then
+                    flush = (max_suit_count + wild_count >= 4)
+                end
             end
         end
     end
@@ -1377,7 +1383,18 @@ function Hand:calculate_play()
     local function is_flush()
         if n < min_straight_flush_cards then return false end
         if wild_count == n then return true end
-        return next(suit_counts) ~= nil and next(suit_counts, next(suit_counts)) == nil
+        if next(suit_counts) == nil then return false end
+        -- One suit among non-wild cards: classic flush.
+        if next(suit_counts, next(suit_counts)) == nil then return true end
+        -- Four Fingers: flush / straight flush only need four connected cards.
+        if has_four_fingers then
+            local max_suit = 0
+            for _, c in pairs(suit_counts) do
+                if c > max_suit then max_suit = c end
+            end
+            return max_suit + wild_count >= min_straight_flush_cards
+        end
+        return false
     end
 
     -- Rank pattern: one pass over rank_counts (also used for scoring marks later)

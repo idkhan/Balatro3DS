@@ -4,8 +4,6 @@ Balatro3DS is a fan-made port/implementation of the game Balatro targeting the N
 
 ### Requirements
 
-- Lua 5.x
-- LÖVE 3.x
 - A Nintendo 3DS with homebrew capabilities (for running custom software)
 
 ### Getting Started

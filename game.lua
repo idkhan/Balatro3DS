@@ -2334,7 +2334,9 @@ function Game:apply_consumable_effect(c)
             ord[i]:sync_visual_from_card_data()
         end
     elseif id == "tarot_judgement" then
-        local jid = self:random_joker_def_id()
+        local jid = self:_pick_joker_id_shop_rarity_distribution(function(lo, hi)
+            return math.random(lo, hi)
+        end)
         if jid then self:add_joker_by_def(jid) end
     end
 
@@ -3908,7 +3910,6 @@ function Game:initialize_run_loop()
     self.last_consumable_use_id = nil
     self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
-    self:add_joker_by_def("j_stuntman")
 end
 
 function Game:enter_blind_select()
@@ -4156,9 +4157,13 @@ function Game:_generate_next_shop_queue_offer()
     return self:_shop_queue_emergency_joker_offer()
 end
 
-function Game:_roll_shop_queue_joker_offer()
+--- Shop joker rarity: Common 70%, Uncommon 25%, Rare 5% (no Legendary). `rand_int` isolates RNG source.
+---@param rand_int fun(lo: integer, hi: integer): integer
+---@return string|nil
+function Game:_pick_joker_id_shop_rarity_distribution(rand_int)
     if type(JOKER_DEFS) ~= "table" then return nil end
-    local rar_roll = self:_shop_rand_int(1, 100)
+    if type(rand_int) ~= "function" then return nil end
+    local rar_roll = rand_int(1, 100)
     local target_rar = 3
     if rar_roll <= 70 then
         target_rar = 1
@@ -4187,7 +4192,15 @@ function Game:_roll_shop_queue_joker_offer()
         table.sort(candidates)
     end
     if #candidates == 0 then return nil end
-    local pick = candidates[self:_shop_rand_int(1, #candidates)]
+    return candidates[rand_int(1, #candidates)]
+end
+
+function Game:_roll_shop_queue_joker_offer()
+    if type(JOKER_DEFS) ~= "table" then return nil end
+    local pick = self:_pick_joker_id_shop_rarity_distribution(function(lo, hi)
+        return self:_shop_rand_int(lo, hi)
+    end)
+    if not pick then return nil end
     local def = JOKER_DEFS[pick]
     local edition = self:roll_joker_offer_edition()
     return {
