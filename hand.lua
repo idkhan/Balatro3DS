@@ -963,6 +963,12 @@ function Hand:_update_play_sequence(dt)
                 local used = (type(G.jokers) == "table") and #G.jokers or 0
                 free_joker_slots = math.max(0, cap - used)
             end
+            local scored_cards = {}
+            for _, node in ipairs(seq.cards or {}) do
+                if node and node.counts_for_play_score == true then
+                    scored_cards[#scored_cards + 1] = node
+                end
+            end
             local ctx = {
                 event = "on_hand_scored",
                 event_name = "on_hand_scored",
@@ -970,9 +976,9 @@ function Hand:_update_play_sequence(dt)
                 mult = mult,
                 hand_index = G.selectedHand,
                 hand_type = hand_type,
-                contains_hand_types = self:build_contained_hand_types(seq.cards),
+                contains_hand_types = self:build_contained_hand_types(scored_cards),
                 hand_level = G.selectedHandLevel,
-                cards = seq.cards,
+                cards = scored_cards,
                 free_joker_slots = free_joker_slots,
                 discards_left = tonumber(G and G.discards) or 0,
             }

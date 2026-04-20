@@ -2095,6 +2095,12 @@ function Game:upgrade_hand_level_at_index(idx)
     return true
 end
 
+function Game:reset_hand_levels()
+    for i = 1, #(self.hand_stats or {}) do
+        self.hand_stats[i].level = 1
+    end
+end
+
 --- Apply the runtime effect for a Consumable and play a simple SFX where appropriate.
 ---@param c table
 function Game:apply_consumable_effect(c)
@@ -3189,6 +3195,9 @@ function Game:start_run_from_main_menu()
             self:remove_consumable_at(i)
         end
     end
+
+    self:reset_hand_levels()
+    
     if self.hand and self.hand.clear then
         self.hand:clear()
     end
