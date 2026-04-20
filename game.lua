@@ -1029,6 +1029,7 @@ function Game:build_run_snapshot()
         voucher_discards_delta = tonumber(self.voucher_discards_delta) or 0,
         boss_rerolls_used_this_ante = tonumber(self.boss_rerolls_used_this_ante) or 0,
         joker_base_capacity = tonumber(self.joker_base_capacity) or 5,
+        hand_stats = copy_table(self.hand_stats or {}),
     }
 end
 
@@ -1162,7 +1163,8 @@ function Game:load_run_snapshot(snapshot)
     self.voucher_discards_delta = tonumber(snapshot.voucher_discards_delta) or 0
     self.boss_rerolls_used_this_ante = tonumber(snapshot.boss_rerolls_used_this_ante) or 0
     self.joker_base_capacity = tonumber(snapshot.joker_base_capacity) or self.joker_base_capacity or 5
-
+    self.hand_stats = copy_table(snapshot.hand_stats or {})
+    
     for _, jrec in ipairs(snapshot.jokers or {}) do
         local params = nil
         if jrec.edition and jrec.edition ~= "base" then
