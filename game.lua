@@ -316,6 +316,7 @@ function Game:boss_reset_for_new_blind()
         sold_joker_this_blind = false,
         crimson_disabled_joker = nil,
         disable_current_boss_ability = false,
+        clear_card_debuffs_after_win = false,
     }
     local boss_id = self:get_active_boss_blind_id()
     if type(self.jokers) == "table" then
@@ -542,6 +543,7 @@ function Game:boss_apply_on_hand_submitted(selected_nodes)
 end
 
 function Game:boss_is_card_debuffed_for_scoring(node)
+    if self.boss_runtime and self.boss_runtime.clear_card_debuffs_after_win == true then return false end
     local boss_id = self:get_active_boss_blind_id()
     if not boss_id or not node then return false end
     local d = node.card_data or {}
@@ -1267,9 +1269,13 @@ function Game:get_base_requirement_for_ante(ante)
     for k, _ in pairs(base_table) do
         if k > max_ante then max_ante = k end
     end
-    local last_base = tonumber(base_table[max_ante]) or 300
+    local last_base = tonumber(base_table[max_ante]) or 50000
     local overflow = math.max(0, a - max_ante)
-    return math.floor(last_base * (1 + overflow * 0.6))
+    local raw_result = last_base * (1.6 + (0.75 * overflow)^(1 + (0.2 * overflow)))^(overflow)
+    -- Cap to two significant figures, rounded down
+    local magnitude = math.floor(math.log10(raw_result))
+    local two_sig_fig = math.floor(raw_result / (10^(magnitude - 1))) * (10^(magnitude - 1))
+    return two_sig_fig
 end
 
 function Game:get_blind_def(index)
@@ -5416,6 +5422,10 @@ end
 --- Interest: +$1 per full $5 held (only the first $25 counts toward the divisor; max +$5).
 function Game:enter_round_win_after_blind()
     Sfx.play("resources/sounds/win.ogg")
+    if tonumber(self.current_blind_index) == 3 then
+        self.boss_runtime = self.boss_runtime or {}
+        self.boss_runtime.clear_card_debuffs_after_win = true
+    end
     local hands_left = math.max(0, math.floor(tonumber(self.hands) or 0))
     self._round_win_joker_payout_lines = {}
 

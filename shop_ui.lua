@@ -328,7 +328,7 @@ function ShopUI.layout_shop_booster_slots(game, param)
     local px, py = 72, 95
     local max_sw = ((area_w - (n - 1) * gap) / n) / px
     local max_sh = (area_h - 2) / py
-    local scale = 1
+    local scale = math.max(0.8, max_sw, max_sh)
     local pack_w = math.max(1, math.floor(px * scale))
     local pack_h = math.max(1, math.floor(py * scale))
     local total_w = n * pack_w + (n - 1) * gap
@@ -577,7 +577,7 @@ function ShopUI.layout_shop_voucher_panel(game, voucherPanel)
     local area_w = voucherPanel.w - 2 * padding
     local area_h = voucherPanel.h - 2 * padding
 
-    local px, py = 71, 95
+    local px, py = 72, 95
     local scale = 1
     local w = math.floor(px * scale)
     local h = math.floor(py * scale)
