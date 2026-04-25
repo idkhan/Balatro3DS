@@ -586,6 +586,18 @@ local SPECIAL = {
             if j.runtime_counter == 0 then j.stored_mult = 20 end
             if ctx.event_name == "on_round_end" then
                 j.stored_mult = math.max(0, (tonumber(j.stored_mult) or 0) - 4)
+                if j.stored_mult <= 0 then
+                    --Destroy Joker
+                    if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
+                        for i, jj in ipairs(G.jokers) do
+                            if jj == j then
+                                Sfx.play("resources/sounds/slice1.ogg")
+                                G:remove_owned_joker_at(i)
+                                break
+                            end
+                        end
+                    end
+                end
             else
                 add_mult(ctx, tonumber(j.stored_mult) or 0)
             end
@@ -1030,6 +1042,7 @@ local SPECIAL = {
                         for i, jj in ipairs(G.jokers) do
                             if jj == j then
                                 Sfx.play("resources/sounds/slice1.ogg")
+                                G.gros_michel_extinct = true
                                 G:remove_owned_joker_at(i)
                                 break
                             end

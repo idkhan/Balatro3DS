@@ -171,6 +171,8 @@ function Game:init(seed)
     --- Last consumable id used this run (Tarot except Fool, or Planet); for The Fool duplicate.
     self.last_consumable_use_id = nil
 
+    self.gros_michel_extinct = false
+
     -- Pull all shared globals from globals.lua
     if self.set_globals then
         self:set_globals()
@@ -1032,6 +1034,7 @@ function Game:build_run_snapshot()
         boss_rerolls_used_this_ante = tonumber(self.boss_rerolls_used_this_ante) or 0,
         joker_base_capacity = tonumber(self.joker_base_capacity) or 5,
         hand_stats = copy_table(self.hand_stats or {}),
+        gros_michel_extinct = self.gros_michel_extinct,
     }
 end
 
@@ -1166,7 +1169,8 @@ function Game:load_run_snapshot(snapshot)
     self.boss_rerolls_used_this_ante = tonumber(snapshot.boss_rerolls_used_this_ante) or 0
     self.joker_base_capacity = tonumber(snapshot.joker_base_capacity) or self.joker_base_capacity or 5
     self.hand_stats = copy_table(snapshot.hand_stats or {})
-    
+    self.gros_michel_extinct = snapshot.gros_michel_extinct == true
+
     for _, jrec in ipairs(snapshot.jokers or {}) do
         local params = nil
         if jrec.edition and jrec.edition ~= "base" then
@@ -2390,7 +2394,7 @@ function Game:apply_consumable_effect(c)
         self.money = m + gain
         if Sfx and Sfx.play_money then Sfx.play_money() end
     elseif id == "tarot_wheel_of_fortune" then
-        if self.jokers and #self.jokers > 0 and math.random(4) == 1 then
+        if self.jokers and #self.jokers > 0 and self:do_random(0, 4, 1) then
             local j = self.jokers[math.random(1, #self.jokers)]
             local opts = { "foil", "holo", "polychrome" }
             if Joker and j then
@@ -4108,6 +4112,7 @@ function Game:initialize_run_loop()
     self.last_consumable_use_id = nil
     self:init_shop_offer_queue()
     self:set_state(self.STATES.BLIND_SELECT)
+    self.gros_michel_extinct = false
 end
 
 function Game:enter_blind_select()
@@ -4625,7 +4630,17 @@ function Game:_pick_joker_id_shop_rarity_distribution(rand_int)
         if type(def) == "table" and type(id) == "string" then
             local rv = tonumber(def.rarity) or 1
             if rv == target_rar and rv >= 1 and rv <= 3 then
-                candidates[#candidates + 1] = id
+                if id == "j_gros_michel" then
+                    if not G.gros_michel_extinct then
+                        candidates[#candidates + 1] = id
+                    end
+                elseif id == "j_cavendish" then
+                    if G.gros_michel_extinct then
+                        candidates[#candidates + 1] = id
+                    end
+                else
+                    candidates[#candidates + 1] = id
+                end
             end
         end
     end
@@ -5546,7 +5561,7 @@ function Game:do_random(min,max,goal)
     local g = goal or 1
     if(G:hasJoker("j_oops")) then
         print("OOPS")
-        return math.random(min,max) <= g * 2
+        return math.random(min,max) <= g * self:count_jokers_with_id("j_oops")
     else
         return math.random(min,max) == g
     end

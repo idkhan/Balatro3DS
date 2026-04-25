@@ -25,7 +25,9 @@ local HAND_NAME_PHRASES = {
     "two pair",
     "high card",
     "straight",
+    "straights",
     "flush",
+    "flushes",
     "pair",
 }
 
@@ -100,6 +102,7 @@ function M.build_segments_from_text(raw_text)
     paint_pattern_ranges(text, paints, priorities, "%d+", "IMPORTANT", 46)
     paint_phrase_ranges(text, paints, priorities, "hand size", "IMPORTANT", 55)
     paint_phrase_ranges(text, paints, priorities, "discard", "RED", 56)
+    paint_phrase_ranges(text, paints, priorities, "discards", "RED", 56)
     paint_phrase_ranges(text, paints, priorities, "discarded", "RED", 56)
     paint_pattern_ranges(text, paints, priorities, "%$%d+", "MONEY", 57)
     for _, hand_name in ipairs(HAND_NAME_PHRASES) do

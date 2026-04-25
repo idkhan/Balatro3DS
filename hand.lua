@@ -1041,7 +1041,7 @@ function Hand:is_full()
     return #self.cards >= hand_size_limit()
 end
 
-local SUIT_ORDER = { Hearts = 1, Clubs = 2, Diamonds = 3, Spades = 4 }
+local SUIT_ORDER = { Hearts = 2, Clubs = 3, Diamonds = 4, Spades = 1 }
 -- Order: A, K, Q, J, 10, 9, 8, 7, 6, 5, 4, 3, 2 (Ace first, then descending)
 local function rank_sort_key(rank)
     return 14 - (rank or 2)
