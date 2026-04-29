@@ -3032,8 +3032,8 @@ function Game:draw_bottom_blind_select()
     self._boss_reroll_btn_rect = nil
     if (self:has_voucher("v_directors_cut") or self:has_voucher("v_retcon")) and tonumber(self.selected_blind_index) == 3 then
         local bw, bh = 90, 24
-        local bx = 312 - bw - 6
-        local by = 8
+        local bx = 125
+        local by = 216
         local can_afford = self:can_afford_price(10)
         local lim_ok = true
         if self:has_voucher("v_directors_cut") and not self:has_voucher("v_retcon") then

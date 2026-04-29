@@ -456,10 +456,10 @@ function Game:set_globals()
 
     self.FONTS = {
         PIXEL = {
-            SMALL_HEIGHT = 11,
+            SMALL_HEIGHT = 12,
             MEDIUM_HEIGHT = 22,
             LARGE_HEIGHT = 33,
-            SMALL = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 11),
+            SMALL = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 12),
             MEDIUM = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 22),
             LARGE = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 33),
         }

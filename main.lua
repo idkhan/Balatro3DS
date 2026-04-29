@@ -6,7 +6,7 @@ function print(...)
 end
 
 local nest_ok, nest = pcall(function()
-    return require("nest").init({ console = "3ds" })
+   return require("nest").init({ console = "3ds" })
 end)
 
 require "engine.object"
@@ -36,7 +36,8 @@ function love.load()
     G = Game()
     G:enter_main_menu()
 
-    G.music = love.audio.newSource("resources/sounds/music1_low.ogg", "stream")
+    G.music = love.audio.newSource("resources/sounds/music1.ogg", "stream")
+    G.music:setPitch(0.7)
     if G.music then
         G.music:setLooping(true)
         G.music:play()

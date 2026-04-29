@@ -30,31 +30,21 @@ function MainMenuUI.draw_top(game)
     end
     if atlas and atlas.image then
         local iw, ih = atlas.image:getDimensions()
-        local max_w = panel_w - 24
-        local max_h = 132
+        local max_w = 336
+        local max_h = 216
         local s = math.min(max_w / iw, max_h / ih)
         if s > 1 then s = 1 end
         local draw_w = iw * s
         local draw_h = ih * s
         local dx = panel_x + math.floor((panel_w - draw_w) * 0.5 + 0.5)
-        local dy = panel_y + 16
+        local dy = panel_y
         love.graphics.setColor(game.C.WHITE)
         love.graphics.draw(atlas.image, dx, dy, 0, s, s)
     end
 
-    love.graphics.setColor(game.C.WHITE)
-    love.graphics.setFont(game.FONTS.PIXEL.LARGE)
-    love.graphics.printf("Balatro 3DS", panel_x, panel_y + 152, panel_w, "center")
-
-    love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
-    love.graphics.setColor(game.C.GREY)
-    love.graphics.printf("Press A / Y", panel_x, panel_y + 184, panel_w, "center")
-
-    if game.SEED then
-        love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-        love.graphics.setColor(game.C.DARK_WHITE or game.C.GREY)
-        love.graphics.printf("Seed " .. tostring(math.floor(tonumber(game.SEED) or 0)), panel_x, panel_y + 204, panel_w, "center")
-    end
+    --love.graphics.setColor(game.C.WHITE)
+    --love.graphics.setFont(game.FONTS.PIXEL.LARGE)
+    --love.graphics.printf("Balatro 3DS", panel_x, panel_y + 152, panel_w, "center")
 end
 
 function MainMenuUI.draw_bottom(game)
@@ -98,6 +88,16 @@ function MainMenuUI.draw_bottom(game)
         love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
         local by = game._main_menu_start_rect.y + math.floor((game._main_menu_start_rect.h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
         love.graphics.printf("Start Run", game._main_menu_start_rect.x, by, game._main_menu_start_rect.w, "center")
+    end
+    
+    love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
+    love.graphics.setColor(game.C.GREY)
+    love.graphics.printf("Press A / Y", panel_x, panel_y + 174, panel_w, "center")
+
+    if game.SEED then
+        love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+        love.graphics.setColor(game.C.DARK_WHITE or game.C.GREY)
+        love.graphics.printf("Seed " .. tostring(math.floor(tonumber(game.SEED) or 0)), panel_x, panel_y + 204, panel_w, "center")
     end
 end
 
