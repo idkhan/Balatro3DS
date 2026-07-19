@@ -5143,8 +5143,10 @@ function Game:start_run_from_main_menu()
     end
     self.SEED = run_seed
     math.randomseed(self.SEED)
+    
     -- Reset shop RNG/queue so offers change with the new seed.
     self.shop_offer_queue = nil
+    self.vouchers = {}
     self._shop_rng_state = nil
     self._pause_prev_state = nil
     self._pause_save_error = nil
