@@ -23,10 +23,17 @@ local function point_in_rect(rect, x, y)
     return x >= rect.x and x <= rect.x + rect.w and y >= rect.y and y <= rect.y + rect.h
 end
 
-local function zone_fill_color(zone)
+--- @param hovered boolean the finger is currently over this zone
+local function zone_fill_color(zone, hovered)
     if not zone or not zone.visible then return nil end
     local c = zone.color or { 0.5, 0.5, 0.5 }
-    return { c[1] or 0.5, c[2] or 0.5, c[3] or 0.5, zone.enabled and 0.55 or 0.35 }
+    local alpha = zone.enabled and 0.55 or 0.35
+    -- A touchscreen has no cursor, so without this the zone under the finger looks exactly
+    -- like the ones that are not, and the player only finds out whether the drop registered
+    -- after letting go. Only an enabled zone lights up: brightening one that will refuse the
+    -- drop would be a worse lie than saying nothing.
+    if hovered and zone.enabled then alpha = 0.8 end
+    return { c[1] or 0.5, c[2] or 0.5, c[3] or 0.5, alpha }
 end
 
 ---@param zones table|nil
@@ -55,11 +62,20 @@ function DragZonesUI.draw(game, zones)
     if not zones then return end
     local order = { "full", "top", "top_right", "bottom" }
     local fallback = zone_rects()
+
+    -- Which zone the finger is over. `_ui_press` is the same touch record the buttons use to
+    -- decide whether they are depressed.
+    local hovered_key = nil
+    local press = game and game._ui_press
+    if press and press.held then
+        hovered_key = DragZonesUI.hit_test(zones, press.x, press.y)
+    end
+
     for _, key in ipairs(order) do
         local zone = zones[key]
         if zone and zone.visible then
             local rect = zone.rect or fallback[key]
-            local fill = zone_fill_color(zone)
+            local fill = zone_fill_color(zone, key == hovered_key)
             if fill and love and love.graphics then
                 love.graphics.setColor(fill)
                 love.graphics.rectangle("fill", rect.x, rect.y, rect.w, rect.h)
