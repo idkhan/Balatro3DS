@@ -13,6 +13,69 @@ local TOOLTIP_OUTER_PAD_Y = 3
 local RARITY_BADGE_PAD_X = 10
 local RARITY_BADGE_PAD_Y = 3
 
+--------------------------------------------------------------------------------
+-- Appear animation
+--------------------------------------------------------------------------------
+
+--- Tooltips used to snap to full size the frame the player touched a card, which on a 240p
+--- screen reads as a flicker rather than as something opening. The reference pops its info
+--- boxes in through the UI spring (`UIBox:align_to_major` off `juice_up`), so this gives the
+--- box the same short overshoot.
+---
+--- Scale only, no alpha: the box is drawn through a dozen `setColor` calls plus two global
+--- rounded-rect helpers, so threading an alpha would touch every one of them. Folding the
+--- appearance into scale is the same trade `Moveable:lifecycle_collapse` already makes for
+--- Jokers and Consumables, and at this size it reads the same.
+local TOOLTIP_APPEAR_DURATION = 0.13
+--- Start size and the overshoot it passes through on the way to 1.
+local TOOLTIP_APPEAR_FROM = 0.72
+local TOOLTIP_APPEAR_OVERSHOOT = 1.05
+
+--- Which tooltip is on screen and how long it has been there. Only one tooltip is ever visible
+--- on a 320x240 playfield, so this is a single slot rather than a table keyed by node.
+local appear = { key = nil, t = TOOLTIP_APPEAR_DURATION }
+--- Set by `draw_tooltip_layout`, consumed by `M.update`. Drawing cannot advance the clock
+--- itself: `love.draw` runs once per screen, so a tooltip would animate at double speed the
+--- moment anything drew it twice in a frame.
+local seen_key = nil
+
+--- Advance the appear clock. Call once per frame, before or after drawing.
+--- @param dt number real seconds
+function M.update(dt)
+    if seen_key == nil then
+        -- Nothing drew a tooltip last frame, so the next one to appear starts from scratch.
+        appear.key = nil
+        return
+    end
+    if seen_key ~= appear.key then
+        appear.key = seen_key
+        appear.t = 0
+    else
+        appear.t = math.min(TOOLTIP_APPEAR_DURATION, appear.t + (tonumber(dt) or 0))
+    end
+    seen_key = nil
+end
+
+--- Scale for the tooltip identified by `key`, and a note of it for `update`.
+--- @param key string
+--- @return number
+local function appear_scale(key)
+    seen_key = key
+    if key ~= appear.key then
+        -- First frame of a new tooltip: it has not been through `update` yet.
+        return TOOLTIP_APPEAR_FROM
+    end
+    local p = appear.t / TOOLTIP_APPEAR_DURATION
+    if p >= 1 then return 1 end
+    -- Rise to the overshoot over the first two thirds, settle back over the last third.
+    if p < 0.66 then
+        local q = p / 0.66
+        return TOOLTIP_APPEAR_FROM + (TOOLTIP_APPEAR_OVERSHOOT - TOOLTIP_APPEAR_FROM) * q
+    end
+    local q = (p - 0.66) / 0.34
+    return TOOLTIP_APPEAR_OVERSHOOT + (1 - TOOLTIP_APPEAR_OVERSHOOT) * q
+end
+
 local HAND_NAME_PHRASES = {
     "flush five",
     "flush house",
@@ -55,8 +118,9 @@ local function apply_range(paints, priorities, s, e, color_key, prio)
     end
 end
 
-local function paint_phrase_ranges(text, paints, priorities, phrase, color_key, prio)
-    local hay = string.lower(text)
+--- `hay` is the already-lowercased line. It used to be lowered inside here, which meant one
+--- fresh copy of the whole line per phrase - and there are more than twenty phrase passes.
+local function paint_phrase_ranges(hay, paints, priorities, phrase, color_key, prio)
     local needle = string.lower(phrase)
     local start_i = 1
     while true do
@@ -81,44 +145,75 @@ local function paint_pattern_ranges(text, paints, priorities, pattern, color_key
     end
 end
 
+--- Resolved segment lists, keyed by the raw text they came from.
+---
+--- Building one runs twenty-odd colouring passes over the line and allocates two arrays the
+--- length of the string plus a table per colour run, and it was being done every frame for
+--- every visible tooltip line. Description text barely ever changes, so the work is done once
+--- per distinct string instead. Callers only ever read the result.
+local segment_cache = {}
+local segment_cache_count = 0
+--- Cleared wholesale rather than evicted one at a time: this is a small bounded cache on a
+--- 64 MB console, and a dropped entry costs one rebuild.
+local SEGMENT_CACHE_LIMIT = 96
+
+--- Store a built result under its source text, if it came from one.
+local function remember_segments(cache_key, segments)
+    if cache_key then
+        if segment_cache_count >= SEGMENT_CACHE_LIMIT then
+            segment_cache = {}
+            segment_cache_count = 0
+        end
+        segment_cache[cache_key] = segments
+        segment_cache_count = segment_cache_count + 1
+    end
+    return segments
+end
+
 --- Split *Balatro-style* description text into colored segments (asterisks stripped).
 function M.build_segments_from_text(raw_text)
+    local cache_key = type(raw_text) == "string" and raw_text or nil
+    if cache_key then
+        local hit = segment_cache[cache_key]
+        if hit then return hit end
+    end
     local text = tostring(raw_text or "")
     text = text:gsub("%*", "")
     local len = #text
     if len <= 0 then
-        return { { text = "", color_key = nil } }
+        return remember_segments(cache_key, { { text = "", color_key = nil } })
     end
 
     local paints = {}
     local priorities = {}
+    local hay = string.lower(text)
 
-    paint_phrase_ranges(text, paints, priorities, "tarot", "PURPLE", 50)
-    paint_phrase_ranges(text, paints, priorities, "planet", "CHIPS", 50)
-    paint_phrase_ranges(text, paints, priorities, "playing", "IMPORTANT", 50)
-    paint_phrase_ranges(text, paints, priorities, "spectral", "PURPLE", 49)
-    paint_phrase_ranges(text, paints, priorities, "joker", "MULT", 50)
-    paint_phrase_ranges(text, paints, priorities, "jokers", "MULT", 50)
+    paint_phrase_ranges(hay, paints, priorities, "tarot", "PURPLE", 50)
+    paint_phrase_ranges(hay, paints, priorities, "planet", "CHIPS", 50)
+    paint_phrase_ranges(hay, paints, priorities, "playing", "IMPORTANT", 50)
+    paint_phrase_ranges(hay, paints, priorities, "spectral", "PURPLE", 49)
+    paint_phrase_ranges(hay, paints, priorities, "joker", "MULT", 50)
+    paint_phrase_ranges(hay, paints, priorities, "jokers", "MULT", 50)
     paint_pattern_ranges(text, paints, priorities, "%d+", "IMPORTANT", 46)
-    paint_phrase_ranges(text, paints, priorities, "hand size", "IMPORTANT", 55)
-    paint_phrase_ranges(text, paints, priorities, "discard", "RED", 56)
-    paint_phrase_ranges(text, paints, priorities, "discards", "RED", 56)
-    paint_phrase_ranges(text, paints, priorities, "discarded", "RED", 56)
+    paint_phrase_ranges(hay, paints, priorities, "hand size", "IMPORTANT", 55)
+    paint_phrase_ranges(hay, paints, priorities, "discard", "RED", 56)
+    paint_phrase_ranges(hay, paints, priorities, "discards", "RED", 56)
+    paint_phrase_ranges(hay, paints, priorities, "discarded", "RED", 56)
     paint_pattern_ranges(text, paints, priorities, "%$%d+", "MONEY", 57)
     for _, hand_name in ipairs(HAND_NAME_PHRASES) do
-        paint_phrase_ranges(text, paints, priorities, hand_name, "IMPORTANT", 58)
+        paint_phrase_ranges(hay, paints, priorities, hand_name, "IMPORTANT", 58)
     end
 
     paint_pattern_ranges(text, paints, priorities, "%d+/%d+:%s*", "CHANCE", 70)
     paint_pattern_ranges(text, paints, priorities, "%d+%s+[Ii][Nn]%s+%d+", "CHANCE", 70)
-    paint_phrase_ranges(text, paints, priorities, "chance", "CHANCE", 70)
-    paint_phrase_ranges(text, paints, priorities, "probabilities", "CHANCE", 70)
+    paint_phrase_ranges(hay, paints, priorities, "chance", "CHANCE", 70)
+    paint_phrase_ranges(hay, paints, priorities, "probabilities", "CHANCE", 70)
 
     paint_pattern_ranges(text, paints, priorities, "[Xx]%d+[%d%.]*%s*[Mm]ult", "MULT", 80)
     paint_pattern_ranges(text, paints, priorities, "[%+%-]?%d+[%d%.]*%s*[Mm]ult", "MULT", 80)
-    paint_phrase_ranges(text, paints, priorities, "[Mm]ult", "MULT", 78)
+    paint_phrase_ranges(hay, paints, priorities, "mult", "MULT", 78)
     paint_pattern_ranges(text, paints, priorities, "[%+%-]?%d+[%d%.]*%s*[Cc]hips", "CHIPS", 80)
-    paint_phrase_ranges(text, paints, priorities, "[Cc]hips", "CHIPS", 78)
+    paint_phrase_ranges(hay, paints, priorities, "chips", "CHIPS", 78)
 
     local segments = {}
     local current_color = paints[1]
@@ -132,9 +227,9 @@ function M.build_segments_from_text(raw_text)
         end
     end
     if #segments <= 0 then
-        return { { text = text, color_key = nil } }
+        return remember_segments(cache_key, { { text = text, color_key = nil } })
     end
-    return segments
+    return remember_segments(cache_key, segments)
 end
 
 function M.tooltip_color_by_key(color_key)
@@ -166,6 +261,94 @@ function M.resolved_lines_from_multiline(s)
     return resolved
 end
 
+--- Bottom-screen width. Kept here rather than as a constant because the tooltip is clamped to it
+--- and `love.graphics.getWidth` needs the screen name under LövePotion's two-screen model.
+local function screen_width()
+    if not love.graphics.getWidth then return 320 end
+    local w = love.graphics.getWidth("bottom")
+    if not w or w <= 0 then w = love.graphics.getWidth() end
+    if not w or w <= 0 then w = 320 end
+    return w
+end
+
+--- Break one line's colour runs across as many lines as it takes to fit `limit`.
+---
+--- Catalog descriptions arrive pre-broken for a measure that assumed the smallest font, so nothing
+--- wrapped at the shipped ladder - the box just grew until it hit the screen clamp and the text
+--- past that edge was lost. Any larger font makes that reachable, so the break has to happen here
+--- rather than in the catalog copy, which has no idea what size it will be drawn at.
+---
+--- Splitting on words, not characters, and carrying each word's colour with it: the segments are
+--- colour runs (`build_segments_from_text`), so a naive split would repaint the wrapped remainder.
+---@param font love.Font
+---@param segments table[] { text, color_key? }
+---@param limit number
+---@return table[][] one segment array per output line
+--- Hang a wrap result off the segment list it came from. Keyed by font and width, so a
+--- font change or a different box still rewraps.
+local function remember_wrap(segments, font, limit, lines)
+    segments._wrap = { font = font, limit = limit, lines = lines }
+    return lines
+end
+
+local function wrap_segments(font, segments, limit)
+    -- A badge is a fixed-size pill, not prose; breaking it would just make a broken pill.
+    if #segments == 1 and segments[1].rarity_badge then return { segments } end
+
+    -- Wrapping allocates a table per word and measures each one, and the answer only changes
+    -- when the text, the font or the available width does. Segment lists come from
+    -- `build_segments_from_text`'s cache, so their identity is stable and the result can hang
+    -- off the list itself rather than needing a second lookup table.
+    local cached = segments._wrap
+    if cached and cached.font == font and cached.limit == limit then return cached.lines end
+
+    local words = {}
+    for _, seg in ipairs(segments) do
+        local color_key = seg.color_key
+        -- Keep the separators: a colour run can begin or end mid-word, so joining on a single
+        -- space would move the spacing between runs and shift the whole line.
+        for chunk, gap in tostring(seg.text or ""):gmatch("(%S*)(%s*)") do
+            if chunk ~= "" then words[#words + 1] = { text = chunk, color_key = color_key } end
+            if gap ~= "" then words[#words + 1] = { text = gap, color_key = color_key, space = true } end
+        end
+    end
+
+    local lines, current, width = {}, {}, 0
+    local function flush()
+        if #current > 0 then
+            -- Trailing space would centre the line off by half a space.
+            while #current > 0 and current[#current].space do table.remove(current) end
+            if #current > 0 then lines[#lines + 1] = current end
+        end
+        current, width = {}, 0
+    end
+    for _, word in ipairs(words) do
+        local w = font:getWidth(word.text)
+        if word.space and #current == 0 then
+            -- Leading space on a wrapped line; drop it.
+        elseif #current > 0 and width + w > limit and not word.space then
+            flush()
+            current[1] = word
+            width = w
+        else
+            current[#current + 1] = word
+            width = width + w
+        end
+    end
+    flush()
+    if #lines == 0 then return remember_wrap(segments, font, limit, { segments }) end
+
+    -- Re-merge adjacent runs of one colour so the draw loop makes one print call per run rather
+    -- than one per word.
+    local merged = {}
+    for _, line in ipairs(lines) do
+        local out = {}
+        for _, word in ipairs(line) do M.append_segment(out, word.text, word.color_key) end
+        merged[#merged + 1] = out
+    end
+    return remember_wrap(segments, font, limit, merged)
+end
+
 ---@param font love.Font
 ---@param title string
 ---@param resolved_lines table[] each entry is an array of { text, color_key?, rarity_badge?, rarity_index? }
@@ -183,6 +366,18 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
     local prev_font = love.graphics.getFont()
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
     love.graphics.setFont(font)
+
+    -- Widest body line the box can hold and still be placed on screen: the box is clamped into
+    -- [margin, sw - box_w - margin] below, so anything past this is drawn off the edge.
+    local sw = screen_width()
+    local body_limit = sw - (2 * 2) - (TOOLTIP_OUTER_PAD_X * 2) - (TOOLTIP_PAD_X * 2)
+    local wrapped = {}
+    for _, segments in ipairs(resolved_lines) do
+        for _, line in ipairs(wrap_segments(font, segments, body_limit)) do
+            wrapped[#wrapped + 1] = line
+        end
+    end
+    resolved_lines = wrapped
 
     local header_w = font:getWidth(title)
     local line_h = font:getHeight()
@@ -227,12 +422,6 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
     local tx = draw_x + (card_w - box_w) * 0.5
     local ty = draw_y + card_h + 3
     local margin = 2
-    local sw = 320
-    if love.graphics.getWidth then
-        sw = love.graphics.getWidth("bottom")
-        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
-        if not sw or sw <= 0 then sw = 320 end
-    end
     tx = math.max(margin, math.min(tx, sw - box_w - margin))
     local sh = nil
     if love.graphics.getHeight then
@@ -248,6 +437,19 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
     if ty < 2 then ty = 2 end
     tx = math.floor(tx + 0.5)
     ty = math.floor(ty + 0.5)
+
+    -- Grow out of the card rather than out of thin air: anchor the pop on whichever edge of the
+    -- box is against the anchor sprite. `ty` was flipped above if the box did not fit below.
+    local scale = appear_scale(title)
+    local popped = scale ~= 1
+    if popped then
+        local anchor_x = tx + box_w * 0.5
+        local anchor_y = (ty >= draw_y) and ty or (ty + box_h)
+        love.graphics.push()
+        love.graphics.translate(anchor_x, anchor_y)
+        love.graphics.scale(scale, scale)
+        love.graphics.translate(-anchor_x, -anchor_y)
+    end
 
     local C = (G and G.C) or {}
     local tooltip_c = C.TOOLTIP or { 0.12, 0.14, 0.2, 1 }
@@ -331,6 +533,8 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
         end
         text_y = text_y + row_h + TOOLTIP_SPACING
     end
+
+    if popped then love.graphics.pop() end
 
     love.graphics.setFont(prev_font)
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
