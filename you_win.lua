@@ -1,7 +1,16 @@
 local YouWinUI = {}
+local DynaText = require("dyna_text")
+local Fonts = require("fonts")
+local NumberFormat = require("number_format")
+
+local WIN_TITLE_TEXT = DynaText.new({
+    float_amount = 1,
+    rotation_amount = 0.025,
+    rainbow = true,
+})
 
 local function fmt_num(n)
-    return tostring(math.floor(tonumber(n) or 0))
+    return NumberFormat.format(math.floor(tonumber(n) or 0))
 end
 
 YouWinUI.information = {
@@ -129,7 +138,7 @@ function YouWinUI.drawTop(game)
     love.graphics.rectangle("line", panel_x, panel_y, panel_w, panel_h, 4, 4)
 
     love.graphics.setFont(font_l)
-    love.graphics.printf(winText, panel_x, text_y, panel_w, "center")
+    DynaText.draw(WIN_TITLE_TEXT, winText, panel_x, text_y, panel_w, "center")
 
     local data_y = text_y + text_h + padding
     local data_h = font_s:getHeight() + padding * 2
@@ -151,7 +160,12 @@ function YouWinUI.drawTop(game)
         love.graphics.rectangle("fill", panel_x + panel_w - tabW - padding * 2, data_y + padding, tabW, data_h - padding * 2, 4, 4)
 
         love.graphics.setColor(color)
+        -- The tab is fixed at 64 px and the best-hand score is the widest thing that lands in
+        -- it - grouped, an endless run's is well past that. Step the face down rather than
+        -- printing over the panel edge, which is what 3DS `printf` does silently.
+        love.graphics.setFont(Fonts.fit(game or G, font_s, content, tabW - 2))
         love.graphics.printf(content, panel_x + panel_w - tabW - padding * 2, data_y + padding, tabW, "center")
+        love.graphics.setFont(font_s)
 
         data_y = data_y + data_h + padding
     end
@@ -201,6 +215,7 @@ function YouWinUI.handle_touch(game, x, y)
         if game:_point_in_rect_simple(x, y, rect) then
             local button = YouWinUI.buttons[rect.index]
             if button and button.callback then
+                Sfx.play_button()
                 button.callback(game)
             end
             return true
@@ -211,12 +226,14 @@ end
 
 function YouWinUI.handle_button(game, btn)
     if game.is_menu_activate and game:is_menu_activate(btn) then
+        Sfx.play_button()
         if game.continue_from_you_win_endless then
             game:continue_from_you_win_endless()
         end
         return true
     end
     if game.is_menu_back and game:is_menu_back(btn) then
+        Sfx.play("cancel")
         if game.continue_from_you_win_main_menu then
             game:continue_from_you_win_main_menu()
         end
