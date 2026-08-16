@@ -3419,7 +3419,7 @@ local TOOLTIP_BY_ID = {
         "(ex: 1 in 3 -> 2 in 3)",
     },
     j_idol = {
-        { kind = "current", text = "Each played Ace of Hearts gives *X3 Mult* when scored," },
+        { kind = "current", text = "Each played Ace of Hearts gives *X2 Mult* when scored," },
         "Card changes every round",
     },
     j_seeing_double = {

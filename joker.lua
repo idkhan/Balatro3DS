@@ -5,8 +5,6 @@ local TooltipDraw = require("tooltip_draw")
 
 -- Basic 2-layer joker: back sprite (centers atlas) and front sprite (individual PNG).
 
-local SHAKE_MAGNITUDE = 10
-local SHAKE_MAX_DURATION = (JokerEffects and JokerEffects.SHAKE_MAX_DURATION) or 0.22
 local JOKER_STICKER_ATLAS_NAME = "stickers"
 local JOKER_STICKER_INDICES = {
     eternal = 0,
@@ -32,6 +30,21 @@ local JOKER_PAGE_OFFSETS = {
     Joker2_p2 = 24,
     Joker2_p3 = 48,
 }
+
+--- Ladder pitch for a cue raised during hand scoring; 1 outside a scoring run. Resolved
+--- through the global so a headless load of this module alone still works.
+local function scoring_pitch()
+    if Hand and Hand.scoring_pitch then return Hand.scoring_pitch() end
+    return 1
+end
+
+--- Step the ladder for a joker that did something. No-op unless the scoring run has
+--- reached its joker loop; see `Hand.advance_scoring_pitch_per_joker`.
+local function advance_ladder_for_joker()
+    if Hand and Hand.advance_scoring_pitch_per_joker then
+        Hand.advance_scoring_pitch_per_joker()
+    end
+end
 
 local function lower(s)
     return string.lower(tostring(s or ""))
@@ -146,19 +159,36 @@ function Joker.sprite_key_from_pos(atlas_name, index, edition)
     return "Jokers" .. set .. "_" .. num
 end
 
+--- A stable per-card hue offset. The reference gives each card its own `holo.y` /
+--- `polychrome.y` seed so a row of editioned cards does not shimmer in lockstep; here
+--- the field itself is shared between every card on screen (one build per frame rather
+--- than one per card), so the seed is the only thing keeping them apart. Any stable
+--- small number does the job.
+---@return number
+function Joker:edition_seed()
+    return ((tonumber(self.front_index) or 0) * 0.137) % 1
+end
+
 local function joker_front_sprite_signature(joker)
     return tostring(joker.front_sprite_key or joker.front_atlas_name) .. "\0" .. Joker.normalize_edition(joker.edition)
 end
 
--- Edition visuals: foil/holo/polychrome use multiply tint; negative uses a dedicated sprite.
+-- Edition visuals: foil/holo/polychrome go through the Fx mesh passes; negative uses
+-- a dedicated baked sprite (see sprite_key_from_pos).
 
---- Animated RGB multiply for Polychrome edition (no shader).
-local function polychrome_edition_set_color()
-    local t = love.timer.getTime() * 1.35
-    local r = 0.52 + 0.48 * (0.5 + 0.5 * math.sin(t))
-    local g = 0.52 + 0.48 * (0.5 + 0.5 * math.sin(t + 2.094395))
-    local b = 0.52 + 0.48 * (0.5 + 0.5 * math.sin(t + 4.18879))
-    love.graphics.setColor(r, g, b, 1)
+--- Shop shelves favor a stable frame rate over animated edition sweeps. A flat
+--- multiply keeps the edition recognizable without rebuilding two meshes per item
+--- every frame on the 3DS.
+local function set_shop_edition_tint(edition)
+    if edition == "foil" then
+        love.graphics.setColor(0.80, 0.90, 1.0, 1)
+    elseif edition == "holo" then
+        love.graphics.setColor(0.94, 0.82, 1.0, 1)
+    elseif edition == "polychrome" then
+        love.graphics.setColor(0.88, 0.72, 1.0, 1)
+    else
+        love.graphics.setColor(1, 1, 1, 1)
+    end
 end
 
 local function compute_quad(atlas, index)
@@ -190,14 +220,18 @@ local function joker_is_debuffed_for_display(joker)
     return G and G.boss_is_joker_debuffed and G:boss_is_joker_debuffed(joker) == true
 end
 
+local DEBUFF_X_WIDTH = 5
+local DEBUFF_WASH_R, DEBUFF_WASH_G, DEBUFF_WASH_B, DEBUFF_WASH_A = 0.40, 0.40, 0.44, 0.62
+
+--- Corner-to-corner X, inset only by half the stroke so the arms stay on the card.
 local function draw_debuff_x_overlay(draw_x, draw_y, w, h)
-    local inset = math.max(4, math.floor(math.min(w, h) * 0.14))
+    local inset = DEBUFF_X_WIDTH * 0.5
     local x1 = draw_x + inset
     local y1 = draw_y + inset
     local x2 = draw_x + w - inset
     local y2 = draw_y + h - inset
     local prev_w = love.graphics.getLineWidth()
-    love.graphics.setLineWidth(5)
+    love.graphics.setLineWidth(DEBUFF_X_WIDTH)
     love.graphics.setColor(0.95, 0.2, 0.2, 0.95)
     love.graphics.line(x1, y1, x2, y2)
     love.graphics.line(x1, y2, x2, y1)
@@ -245,13 +279,8 @@ function Joker:init(X, Y, W, H, def, params)
 
     self.edition = Joker.normalize_edition(self.params.edition or self.def.edition)
     local base_cost = tonumber(self.def.cost) or 1
-    local base_sell = tonumber(self.def.sell_cost)
-    if base_sell == nil then
-        base_sell = math.max(1, math.floor(base_cost / 2))
-    end
     local ec = Joker.edition_price_deltas(self.edition)
     self.cost = base_cost + ec
-    self.sell_cost = math.max(1, base_sell)
 
     self.effect_config = self.def.config or {}
 
@@ -266,6 +295,15 @@ function Joker:init(X, Y, W, H, def, params)
     self.eternal = as_truthy_flag(self.params.eternal)
         or as_truthy_flag(self.def.eternal)
         or as_truthy_flag(sticker_def and sticker_def.eternal)
+
+    -- A rental costs $1, and its sell value follows from that: the reference forces the cost
+    -- down before deriving the sell price (`card.lua:381-382`), so a rented $6 Joker sells
+    -- for $1, not $3. Sell price otherwise derives from the edition-adjusted cost
+    -- (`card.lua:369-383`), so this has to run after the stickers are resolved.
+    if self.rental then
+        self.cost = 1
+    end
+    self.sell_cost = math.max(1, math.floor(self.cost / 2))
 
     -- Runtime accumulator for effects that grow over time (e.g. Ceremonial Dagger).
     self.stored_mult = tonumber(self.effect_config.mult) or 0
@@ -308,6 +346,7 @@ function Joker:init(X, Y, W, H, def, params)
     -- Defaults to showing the front face.
     self.face_up = self.params.face_up
     if self.face_up == nil then self.face_up = true end
+    self.sprite_face_up = self.face_up
 
     -- Define which atlas cells represent the front/back joker art.
     -- Expected structure in def:
@@ -317,8 +356,6 @@ function Joker:init(X, Y, W, H, def, params)
 
     self.front_index = (self.params.pos and self.params.pos.index) or (self.def.pos and self.def.pos.index) or 0
     self.back_index = 0
-
-    self.scoring_shake_timer = 0
 
     self:refresh_quads()
 end
@@ -398,8 +435,18 @@ function Joker:refresh_quads()
     end
 end
 
-function Joker:set_face_up(face_up)
-    self.face_up = not not face_up
+--- Same facing split as `Card:set_face_up`: logic flips now, the sprite pinches through
+--- edge-on and swaps there (`reference/Balatro/card.lua:4113-4142`).
+function Joker:set_face_up(face_up, instant)
+    face_up = not not face_up
+    self.face_up = face_up
+    if self.sprite_face_up == nil then self.sprite_face_up = face_up end
+    if self.sprite_face_up == face_up then return end
+    if instant or not self.start_flip then
+        self.sprite_face_up = face_up
+        return
+    end
+    self:start_flip(function() self.sprite_face_up = self.face_up end)
 end
 
 function Joker:touchreleased(id, x, y)
@@ -588,95 +635,100 @@ local function get_full_deck_starting_size()
     return 52
 end
 
+--- Live "(Currently ...)" lines, keyed by joker id.
+---
+--- These are module-scope constants rather than table literals inside
+--- `get_live_current_tooltip_text` because that function runs from `Joker:draw_tooltip`,
+--- i.e. every frame for as long as a joker tooltip is up, and once per screen pass on top
+--- of that. Built inline, the three tables cost ~37 closures and 3 tables per call, and all
+--- three were built even for a joker matching none of them. Every closure takes the joker
+--- as an argument and reads only module-level helpers and `G`, so there is nothing per-call
+--- to capture.
+local LIVE_XMULT_TEXT = {
+    j_stencil = function(j)
+        local free = tonumber(j.free_joker_slots)
+        if free == nil and G then
+            local cap = tonumber(G.joker_capacity) or tonumber(G.joker_slot_count) or 0
+            local used = (type(G.jokers) == "table") and #G.jokers or 0
+            free = math.max(0, cap - used)
+        end
+        free = tonumber(free) or 0
+        return string.format("(Currently X%s)", fmt_runtime_number(free + 1, 2))
+    end,
+    j_steel_joker = function(_)
+        local steel = count_full_deck(function(c) return c.enhancement == "steel" end)
+        local x = 1 + (0.2 * steel)
+        return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
+    end,
+    j_constellation = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_madness = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_vampire = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_hologram = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_obelisk = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_throwback = function(_)
+        local skipped = (G and tonumber(G.skipsTaken)) or 0
+        local x = 1 + (0.25 * skipped)
+        return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
+    end,
+    j_glass = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_hit_the_road = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+j_canio = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_yorick = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_lucky_cat = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_campfire = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+    j_ramen = function(j)
+        local x = tonumber(j.runtime_counter) or 2
+        return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
+    end,
+}
+
+local LIVE_MULT_TEXT = {
+    j_ceremonial = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+    j_abstract = function() return string.format("(Currently +%d Mult)", 3 * ((G and G.jokers and #G.jokers) or 0)) end,
+    j_ride_the_bus = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.runtime_counter) or 0)) end,
+    j_green_joker = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+    j_red_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+    j_erosion = function()
+        local cnt = count_full_deck()
+        local start_size = get_full_deck_starting_size()
+        return string.format("(Currently +%d Mult)", math.max(0, (start_size - cnt) * 4))
+    end,
+    j_swashbuckler = function(j)
+        local total = 0
+        for _, owned in ipairs((G and G.jokers) or {}) do
+            if owned and owned ~= j then
+                total = total + (tonumber(owned.sell_cost) or 0)
+            end
+        end
+        return string.format("(Currently +%d Mult)", math.floor(total))
+    end,
+    j_bootstraps = function() return string.format("(Currently +%d Mult)", math.floor((tonumber(G and G.money) or 0) / 5) * 2) end,
+    j_flash_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+    j_spare_trousers = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
+    j_fortune_teller = function() return string.format("(Currently +%d)", math.floor(tonumber(G and G.tarots_used) or 0)) end,
+    j_popcorn = function(j) return string.format("+%d Mult", math.floor(tonumber(j.stored_mult) or 0)) end,
+}
+
+local LIVE_CHIPS_TEXT = {
+    j_ice_cream = function(j)
+        local n = math.max(0, math.floor(tonumber(j.runtime_counter) or 0))
+        return string.format("(Currently +%d Chips)", n)
+    end,
+    j_runner = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
+    j_blue_joker = function() return string.format("(Currently +%d Chips)", 2 * count_cards_in_deck()) end,
+    j_square = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
+    j_wee = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
+    j_stone_joker = function() return string.format("(Currently +%d Chips)", 25 * count_full_deck(function(c) return c.enhancement == "stone" end)) end,
+    j_bull = function() return string.format("(Currently +%d Chips)", 2 * (tonumber(G and G.money) or 0)) end,
+}
+
 function Joker:get_live_current_tooltip_text(base_text)
     local id = self.def and self.def.id or nil
     if type(id) ~= "string" then return base_text end
 
-    local multipliers = {
-        j_stencil = function(j)
-            local free = tonumber(j.free_joker_slots)
-            if free == nil and G then
-                local cap = tonumber(G.joker_capacity) or tonumber(G.joker_slot_count) or 0
-                local used = (type(G.jokers) == "table") and #G.jokers or 0
-                free = math.max(0, cap - used)
-            end
-            free = tonumber(free) or 0
-            return string.format("(Currently X%s)", fmt_runtime_number(free + 1, 2))
-        end,
-        j_steel_joker = function(_)
-            local steel = count_full_deck(function(c) return c.enhancement == "steel" end)
-            local x = 1 + (0.2 * steel)
-            return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
-        end,
-        j_constellation = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_madness = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_vampire = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_hologram = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_obelisk = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_throwback = function(_)
-            local skipped = (G and tonumber(G.skipsTaken)) or 0
-            local x = 1 + (0.25 * skipped)
-            return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
-        end,
-        j_glass = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_hit_the_road = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-    j_canio = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_yorick = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_lucky_cat = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_campfire = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_ramen = function(j)
-            local x = tonumber(j.runtime_counter) or 2
-            return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
-        end,
-    }
-    if multipliers[id] then
-        return multipliers[id](self)
-    end
-
-    local mults = {
-        j_ceremonial = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
-        j_abstract = function() return string.format("(Currently +%d Mult)", 3 * ((G and G.jokers and #G.jokers) or 0)) end,
-        j_ride_the_bus = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.runtime_counter) or 0)) end,
-        j_green_joker = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
-        j_red_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
-        j_erosion = function()
-            local cnt = count_full_deck()
-            local start_size = get_full_deck_starting_size()
-            return string.format("(Currently +%d Mult)", math.max(0, (start_size - cnt) * 4))
-        end,
-        j_swashbuckler = function(j)
-            local total = 0
-            for _, owned in ipairs((G and G.jokers) or {}) do
-                if owned and owned ~= j then
-                    total = total + (tonumber(owned.sell_cost) or 0)
-                end
-            end
-            return string.format("(Currently +%d Mult)", math.floor(total))
-        end,
-        j_bootstraps = function() return string.format("(Currently +%d Mult)", math.floor((tonumber(G and G.money) or 0) / 5) * 2) end,
-        j_flash_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
-        j_spare_trousers = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
-        j_fortune_teller = function() return string.format("(Currently +%d)", math.floor(tonumber(G and G.tarots_used) or 0)) end,
-        j_popcorn = function(j) return string.format("+%d Mult", math.floor(tonumber(j.stored_mult) or 0)) end,
-    }
-    if mults[id] then
-        return mults[id](self)
-    end
-
-    local chips = {
-        j_ice_cream = function(j)
-            local n = math.max(0, math.floor(tonumber(j.runtime_counter) or 0))
-            return string.format("(Currently +%d Chips)", n)
-        end,
-        j_runner = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
-        j_blue_joker = function() return string.format("(Currently +%d Chips)", 2 * count_cards_in_deck()) end,
-        j_square = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
-        j_wee = function(j) return string.format("(Currently +%d Chips)", math.floor(tonumber(j.stored_chips) or 0)) end,
-        j_stone_joker = function() return string.format("(Currently +%d Chips)", 25 * count_full_deck(function(c) return c.enhancement == "stone" end)) end,
-        j_bull = function() return string.format("(Currently +%d Chips)", 2 * (tonumber(G and G.money) or 0)) end,
-    }
-    if chips[id] then
-        return chips[id](self)
+    local live = LIVE_XMULT_TEXT[id] or LIVE_MULT_TEXT[id] or LIVE_CHIPS_TEXT[id]
+    if live then
+        return live(self)
     end
 
     if id == "j_cloud_9" then
@@ -698,7 +750,7 @@ function Joker:get_live_current_tooltip_text(base_text)
         if type(s) ~= "string" or s == "" then
             s = "-"
         end
-        return string.format("Each played *%s* of *%s* gives *X3 Mult* when scored,", label, s)
+        return string.format("Each played *%s* of *%s* gives *X2 Mult* when scored,", label, s)
     end
     if id == "j_invisible" then
         return string.format("(Currently %d/2)", math.floor(tonumber(self.runtime_counter) or 0))
@@ -765,10 +817,20 @@ function Joker:get_tooltip_body_lines()
     local edition_lines = self:get_edition_tooltip_lines()
     local impl = self.effect_impl
     local function append_extra(lines)
+        -- Every sticker the card draws gets a line. The reference queues one titled info box
+        -- per sticker badge (`card.lua:938-943`, text at `localization/en-us.lua:1971`,
+        -- `:2139`, `:2197`); only Perishable was explained here, so an Eternal or Rental
+        -- Joker showed a sprite the player had no way to read.
+        if self.eternal == true then
+            table.insert(lines, { kind = "text", text = "Eternal: can't be sold or destroyed" })
+        end
         if self.perishable == true then
             local remaining = math.max(0, math.floor(tonumber(self.perishable_counter) or 5))
             local unit = remaining == 1 and "round" or "rounds"
             table.insert(lines, { kind = "text", text = string.format("Perishable: %d %s remaining", remaining, unit) })
+        end
+        if self.rental == true then
+            table.insert(lines, { kind = "text", text = "Rental: lose $3 at end of round" })
         end
         for _, el in ipairs(edition_lines) do
             table.insert(lines, el)
@@ -882,13 +944,6 @@ function Joker:get_layout_draw_xy()
             draw_y = draw_y - 8
         end
     end
-
-    if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
-        local mag = SHAKE_MAGNITUDE * (self.scoring_shake_timer / SHAKE_MAX_DURATION)
-        local t = self.scoring_shake_phase or 0
-        draw_x = draw_x + math.sin(t * 85) * mag
-        draw_y = draw_y + math.cos(t * 73) * mag * 0.65
-    end
     return draw_x, draw_y
 end
 
@@ -931,17 +986,21 @@ end
 function Joker:draw_sticker_overlays(draw_x, draw_y)
     if not self.sticker_atlas or not self.sticker_atlas.image then return end
 
-    local active_stickers = {}
-    if self.perishable then table.insert(active_stickers, "perishable") end
-    if self.rental then table.insert(active_stickers, "rental") end
-    if self.eternal then table.insert(active_stickers, "eternal") end
-    if #active_stickers == 0 then return end
+    -- Test before building anything: most jokers carry no sticker at all, and this runs per
+    -- joker per frame on both screens, so the list was pure garbage nearly every time.
+    if not (self.perishable or self.rental or self.eternal) then return end
 
-    for _, name in ipairs(active_stickers) do
-        local quad = self.sticker_quads and self.sticker_quads[name]
-        if quad then
-            love.graphics.draw(self.sticker_atlas.image, quad, draw_x, draw_y, 0, 1, 1)
-        end
+    local quads = self.sticker_quads
+    if not quads then return end
+    -- Draw order is the same as the list this replaced.
+    if self.perishable and quads.perishable then
+        love.graphics.draw(self.sticker_atlas.image, quads.perishable, draw_x, draw_y, 0, 1, 1)
+    end
+    if self.rental and quads.rental then
+        love.graphics.draw(self.sticker_atlas.image, quads.rental, draw_x, draw_y, 0, 1, 1)
+    end
+    if self.eternal and quads.eternal then
+        love.graphics.draw(self.sticker_atlas.image, quads.eternal, draw_x, draw_y, 0, 1, 1)
     end
 end
 
@@ -957,32 +1016,44 @@ function Joker:draw()
 
     local base_scale = self.VT.scale or 1
     local render_scale = self:get_render_scale()
+    local rot = self.VT.r
+    -- Ambient idle sway: the reference's resting board is never still (every card breathes
+    -- through `ambient_tilt`, `reference/Balatro/card.lua:4370-4383` — shader-driven there,
+    -- plain rotation here). Phase off x so no two jokers align, like the hand's sway.
+    if not (self.states and self.states.drag and self.states.drag.is) then
+        local tR = (G and G.TIMERS and G.TIMERS.REAL) or 0
+        rot = rot + 0.015 * math.sin(1.2 * tR + draw_x * 0.045)
+    end
+    -- Trigger pop rides on top of the render scale; this transform is already centre-anchored.
+    if self.juice_scale then
+        render_scale = render_scale * self.juice_scale
+        rot = rot + self.juice_r
+    end
+    -- A destroyed Joker (Gros Michel, Immolate) collapses instead of blinking out.
+    render_scale = render_scale * self:lifecycle_collapse()
     local cx = draw_x + (self.VT.w * base_scale) / 2
     local cy = draw_y + (self.VT.h * base_scale) / 2
+    local shown_up = self.sprite_face_up
+    if shown_up == nil then shown_up = self.face_up end
+    local flip_sx = self.flip_sx and self:flip_sx() or 1
     love.graphics.translate(cx, cy)
-    love.graphics.rotate(self.VT.r)
-    love.graphics.scale(render_scale, render_scale)
+    love.graphics.rotate(rot)
+    love.graphics.scale(render_scale * flip_sx, render_scale)
     love.graphics.translate(-cx, -cy)
 
-    if self.face_up then
+    if shown_up then
         if self.front_sprite and self.front_sprite.image then
             local ed = Joker.normalize_edition(self.edition)
-            local function draw_sprite_front()
-                love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)
-            end
-
-            if ed == "foil" then
-                love.graphics.setColor(0.62, 0.78, 1.12, 1)
-                draw_sprite_front()
-            elseif ed == "holo" then
-                love.graphics.setColor(1.15, 0.55, 0.55, 1)
-                draw_sprite_front()
-            elseif ed == "polychrome" then
-                polychrome_edition_set_color()
-                draw_sprite_front()
+            if Fx.has_edition_fx(ed) and (self.shop_offer_slot == nil or Fx.shop_editions_animated()) then
+                -- Full-image form on purpose: it draws the exact same rectangle as
+                -- the plain draw below, so an edition can never change the sprite's
+                -- apparent size or placement (cell-based UVs against a padded t3x do).
+                local ft = Fx.time()
+                Fx.draw_edition_image(self.front_sprite.image, draw_x, draw_y, ed, ft,
+                    Fx.foil_phase(rot, self.juice_r, ft), self:edition_seed())
             else
-                love.graphics.setColor(1, 1, 1, 1)
-                draw_sprite_front()
+                set_shop_edition_tint(ed)
+                love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)
             end
             love.graphics.setColor(1, 1, 1, 1)
         end
@@ -996,6 +1067,16 @@ function Joker:draw()
     self:draw_sticker_overlays(draw_x, draw_y)
 
     if joker_is_debuffed_for_display(self) then
+        -- Grey wash: redraw the art tinted so the wash follows the sprite's silhouette rather than
+        -- painting a hard rectangle over the card.
+        love.graphics.setColor(DEBUFF_WASH_R, DEBUFF_WASH_G, DEBUFF_WASH_B, DEBUFF_WASH_A)
+        if shown_up then
+            if self.front_sprite and self.front_sprite.image then
+                love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)
+            end
+        elseif self.back_atlas and self.back_atlas.image and self.back_quad then
+            love.graphics.draw(self.back_atlas.image, self.back_quad, draw_x, draw_y, 0, 1, 1)
+        end
         draw_debuff_x_overlay(draw_x, draw_y, self.VT.w, self.VT.h)
     end
 
@@ -1013,16 +1094,56 @@ function Joker:draw()
     love.graphics.setColor(prev_draw_r, prev_draw_g, prev_draw_b, prev_draw_a)
 end
 
+local READY_PULSE_INTERVAL = 0.8
+
+function Joker:ready_pulse_kind()
+    local id = self.def and self.def.id
+    if id == "j_dna" then return "first_hand" end
+    if id == "j_trading_card" then return "first_discard" end
+    return nil
+end
+
+--- Arm the reference's `juice_card_until` hint when the first hand of a blind is drawn.
+--- DNA and Trading Card bounce immediately, then every 0.8 real seconds while usable
+--- (`reference/Balatro/card.lua:2483-2489`, `functions/common_events.lua:1155-1160`).
+function Joker:start_ready_pulse()
+    if not self:ready_pulse_kind() then return end
+    self._ready_pulse_active = true
+    self._ready_pulse_timer = 0
+    self:juice_up(0.1, 0.1)
+end
+
+function Joker:is_ready_to_use()
+    local kind = self:ready_pulse_kind()
+    if kind == "first_hand" then
+        local total = G and G.get_effective_hands_per_round and G:get_effective_hands_per_round()
+        return total ~= nil and tonumber(G.hands) == total
+    elseif kind == "first_discard" then
+        local total = G and G.get_effective_discards_per_round and G:get_effective_discards_per_round()
+        return total ~= nil and tonumber(G.discards) == total
+    end
+    return false
+end
+
+function Joker:update_ready_pulse(dt)
+    if not self._ready_pulse_active then return end
+    if not self:is_ready_to_use() then
+        self._ready_pulse_active = nil
+        self._ready_pulse_timer = nil
+        return
+    end
+    self._ready_pulse_timer = (tonumber(self._ready_pulse_timer) or 0) + dt
+    if self._ready_pulse_timer >= READY_PULSE_INTERVAL then
+        self._ready_pulse_timer = self._ready_pulse_timer - READY_PULSE_INTERVAL
+        self:juice_up(0.1, 0.1)
+    end
+end
+
 function Joker:update(dt)
     Moveable.update(self, dt)
+    self:update_ready_pulse((G and G.real_dt) or dt)
     if joker_front_sprite_signature(self) ~= self._quads_refresh_signature then
         self:refresh_quads()
-    end
-    if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
-        self.scoring_shake_timer = self.scoring_shake_timer - dt
-        self.scoring_shake_phase = (self.scoring_shake_phase or 0) + dt
-        if self.scoring_shake_timer < 0 then self.scoring_shake_timer = 0 end
-        if self.scoring_shake_timer <= 0 then self.scoring_shake_phase = nil end
     end
 end
 
@@ -1043,33 +1164,46 @@ function Joker:matches_trigger(event_name, ctx)
     return false
 end
 
---- Foil / Holo / Polychrome modify chips or mult when the scored hand is finalized (not Negative).
-function Joker:apply_edition_on_hand_scored(ctx)
+--- The reveal sting for an edition, played once when a card or joker first shows it
+--- (`reference/Balatro/card.lua:440-443`). Silent for a base edition.
+---@param edition string|nil
+function Joker.play_edition_reveal_sfx(edition)
+    local ed = Joker.normalize_edition(edition)
+    if ed == "foil" then
+        Sfx.play("foil1", 1.2, 0.4)
+    elseif ed == "holo" then
+        -- The reference pitches holo up hard: 1.2 * 1.58.
+        Sfx.play("holo1", 1.896, 0.4)
+    elseif ed == "polychrome" then
+        Sfx.play("polychrome1", 1.2, 0.7)
+    elseif ed == "negative" then
+        Sfx.play("negative", 1.5, 0.4)
+    end
+end
+
+--- Apply foil/holo before the Joker, then polychrome after it (`reference/Balatro/functions/state_events.lua:880-943`).
+---@param after_effect boolean|nil
+function Joker:apply_edition_on_hand_scored(ctx, after_effect)
     if type(ctx) ~= "table" then return end
     local ed = Joker.normalize_edition(self.edition)
     if ed == "base" or ed == "negative" then return end
+    if (ed == "polychrome") ~= (after_effect == true) then return end
     if ed == "foil" then
         ctx.chips = (tonumber(ctx.chips) or 0) + 50
-        Sfx.play("resources/sounds/foil2.ogg")
     elseif ed == "holo" then
         ctx.mult = (tonumber(ctx.mult) or 0) + 10
-        Sfx.play_mult()
     elseif ed == "polychrome" then
         ctx.mult = (tonumber(ctx.mult) or 0) * 1.5
-        Sfx.play("resources/sounds/polychrome.ogg")
     else
         return
     end
 
-    self.scoring_shake_timer = SHAKE_MAX_DURATION
-    self.scoring_shake_phase = 0
-    if ed == "foil" and Sfx and Sfx.play_chips then
-        Sfx.play_chips()
-    elseif ed == "polychrome" and Sfx and Sfx.play_mult2 then
-        Sfx.play_mult2()
-    elseif Sfx and Sfx.play_mult then
-        Sfx.play_mult()
-    end
+    -- Every edition trigger during scoring shares one quiet cue in the reference
+    -- (`common_events.lua:854`) -- the edition is the event, not which edition it is. The
+    -- ladder carries the climb; `polychrome1` and friends stay reserved for reveals.
+    Sfx.play("foil2", scoring_pitch(), 0.3)
+    advance_ladder_for_joker()
+    self:juice_up(0.6, 0.1)
 end
 
 function Joker:apply_effect(ctx)
@@ -1092,6 +1226,9 @@ function Joker:apply_effect(ctx)
         if JokerEffects and JokerEffects.mark_effect_applied then
             JokerEffects.mark_effect_applied(ctx)
         end
+        -- One rung per joker that did something, not per cue it raised: a joker adding both
+        -- chips and mult is a single trigger. No-op outside the scoring run's joker loop.
+        advance_ladder_for_joker()
     end
     if created and JokerEffects and JokerEffects.mark_created_item then
         JokerEffects.mark_created_item(ctx)
@@ -1101,7 +1238,7 @@ function Joker:apply_effect(ctx)
     end
 end
 
---- Extra scoring passes this joker contributes for the current card (used by `Game:sum_retrigger_extras`).
+--- Extra scoring passes this joker contributes for the current card (used by `Game:collect_retrigger_sources`).
 ---@param ctx table|nil
 ---@return number
 function Joker:query_retrigger(ctx)
@@ -1110,4 +1247,3 @@ function Joker:query_retrigger(ctx)
     end
     return 0
 end
-

@@ -1,6 +1,13 @@
 ---@class Tag
 Tag = Object:extend()
 
+--- 0-1 roll for cue pitch jitter. Kept off `math.random`, which is reseeded per run
+--- for reproducibility and must not be consumed by audio.
+local function sfx_jitter()
+    if love and love.math and love.math.random then return love.math.random() end
+    return 0.5
+end
+
 local function resolve_atlas(name)
     if not name or not G or not G.ASSET_ATLAS then return nil end
     if G.ensure_asset_atlas_loaded then
@@ -16,7 +23,12 @@ local function compute_quad(atlas, index)
     if not cell_w or not cell_h or cell_w <= 0 or cell_h <= 0 then
         return nil, 0, 0
     end
-    local cols = math.floor(iw / cell_w)
+    -- Prefer the atlas's declared column count. On hardware a t3x reports its padded runtime
+    -- width rather than the source PNG's, so deriving columns from the image is right on
+    -- desktop and wrong on a 3DS - tags.png is 340 px wide but pads to 512, which would read
+    -- as 15 columns instead of 10 and pull every tag's sprite from the wrong cell. Same trap
+    -- `consumable_compute_quad` documents.
+    local cols = tonumber(atlas.cols) or math.floor(iw / cell_w)
     if cols <= 0 then return nil, 0, 0 end
     local col = index % cols
     local row = math.floor(index / cols)
@@ -114,11 +126,48 @@ function Tag:setPosition(x, y)
     self.Y = y
 end
 
-function Tag:Use()
+--- Tags whose config type is `new_blind_choice` in the reference (`game.lua:233-240`): the
+--- five that hand out a free booster pack, plus Boss Tag. They do not fire the moment they
+--- are earned - the reference only runs them when a blind-select screen is built, one per
+--- screen (`reference/Balatro/game.lua:3290-3294`). Firing one mid-skip opened its pack
+--- before the skip had advanced the blind, so the pack's return state and the blind it came
+--- back to disagreed.
+Tag.NEW_BLIND_CHOICE_TYPES = {
+    standard = true,
+    charm = true,
+    meteor = true,
+    buffoon = true,
+    ethereal = true,
+    boss = true,
+}
+
+--- Fire the tag's effect and, if it actually did something, play the activation cue.
+--- Tags that return false are stored for later instead, and stay silent here so a
+--- run reloaded from a snapshot does not replay a cue for every tag it restores.
+---@param context string|nil "new_blind_choice" when called from the blind-select screen
+function Tag:Use(context)
+    local fired = self:apply(context) and true or false
+    if fired and Sfx and Sfx.play then
+        -- Reference `tag.lua:78-79`.
+        Sfx.play("generic1", 0.9 + sfx_jitter() * 0.1, 0.8)
+        Sfx.play("holo1", 1.2 + sfx_jitter() * 0.1, 0.4)
+    end
+    return fired
+end
+
+---@param context string|nil
+function Tag:apply(context)
     --Tags that are used should fire and return true
+    -- Pack and Boss Tags wait for a blind-select screen; until then they sit in the tray.
+    if Tag.NEW_BLIND_CHOICE_TYPES[self.type] and context ~= "new_blind_choice" then
+        return false
+    end
     if self.type == "economy" then
         if G and type(G) == "table" and type(G.money) == "number" then
-            G.money = G.money + math.min(G.money * 2, 40)
+            -- Doubles the balance, capped at a $40 gain: the reference adds
+            -- `min(config.max, max(0, dollars))` (`tag.lua:184`, `max = 40`). Adding
+            -- `min(money*2, 40)` tripled it, and went the wrong way while in debt.
+            G.money = G.money + math.min(math.max(0, G.money), 40)
         end
         return true
     
@@ -153,27 +202,31 @@ function Tag:Use()
         return true
     elseif self.type == "buffoon" then
         if G and G.begin_booster_session then
+            -- Mega Buffoon exposes four choices, matching normal pack definitions (reference game.lua:693-696).
             G:begin_booster_session({
                 kind = "booster",
                 pack = "buffoon",
                 size = "mega",
                 price = 0,
                 name = "Mega Buffoon Pack",
-                card_count = 5,
+                card_count = 4,
                 picks_granted = 2,
             })
         end
         return true
     elseif self.type == "ethereal" then
         if G and G.begin_booster_session then
+            -- A plain Spectral Pack: the reference hardcodes `p_spectral_normal_1`
+            -- (`tag.lua:239-241`), whose config is `{extra = 2, choose = 1}`
+            -- (`game.lua:681`). This was granting a Mega — double the cards and picks.
             G:begin_booster_session({
                 kind = "booster",
                 pack = "spectral",
-                size = "mega",
+                size = "normal",
                 price = 0,
-                name = "Mega Spectral Pack",
-                card_count = 5,
-                picks_granted = 2,
+                name = "Spectral Pack",
+                card_count = 2,
+                picks_granted = 1,
             })
         end
         return true
@@ -194,7 +247,7 @@ function Tag:Use()
         if G and G.joker_has_room_for_new and G.add_joker_by_def and G.random_joker_def_id_by_rarity then
             for _ = 1, 2 do
                 if not G:joker_has_room_for_new() then break end
-                local id = G:random_joker_def_id_by_rarity(1)
+                local id = G:random_joker_def_id_by_rarity(1, "buffoon")
                 if not id then break end
                 G:add_joker_by_def(id)
             end
@@ -207,8 +260,19 @@ function Tag:Use()
                 idx = G:roll_orbital_hand_index()
             end
             if idx then
+                -- Three levels at once, shown the same way a Planet's one level is: the
+                -- reference runs Orbital through `update_hand_text` and `level_up_hand` with
+                -- `levels = 3` (`reference/Balatro/tag.lua:191-198`). Skipping the readout here
+                -- would make the strongest hand upgrade in the game the quietest.
+                local from_level, from_chips, from_mult = G:get_hand_display_stats(idx)
                 for _ = 1, 3 do
                     G:upgrade_hand_level_at_index(idx)
+                end
+                local to_level, to_chips, to_mult = G:get_hand_display_stats(idx)
+                if G.begin_hand_levelup_flourish then
+                    G:begin_hand_levelup_flourish(G.handlist and G.handlist[idx] or "",
+                        from_level, from_chips, from_mult,
+                        to_level, to_chips, to_mult)
                 end
             end
         end
@@ -216,17 +280,25 @@ function Tag:Use()
     elseif self.type == "handy" then
         if G and G.handsPlayed and G.money then
             G.money = G.money + G.handsPlayed
-            Sfx.play_money()
+        end
+        return true
+    elseif self.type == "garbage" then
+        if G and type(G.money) == "number" then
+            -- Garbage pays for all prior unused discards immediately (reference tag.lua:158-165).
+            G.money = G.money + math.max(0, tonumber(G.discardsUnused) or 0)
         end
         return true
     elseif self.type == "speed" then
         if G and G.skipsTaken and G.money then
             G.money = G.money + G.skipsTaken * 5
-            Sfx.play_money()
         end
         return true
     elseif self.type == "boss" then
         G:roll_boss_blind({ exclude_current = true })
+        -- Consumed on use like every other immediate tag. Returning false stored it in the
+        -- tag list forever, and because tags are re-applied when a run is loaded
+        -- (`game.lua` restore), every save/load re-rolled the boss for free.
+        return true
     end
 
     return false
@@ -248,7 +320,7 @@ Tag.DESCRIPTIONS = {
     buffoon = "Open a Mega Buffoon Pack",
     handy = "Earn $1 for each hand played this run",
     garbage = "Earn $1 for each unused discard this run",
-    ethereal = "Open a Mega Spectral Pack",
+    ethereal = "Open a free Spectral Pack",
     coupon = "All initial items are free in the next Shop",
     double = "Gives a copy of the next selected Tag",
     juggle = "+3 hand size next round",
