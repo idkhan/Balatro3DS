@@ -1,4 +1,12 @@
 --- Role-based 3DS gamepad bindings (A/B/X/Y/L/R/ZL/ZR).
+---
+--- The face buttons follow the layout Balatro ships on the Switch, because the 3DS has the
+--- same physical ABXY arrangement and a player coming from that build should not have to
+--- relearn it: A selects, B deselects, X discards, Y plays. Sorting lost its own button in that
+--- move and rides on B -- a tap with nothing selected sorts, which costs nothing, because
+--- deselecting an empty selection is a no-op.
+local Console = require("console")
+
 local InputBindings = {}
 
 InputBindings.SLOTS_PER_ROLE = 2
@@ -6,8 +14,8 @@ InputBindings.SLOTS_PER_ROLE = 2
 InputBindings.ROLES = {
     "confirm",
     "cancel",
-    "use",
-    "sort",
+    "discard",
+    "play",
     "shoulder_l",
     "shoulder_r",
 }
@@ -26,14 +34,15 @@ InputBindings._triggers_enabled = false
 InputBindings.DEFAULT_BINDINGS = {
     confirm = "a",
     cancel = "b",
-    use = "x",
-    sort = "y",
+    discard = "x",
+    play = "y",
     shoulder_l = "leftshoulder",
     shoulder_r = "rightshoulder",
 }
 
 InputBindings.GESTURES = {
-    sort_tap_max_ms = 250,
+    --- Below this, a cancel press is a tap (deselect / sort) rather than the start of a hold.
+    cancel_tap_max_ms = 250,
     shop_exit_hold_ms = 400,
     sweep_seed_hold_ms = 250,
 }
@@ -41,14 +50,13 @@ InputBindings.GESTURES = {
 InputBindings.HOLD_ROLES = {
     confirm = true,
     cancel = true,
-    sort = true,
 }
 
 local ROLE_LABELS = {
-    confirm = "Confirm",
-    cancel = "Cancel",
-    use = "Use",
-    sort = "Sort",
+    confirm = "Select",
+    cancel = "Deselect",
+    discard = "Discard",
+    play = "Play",
     shoulder_l = "Show Jokers",
     shoulder_r = "Show Consumables",
 }
@@ -66,9 +74,9 @@ local BUTTON_LABELS = {
 
 local ROLE_HINTS = {
     confirm = "Tap: Select; Hold+D-pad: Reorder",
-    cancel = "Tap: Discard/Sell; Hold: Exit shop",
-    use = "Tap: Play / Buy & Use",
-    sort = "Tap: Sort; Hold+D-pad: Sweep",
+    cancel = "Tap: Deselect / Sort / Sell; Hold+D-pad: Sweep",
+    discard = "Tap: Discard / Reroll",
+    play = "Tap: Play / Buy & Use",
     shoulder_l = "Toggle jokers panel",
     shoulder_r = "Toggle consumables panel",
 }
@@ -112,9 +120,24 @@ function InputBindings.default_settings()
     }
 end
 
+--- Roles that existed before the face buttons were laid out the way the Switch build lays them
+--- out. A settings file carrying either of these was written against the old meanings -- `use`
+--- was Play on X, `sort` was Sort on Y -- so keeping the buttons out of it would leave the
+--- player with a layout that is half theirs and half ours. Saved bindings from that era are
+--- dropped whole and the new defaults stand.
+local RETIRED_ROLES = { "use", "sort" }
+
+local function is_pre_switch_layout(data)
+    if type(data) ~= "table" then return false end
+    for _, role in ipairs(RETIRED_ROLES) do
+        if data[role] ~= nil then return true end
+    end
+    return false
+end
+
 function InputBindings.normalize_bindings(data)
     local out = copy_bindings(InputBindings.DEFAULT_BINDINGS)
-    if type(data) ~= "table" then return out end
+    if type(data) ~= "table" or is_pre_switch_layout(data) then return out end
 
     for _, role in ipairs(InputBindings.ROLES) do
         local normalized = normalize_role_bindings(data[role], InputBindings.DEFAULT_BINDINGS[role])
@@ -194,14 +217,16 @@ function InputBindings.is_role(button, role, bindings)
     return false
 end
 
+--- Menus take either of the two buttons on each side of the pair, so a player who reaches for
+--- the one they use in a run is never wrong: A/Y open, B/X go back.
 function InputBindings.is_menu_activate(button, bindings)
     return InputBindings.is_role(button, "confirm", bindings)
-        or InputBindings.is_role(button, "sort", bindings)
+        or InputBindings.is_role(button, "play", bindings)
 end
 
 function InputBindings.is_menu_back(button, bindings)
     return InputBindings.is_role(button, "cancel", bindings)
-        or InputBindings.is_role(button, "use", bindings)
+        or InputBindings.is_role(button, "discard", bindings)
 end
 
 function InputBindings.set_role_slot_binding(bindings, role, slot, button)
@@ -331,17 +356,8 @@ end
 function InputBindings.detect_console_capabilities()
     InputBindings._triggers_enabled = false
 
-    if love and love._console and love._console == "3ds" then
-        if love.system and love.system.getProcessorCount then
-            local count = love.system.getProcessorCount()
-            if count ~= 2 then
-                InputBindings._triggers_enabled = true
-            end
-        end
-    else
-        -- Desktop / non-3DS: allow ZL/ZR for keyboard testing.
-        InputBindings._triggers_enabled = true
-    end
+    -- Desktop / non-3DS answers true as well, so ZL/ZR stay available for keyboard testing.
+    InputBindings._triggers_enabled = Console.is_new_3ds()
 
     InputBindings.refresh_rebindable_buttons()
     return InputBindings._triggers_enabled
