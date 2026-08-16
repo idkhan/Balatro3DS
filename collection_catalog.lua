@@ -126,14 +126,29 @@ end
 
 function CollectionCatalog.is_entry_discovered(game, entry)
     if not game or not entry then return false end
-    if entry.category == "seals" or entry.category == "editions" then
-        return true
-    end
+    -- Seals and editions are discovered like everything else. Reporting them as always found
+    -- inflated the collection percentage, which feeds the deck unlock thresholds.
+    -- `Game:discover_card_properties` records them as cards reach the hand.
     if entry.category == "decks" then
         return game.is_deck_unlocked and game:is_deck_unlocked(entry.id) == true
     end
     local did = CollectionCatalog.discovery_id_for_entry(entry)
     return game.is_discovered and game:is_discovered(did) == true
+end
+
+--- Whether the collection should present this entry as locked rather than merely unseen.
+---
+--- A locked Joker is one the profile has not earned yet: the reference draws these from
+--- `G.P_LOCKED` and shows the unlock condition instead of the card's own text. An unseen
+--- Joker is a different state — earned, but never encountered — and stays a silhouette.
+---@param game table
+---@param entry table
+---@return boolean
+function CollectionCatalog.is_entry_locked(game, entry)
+    if not game or not entry then return false end
+    if entry.category ~= "jokers" then return false end
+    if not game.is_joker_unlocked then return false end
+    return game:is_joker_unlocked(entry.id) == false
 end
 
 local function sort_entries(a, b)

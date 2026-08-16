@@ -1,5 +1,6 @@
 --- Bottom-screen overlay: remaining draw-pile cards as interactable Card nodes (one row per non-empty suit).
 local DeckViewUI = {}
+local NumberFormat = require("number_format")
 local SCREEN_W, SCREEN_H = 320, 240
 local CARD_W, CARD_H = 71, 95
 local TAP_THRESHOLD = 15
@@ -41,6 +42,97 @@ function DeckViewUI.group_by_suit(cards)
         end)
     end
     return by_suit
+end
+
+--- Every playing card in the run, tagged with whether it is still in the draw pile.
+---
+--- The deck view used to build from the draw pile alone, so a card you had just enhanced
+--- vanished from it. The reference always lists the whole deck and greys what is no longer
+--- drawable (`UI_definitions.lua:3260-3266`), which is both tabs' shared behaviour: the
+--- Remaining tab greys, the Full Deck tab does not.
+---@param game table
+---@return table[] entries `{ data = card_data, in_draw = boolean }`
+function DeckViewUI.collect_run_cards(game)
+    local entries = {}
+    local deck = game and game.deck
+    for _, c in ipairs((deck and deck.cards) or {}) do
+        entries[#entries + 1] = { data = c, in_draw = true }
+    end
+    for _, c in ipairs((deck and deck.discard_pile) or {}) do
+        entries[#entries + 1] = { data = c, in_draw = false }
+    end
+    -- Cards sitting in the player's hand are out of the draw pile but still in the deck.
+    for _, c in ipairs((game and game.hand and game.hand.cards) or {}) do
+        entries[#entries + 1] = { data = c, in_draw = false }
+    end
+    return entries
+end
+
+--- Group tagged entries by suit, ranked low to high, mirroring `group_by_suit`.
+---@param entries table[]
+---@return table<string, table[]>
+function DeckViewUI.group_entries_by_suit(entries)
+    local by_suit = {}
+    for _, suit in ipairs(SUITS) do
+        by_suit[suit] = {}
+    end
+    for _, entry in ipairs(entries or {}) do
+        local suit = entry and entry.data and entry.data.suit
+        if suit and by_suit[suit] then
+            by_suit[suit][#by_suit[suit] + 1] = entry
+        end
+    end
+    for _, suit in ipairs(SUITS) do
+        table.sort(by_suit[suit], function(a, b)
+            local ra, rb = tonumber(a.data.rank) or 0, tonumber(b.data.rank) or 0
+            if ra ~= rb then return ra < rb end
+            -- Stable within a rank: drawable copies first, so the gaps read left to right.
+            return (a.in_draw and 1 or 0) > (b.in_draw and 1 or 0)
+        end)
+    end
+    return by_suit
+end
+
+---@param game table
+---@return string "remaining" | "full"
+function DeckViewUI.mode(game)
+    return game and game._deck_view_mode == "full" and "full" or "remaining"
+end
+
+---@param game table
+---@return string "deck" | "vouchers"
+function DeckViewUI.page(game)
+    return game and game._deck_view_page == "vouchers" and "vouchers" or "deck"
+end
+
+--- Redeemed vouchers, in the order they were taken, with their catalog text.
+---
+--- Once bought, a voucher drew as a bare sprite on the top screen with no way to read it.
+--- The reference keeps a Vouchers tab on its run-info screen (`UI_definitions.lua:3426`,
+--- listed alongside poker hands and blinds at `:3128-3149`) — this is the port's equivalent,
+--- on the screen that already carries the run's reference material.
+---@param game table
+---@return table[] `{ id, name, description }`
+function DeckViewUI.owned_vouchers(game)
+    local out = {}
+    local seen = {}
+    local function add(id)
+        if type(id) ~= "string" or id == "" or seen[id] then return end
+        local def = VOUCHER_DEFS and VOUCHER_DEFS[id]
+        if type(def) ~= "table" then return end
+        seen[id] = true
+        out[#out + 1] = { id = id, name = def.name or id, description = def.description or "" }
+    end
+    local vs = (game and game.vouchers) or {}
+    -- Both shapes are in use: an ordered list, and a set keyed by id.
+    for _, id in ipairs(vs) do add(id) end
+    local keys = {}
+    for id, flag in pairs(vs) do
+        if flag == true and type(id) == "string" then keys[#keys + 1] = id end
+    end
+    table.sort(keys)
+    for _, id in ipairs(keys) do add(id) end
+    return out
 end
 
 --- Suits that still have at least one card in the draw pile, in standard order.
@@ -160,15 +252,16 @@ function DeckViewUI.build(game)
         game._deck_view_rows[suit] = {}
     end
 
-    local by_suit = DeckViewUI.group_by_suit(game.deck.cards)
+    local by_suit = DeckViewUI.group_entries_by_suit(DeckViewUI.collect_run_cards(game))
     for _, suit in ipairs(SUITS) do
-        for _, card_data in ipairs(by_suit[suit]) do
-            local copy = Deck.copy_card_data(card_data)
+        for _, entry in ipairs(by_suit[suit]) do
+            local copy = Deck.copy_card_data(entry.data)
             if copy and game.ensure_card_uid then
                 game:ensure_card_uid(copy)
             end
             local node = Card(0, 0, CARD_W, CARD_H, copy, nil, { face_up = true })
             node._deck_view_card = true
+            node._deck_view_in_draw = entry.in_draw and true or false
             node.states.click.can = true
             node.states.drag.can = true
             game:add(node)
@@ -232,7 +325,53 @@ function DeckViewUI.get_node_at(game, x, y)
     return nil
 end
 
+--- Point-in-rect without depending on `Game`, so the header controls can be hit-tested from
+--- a test as well as from a touch.
+local function in_rect(r, x, y)
+    return type(r) == "table" and x >= r.x and x <= r.x + r.w and y >= r.y and y <= r.y + r.h
+end
+
+--- Flip between Remaining and Full Deck.
+---@param game table
+function DeckViewUI.toggle_mode(game)
+    game._deck_view_mode = DeckViewUI.mode(game) == "full" and "remaining" or "full"
+    Sfx.play("cardSlide1")
+end
+
+--- Swap the header between the suit/face tallies and the per-rank counts.
+---@param game table
+function DeckViewUI.toggle_tally_view(game)
+    game._deck_view_show_ranks = not game._deck_view_show_ranks
+    Sfx.play("paper1")
+end
+
+--- Header controls, checked before the cards so a tap on the strip never grabs a card behind
+--- it. Returns true when the press was consumed.
+---@return boolean
+function DeckViewUI.handle_header_touch(game, x, y)
+    if in_rect(game._deck_view_page_rect, x, y) then
+        game._deck_view_page = DeckViewUI.page(game) == "vouchers" and "deck" or "vouchers"
+        Sfx.play("cardSlide1")
+        return true
+    end
+    -- The deck-only controls are not present on the voucher page.
+    if DeckViewUI.page(game) == "vouchers" then return false end
+    if in_rect(game._deck_view_mode_rect, x, y) then
+        DeckViewUI.toggle_mode(game)
+        return true
+    end
+    if in_rect(game._deck_view_tally_rect, x, y) then
+        DeckViewUI.toggle_tally_view(game)
+        return true
+    end
+    return false
+end
+
 function DeckViewUI.handle_touchpressed(game, id, x, y)
+    if DeckViewUI.handle_header_touch(game, x, y) then
+        game.dragging = nil
+        return
+    end
     game.touch_start_x = x
     game.touch_start_y = y
     local node = DeckViewUI.get_node_at(game, x, y)
@@ -287,14 +426,18 @@ end
 function DeckViewUI.handle_gamepad(game, button)
     if not game or not game._deck_view_open then return false end
     if button == "dpright" or button == "right" then
+        -- Only on the transition, or holding right would retrigger the slide cue.
+        if not game._deck_view_hand_panel_open then Sfx.play("paper1") end
         game._deck_view_hand_panel_open = true
         return true
     end
     if button == "dpleft" or button == "left" then
+        if game._deck_view_hand_panel_open then Sfx.play("cancel") end
         game._deck_view_hand_panel_open = false
         return true
     end
     if button == "back" or (game.is_menu_back and game:is_menu_back(button)) then
+        Sfx.play("cancel")
         if game._deck_view_hand_panel_open then
             game._deck_view_hand_panel_open = false
             return true
@@ -303,6 +446,7 @@ function DeckViewUI.handle_gamepad(game, button)
         return true
     end
     if button == "select" or (game.is_menu_activate and game:is_menu_activate(button)) then
+        Sfx.play("cancel")
         game:exit_deck_view()
         return true
     end
@@ -316,14 +460,7 @@ local function center_text_in_rect(text, x, y, w, h)
 end
 
 local function format_hand_mult(mult)
-    local raw = tonumber(mult) or 0
-    if math.abs(raw) >= 100000 then
-        return string.format("%.1e", raw)
-    end
-    if raw % 1 == 0 then
-        return string.format("%.0f", raw)
-    end
-    return string.format("%.1f", raw)
+    return NumberFormat.format(tonumber(mult) or 0)
 end
 
 local HAND_PANEL_W = 340
@@ -381,7 +518,7 @@ function DeckViewUI.draw_hand_level_row(game, x, y, w, hand_name, level, chips, 
     center_text_in_rect("lvl." .. tostring(level), inner_x - textDepth, inner_y, HAND_LEVEL_W, inner_h)
     love.graphics.setColor(G.C.WHITE)
     center_text_in_rect(hand_name or "", name_x - textDepth, inner_y, name_w, inner_h)
-    center_text_in_rect(tostring(chips), chips_x - textDepth, inner_y, HAND_CHIP_W, inner_h)
+    center_text_in_rect(NumberFormat.format(tonumber(chips) or 0), chips_x - textDepth, inner_y, HAND_CHIP_W, inner_h)
     love.graphics.setColor(G.C.RED)
     center_text_in_rect("X", chips_x + HAND_CHIP_W + gap - textDepth, inner_y, HAND_X_W, inner_h)
     love.graphics.setColor(G.C.WHITE)
@@ -436,14 +573,80 @@ function DeckViewUI.draw_hand_level_panel(screen, game, textDepth, buttonDepth)
     love.graphics.setColor(1, 1, 1, 1)
 end
 
+--- Header strip: the mode toggle on the left, the tally chips across the rest. Tapping the
+--- chips swaps them for the per-rank counts and back, which is how the rank column survives
+--- on a 320 px screen without taking a permanent row.
+---@param game table
+local function draw_deck_view_header(game)
+    local mode = DeckViewUI.mode(game)
+    local cards = DeckViewUI.tally_source(game)
+
+    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    local toggle_w, toggle_h = 74, 13
+    game._deck_view_mode_rect = { x = 2, y = 1, w = toggle_w, h = toggle_h }
+    if _G.draw_button_with_shadow then
+        draw_button_with_shadow(2, 1, toggle_w, toggle_h, 3, 3,
+            mode == "full" and game.C.BOOSTER or game.C.BLUE, game.C.BLOCK.SHADOW, 1)
+    end
+    love.graphics.setColor(game.C.WHITE)
+    love.graphics.printf(mode == "full" and "Full Deck" or "Remaining", 2, 3, toggle_w, "center")
+
+    -- The rest of the strip is the tally readout, and is itself the tap target.
+    local strip_x = toggle_w + 6
+    local strip_w = SCREEN_W - strip_x - 2
+    game._deck_view_tally_rect = { x = strip_x, y = 1, w = strip_w, h = toggle_h }
+
+    love.graphics.setColor(game.C.DARK_WHITE or game.C.GREY)
+    if game._deck_view_show_ranks then
+        local counts = DeckViewUI.count_ranks(cards)
+        local n = #RANKS
+        local cell = strip_w / n
+        for i, r in ipairs(RANKS) do
+            local cx = strip_x + (i - 1) * cell
+            love.graphics.setColor(game.C.GREY)
+            love.graphics.printf(RANK_LABELS[r] or "?", cx, 1, cell, "center")
+            love.graphics.setColor((counts[r] or 0) > 0 and game.C.WHITE or game.C.GREY)
+            love.graphics.printf(tostring(counts[r] or 0), cx, 8, cell, "center")
+        end
+    else
+        local t = DeckViewUI.count_tallies(cards)
+        local cells = {
+            { "H " .. t.suits.Hearts, game.C.RED },
+            { "C " .. t.suits.Clubs, game.C.WHITE },
+            { "D " .. t.suits.Diamonds, game.C.RED },
+            { "S " .. t.suits.Spades, game.C.WHITE },
+            { "Face " .. t.face, game.C.DARK_WHITE or game.C.GREY },
+            { "Ace " .. t.ace, game.C.DARK_WHITE or game.C.GREY },
+            { "Num " .. t.numbered, game.C.DARK_WHITE or game.C.GREY },
+        }
+        local cell = strip_w / #cells
+        for i, entry in ipairs(cells) do
+            love.graphics.setColor(entry[2])
+            love.graphics.printf(entry[1], strip_x + (i - 1) * cell, 3, cell, "center")
+        end
+    end
+end
+
 function DeckViewUI.draw_bottom(game)
     love.graphics.setColor(G.C.PANEL)
     love.graphics.rectangle("fill", 0, 0, SCREEN_W, SCREEN_H)
 
-    local count = game.deck and game.deck:size() or #(game._deck_view_nodes or {})
-    love.graphics.setColor(game.C.WHITE)
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    love.graphics.printf("Draw pile (" .. tostring(count) .. ")", 0, 4, SCREEN_W, "center")
+    local on_vouchers = DeckViewUI.page(game) == "vouchers"
+    -- Greying is what distinguishes the two deck modes; both list every card in the run.
+    local grey_spent = DeckViewUI.mode(game) == "remaining"
+    for _, node in ipairs(game._deck_view_nodes or {}) do
+        if node then
+            node.greyed = (not on_vouchers) and grey_spent and node._deck_view_in_draw == false or nil
+            if node.states then node.states.visible = not on_vouchers end
+        end
+    end
+
+    if on_vouchers then
+        DeckViewUI.draw_voucher_page(game)
+        return
+    end
+
+    draw_deck_view_header(game)
 
     local SUIT_COLORS = {
         Hearts = G.C.Hearts or { 0.92, 0.25, 0.28 },
@@ -475,13 +678,79 @@ function DeckViewUI.draw_bottom(game)
         end
     end
 
+    DeckViewUI.draw_footer(game, m.footer_h)
+    love.graphics.setColor(1, 1, 1, 1)
+end
+
+--- Footer: the page switch on the left, the close/panel hints filling the rest.
+---@param game table
+---@param footer_h number
+function DeckViewUI.draw_footer(game, footer_h)
+    local y = SCREEN_H - footer_h
     love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+
+    local on_vouchers = DeckViewUI.page(game) == "vouchers"
+    local sw_w, sw_h = 74, 13
+    game._deck_view_page_rect = { x = 2, y = y + 1, w = sw_w, h = sw_h }
+    if _G.draw_button_with_shadow then
+        draw_button_with_shadow(2, y + 1, sw_w, sw_h, 3, 3,
+            on_vouchers and game.C.BLUE or game.C.VOUCHER, game.C.BLOCK.SHADOW, 1)
+    end
+    love.graphics.setColor(game.C.WHITE)
+    local n = #DeckViewUI.owned_vouchers(game)
+    love.graphics.printf(on_vouchers and "Deck" or ("Vouchers " .. n), 2, y + 3, sw_w, "center")
+
     love.graphics.setColor(game.C.WHITE or { 0.65, 0.65, 0.65, 1 })
     local footer = "SELECT / B to close"
-    if not game._deck_view_hand_panel_open and (tonumber(game._deck_view_hand_panel_t) or 0) <= 0.01 then
+    if not on_vouchers and not game._deck_view_hand_panel_open
+        and (tonumber(game._deck_view_hand_panel_t) or 0) <= 0.01 then
         footer = footer .. "  Right: Hand Levels"
     end
-    love.graphics.printf(footer, 0, SCREEN_H - m.footer_h, SCREEN_W, "center")
+    love.graphics.printf(footer, sw_w + 6, y + 3, SCREEN_W - sw_w - 8, "center")
+end
+
+--- Owned vouchers as a readable list. Names and full descriptions, because the point of the
+--- page is that a redeemed voucher is otherwise unreadable.
+---@param game table
+function DeckViewUI.draw_voucher_page(game)
+    local vouchers = DeckViewUI.owned_vouchers(game)
+    local m = DeckViewUI._chrome_metrics(0)
+
+    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    love.graphics.setColor(game.C.WHITE)
+    love.graphics.printf("Redeemed Vouchers", 0, 3, SCREEN_W, "center")
+
+    if #vouchers == 0 then
+        love.graphics.setColor(game.C.DARK_WHITE or game.C.GREY)
+        love.graphics.printf("None redeemed yet.", 0, 100, SCREEN_W, "center")
+        DeckViewUI.draw_footer(game, m.footer_h)
+        love.graphics.setColor(1, 1, 1, 1)
+        return
+    end
+
+    -- Two columns: eight rows fit the 208 px between the header and the footer, and a run
+    -- can hold more vouchers than one column would take.
+    local top_y = 18
+    local avail_h = SCREEN_H - top_y - m.footer_h - 2
+    local per_col = 8
+    local row_h = math.floor(avail_h / per_col)
+    local col_w = math.floor((SCREEN_W - 6) / 2)
+    for i, v in ipairs(vouchers) do
+        local col = (i - 1) >= per_col and 1 or 0
+        local row = (i - 1) % per_col
+        local x = 2 + col * (col_w + 2)
+        local y = top_y + row * row_h
+        if _G.draw_rect_with_shadow then
+            draw_rect_with_shadow(x, y, col_w, row_h - 2, 3, 1,
+                game.C.BLOCK.BACK, game.C.BLOCK.SHADOW, 1)
+        end
+        love.graphics.setColor(game.C.VOUCHER or game.C.ORANGE)
+        love.graphics.printf(v.name, x + 3, y + 1, col_w - 6, "left")
+        love.graphics.setColor(game.C.DARK_WHITE or game.C.GREY)
+        love.graphics.printf(v.description, x + 3, y + 9, col_w - 6, "left")
+    end
+
+    DeckViewUI.draw_footer(game, m.footer_h)
     love.graphics.setColor(1, 1, 1, 1)
 end
 
@@ -501,6 +770,80 @@ for r = 2, 14 do
     else
         RANK_LABELS[r] = "A"
     end
+end
+
+--- Descriptions of every stake below `stake_id`, strongest first.
+---
+--- Stakes stack: a Blue Stake run is also running Red, Green and Black. The reference lists
+--- the inherited ones under "Also applied:" (`UI_definitions.lua:3181-3204`). White is
+--- skipped because "No modifiers." is not a modifier.
+---@param stake_id string
+---@return string[]
+function DeckViewUI.inherited_stake_descriptions(stake_id)
+    local out = {}
+    local current = STAKE_DEFS_BY_ID and STAKE_DEFS_BY_ID[stake_id]
+    local current_order = tonumber(current and current.order)
+    if not current_order then return out end
+    for _, def in ipairs(STAKE_DEFS or {}) do
+        local order = tonumber(def.order)
+        if order and order < current_order and def.id ~= "stake_white"
+            and type(def.description) == "string" and def.description ~= "" then
+            out[#out + 1] = def.description
+        end
+    end
+    -- Nearest stake first: those are the ones the player just stepped up from.
+    for i = 1, math.floor(#out / 2) do
+        out[i], out[#out - i + 1] = out[#out - i + 1], out[i]
+    end
+    return out
+end
+
+--- Suit, face, numbered and ace counts over a set of cards. The reference shows all of these
+--- beside the rank column (`UI_definitions.lua:3390-3420`); the port counted ranks only, so
+--- there was nothing to plan a flush against. Stone cards are excluded from every tally
+--- because they have no rank or suit (`UI_definitions.lua:3363`).
+---@param cards table[]
+---@return table
+function DeckViewUI.count_tallies(cards)
+    local out = {
+        suits = { Hearts = 0, Clubs = 0, Diamonds = 0, Spades = 0 },
+        face = 0, numbered = 0, ace = 0, total = 0,
+    }
+    for _, card_data in ipairs(cards or {}) do
+        local enh = card_data and card_data.enhancement
+        if card_data and enh ~= "stone" then
+            local suit = card_data.suit
+            if suit and out.suits[suit] ~= nil then
+                out.suits[suit] = out.suits[suit] + 1
+            end
+            local rank = tonumber(card_data.rank)
+            if rank then
+                if rank >= 11 and rank <= 13 then
+                    out.face = out.face + 1
+                elseif rank == 14 then
+                    out.ace = out.ace + 1
+                elseif rank >= 2 then
+                    out.numbered = out.numbered + 1
+                end
+            end
+            out.total = out.total + 1
+        end
+    end
+    return out
+end
+
+--- Card data the tallies and rank counts should describe: the draw pile in Remaining mode,
+--- every card in the run in Full Deck mode.
+---@param game table
+---@return table[]
+function DeckViewUI.tally_source(game)
+    local out = {}
+    for _, entry in ipairs(DeckViewUI.collect_run_cards(game)) do
+        if DeckViewUI.mode(game) == "full" or entry.in_draw then
+            out[#out + 1] = entry.data
+        end
+    end
+    return out
 end
 
 ---@param cards table[]
@@ -659,6 +1002,23 @@ function DeckViewUI.draw_top(screen, game)
         love.graphics.setColor(game.C.WHITE)
         love.graphics.printf(stake_def.description, stake_label_x + padding * 2 - textDepth, currentY, stake_width - 2 * padding, "left")
         currentY = currentY + love.graphics.getFont():getHeight() + padding
+
+        -- Stakes are cumulative, so the run also carries every lower stake's modifier. The
+        -- reference lists them under an "Also applied:" heading (`UI_definitions.lua:3181-3204`);
+        -- showing only the top stake's own line hid most of what the run is actually running.
+        local inherited = DeckViewUI.inherited_stake_descriptions(stake_id)
+        if #inherited > 0 then
+            love.graphics.setColor(game.C.GREY)
+            love.graphics.printf("Also applied:", stake_label_x + padding * 2 - textDepth, currentY,
+                stake_width - 2 * padding, "left")
+            currentY = currentY + love.graphics.getFont():getHeight()
+            love.graphics.setColor(game.C.DARK_WHITE or game.C.GREY)
+            for _, line in ipairs(inherited) do
+                love.graphics.printf(line, stake_label_x + padding * 2 - textDepth, currentY,
+                    stake_width - 2 * padding, "left")
+                currentY = currentY + love.graphics.getFont():getHeight()
+            end
+        end
     end
 
     -- Blind Information

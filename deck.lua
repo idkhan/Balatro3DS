@@ -17,7 +17,8 @@ function Deck.copy_card_data(data)
     return c
 end
 
-function Deck:init()
+function Deck:init(game)
+    self.game = game
     self.cards = {}
     --- Logical cards discarded from the hand (and similar). Not the same as UI discard animation queue.
     self.discard_pile = {}
@@ -40,7 +41,7 @@ end
 function Deck:shuffle()
     local n = #self.cards
     for i = n, 2, -1 do
-        local j = math.random(1, i)
+        local j = self.game and self.game:random("deck", 1, i) or math.random(1, i)
         self.cards[i], self.cards[j] = self.cards[j], self.cards[i]
     end
 end
@@ -127,7 +128,7 @@ end
 function Deck:random_card()
     local n = #self.cards
     if n == 0 then return nil end
-    local i = math.random(1, n)
+    local i = self.game and self.game:random("deck", 1, n) or math.random(1, n)
     return Deck.copy_card_data(self.cards[i])
 end
 
@@ -152,7 +153,7 @@ function Deck:insert_random(card_data)
     local c = Deck.copy_card_data(card_data)
     if not c then return end
     local n = #self.cards
-    local pos = math.random(1, n + 1)
+    local pos = self.game and self.game:random("deck", 1, n + 1) or math.random(1, n + 1)
     table.insert(self.cards, pos, c)
 end
 
