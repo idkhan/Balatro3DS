@@ -1,3 +1,5 @@
+local Fonts = require("fonts")
+
 VERSION = '1.0.1o'
 VERSION = VERSION..'-FULL'
 --check_version
@@ -29,36 +31,9 @@ function Game:set_globals()
     --||||||||||||||||||||||||||||||
     --         Feature Flags
     --||||||||||||||||||||||||||||||
-    self.F_QUIT_BUTTON = true               --Include the main menu 'Quit' button
-    self.F_SKIP_TUTORIAL = false            --Completely skip the tutorial on fresh save
-    self.F_BASIC_CREDITS = false            --Remove references to Daniel Linssens itch.io
-    self.F_EXTERNAL_LINKS = true            --Remove all references to any external links (mainly for console)
-    self.F_ENABLE_PERF_OVERLAY = false      --Disable debugging tool for performance of each frame
-    self.F_NO_SAVING = false                --Disables all 'run' saving
-    self.F_MUTE = false                     --Force mute all sounds
-    self.F_SOUND_THREAD = true              --Have sound in a separate thread entirely - if not sounds will run on main thread
-    self.F_VIDEO_SETTINGS = true            --Let the player change their video settings
-    self.F_CTA = false                      --Call to Action video for the Demo - keep this as false
-    self.F_VERBOSE = true                   --Extra debug information on screen and in the console
-    self.F_HTTP_SCORES = false              --Include HTTP scores to fetch/set high scores
-    self.F_RUMBLE = nil                     --Add rumble to the primary controller - adjust this for amount of rumble
-    self.F_CRASH_REPORTS = false            --Send Crash reports over the internet
-    self.F_NO_ERROR_HAND = false            --Hard crash without error message screen
-    self.F_SWAP_AB_PIPS = false             --Swapping button pips for A and B buttons (mainly for switch)
-    self.F_SWAP_AB_BUTTONS = false          --Swapping button function for A and B buttons (mainly for switch)
-    self.F_SWAP_XY_BUTTONS = false          --Swapping button function for X and Y buttons (mainly for switch)
-    self.F_NO_ACHIEVEMENTS = false          --Disable achievements
-    self.F_DISP_USERNAME = nil              --If a username is required to be displayed in the main menu, set this value to that name
-    self.F_ENGLISH_ONLY = nil               --Disable language selection - only in english
-    self.F_GUIDE = false                    --Replace back/select button with 'guide' button
-    self.F_JAN_CTA = false                  --Call to action for Jan demo
-    self.F_HIDE_BG = false                  --Hiding the game objects when paused
-    self.F_TROPHIES = false                 --use 'trophy' terminology instead of 'achievemnt'
-    self.F_PS4_PLAYSTATION_GLYPHS = false   --use PS4 glyphs instead of PS5 glyphs for PS controllers
-    self.F_LOCAL_CLIPBOARD = false
-    self.F_SAVE_TIMER = 30
-    self.F_MOBILE_UI = false
-    self.F_HIDE_BETA_LANGS = nil
+    -- The original game's full F_* block was inherited wholesale and never read; only
+    -- the flags this port actually acts on are kept.
+    self.F_MUTE = false                     --Force mute all sounds (checked in Sfx.play)
 
 
     --||||||||||||||||||||||||||||||
@@ -84,71 +59,13 @@ function Game:set_globals()
     self.SETTINGS = {
         GAMESPEED = 1,
         SOUND = {
+            volume = 100,        -- master, scales both music and SFX
             music_volume = 100,
+            sfx_volume = 100,
         },
         GRAPHICS = {
             texture_scaling = 1,
         },
-    }
-
-    self.COLLABS = {
-        pos = { Jack = {x=0,y=0}, Queen = {x=1,y=0}, King = {x=2,y=0} },
-        options = {
-            Spades = {
-                'default',
-                'collab_TW',
-                'collab_CYP',
-                'collab_SK',
-                'collab_DS',
-                'collab_AC',
-                'collab_STP',
-           },
-            Hearts = {
-              'default',
-              'collab_AU',
-              'collab_TBoI',
-              'collab_CL',
-              'collab_D2',
-              'collab_CR',
-              'collab_BUG',
-            },
-            Clubs = {
-              'default',
-              'collab_VS',
-              'collab_STS',
-              'collab_PC',
-              'collab_WF',
-              'collab_FO',
-              'collab_DBD'
-            },
-            Diamonds = {
-              'default',
-              'collab_DTD',
-              'collab_SV',
-              'collab_EG',
-              'collab_XR',
-              'collab_C7',
-              'collab_R'
-            }
-          },
-      }
-
-    self.METRICS = {
-        cards = {
-            used = {},
-            bought = {},
-            appeared = {},
-        },
-        decks = {
-            chosen = {},
-            win = {},
-            lose = {}
-        },
-        bosses = {
-            faced = {},
-            win = {},
-            lose = {},
-        }
     }
 
     --||||||||||||||||||||||||||||||
@@ -429,23 +346,12 @@ function Game:set_globals()
     G.C.UI_CHIPS = copy_table(G.C.BLUE)
     G.C.UI_MULT = copy_table(G.C.RED)
 
-    local function pixel_font(path, size)
-        local font = love.graphics.newFont(path, size)
-        if font and font.setFilter then
-            font:setFilter("nearest", "nearest")
-        end
-        return font
-    end
-
+    -- Built through `fonts.lua` so the ladder can be swapped at runtime; see the header there for
+    -- why the size a font is requested at decides whether it renders sharp on hardware. MICRO is
+    -- wrapped Cash Out payouts and the boss-effect line only - too small for anything you have to
+    -- read at length.
     self.FONTS = {
-        PIXEL = {
-            SMALL_HEIGHT = 11,
-            MEDIUM_HEIGHT = 22,
-            LARGE_HEIGHT = 33,
-            SMALL = pixel_font("resources/fonts/m6x11plus.ttf", 11),
-            MEDIUM = pixel_font("resources/fonts/m6x11plus.ttf", 22),
-            LARGE = pixel_font("resources/fonts/m6x11plus.ttf", 33),
-        }
+        PIXEL = Fonts.build(Fonts.DEFAULT_PROFILE),
     }
     --||||||||||||||||||||||||||||||
     --        ENUMS
@@ -479,26 +385,24 @@ function Game:set_globals()
     -- chips/mult at a given level:
     -- chips = base_chips + (level - 1) * chips_per_level
     -- mult  = base_mult  + (level - 1) * mult_per_level
+    -- Per-level values match the reference hand table (reference game.lua:2002-2013).
     self.hand_stats = {
-        [1]  = { level = 1, base_chips = 160, base_mult = 16, chips_per_level = 40, mult_per_level = 3 }, -- Flush Five
-        [2]  = { level = 1, base_chips = 140, base_mult = 14, chips_per_level = 40, mult_per_level = 3 }, -- Flush House
+        [1]  = { level = 1, base_chips = 160, base_mult = 16, chips_per_level = 50, mult_per_level = 3 }, -- Flush Five
+        [2]  = { level = 1, base_chips = 140, base_mult = 14, chips_per_level = 40, mult_per_level = 4 }, -- Flush House
         [3]  = { level = 1, base_chips = 120, base_mult = 12, chips_per_level = 35, mult_per_level = 3 }, -- Five of a Kind
-        [4]  = { level = 1, base_chips = 100, base_mult = 8,  chips_per_level = 40, mult_per_level = 3 }, -- Straight Flush
+        [4]  = { level = 1, base_chips = 100, base_mult = 8,  chips_per_level = 40, mult_per_level = 4 }, -- Straight Flush
         [5]  = { level = 1, base_chips = 60,  base_mult = 7,  chips_per_level = 30, mult_per_level = 3 }, -- Four of a Kind
         [6]  = { level = 1, base_chips = 40,  base_mult = 4,  chips_per_level = 25, mult_per_level = 2 }, -- Full House
         [7]  = { level = 1, base_chips = 35,  base_mult = 4,  chips_per_level = 15, mult_per_level = 2 }, -- Flush
-        [8]  = { level = 1, base_chips = 30,  base_mult = 4,  chips_per_level = 30, mult_per_level = 2 }, -- Straight
+        [8]  = { level = 1, base_chips = 30,  base_mult = 4,  chips_per_level = 30, mult_per_level = 3 }, -- Straight
         [9]  = { level = 1, base_chips = 30,  base_mult = 3,  chips_per_level = 20, mult_per_level = 2 }, -- Three of a Kind
         [10] = { level = 1, base_chips = 20,  base_mult = 2,  chips_per_level = 20, mult_per_level = 1 }, -- Two Pair
         [11] = { level = 1, base_chips = 10,  base_mult = 2,  chips_per_level = 15, mult_per_level = 1 }, -- Pair
         [12] = { level = 1, base_chips = 5,   base_mult = 1,  chips_per_level = 10, mult_per_level = 1 }, -- High Card
     }
-    self.button_mapping = {
-        a = G.F_SWAP_AB_BUTTONS and 'b' or nil,
-        b = G.F_SWAP_AB_BUTTONS and 'a' or nil,
-        y = G.F_SWAP_XY_BUTTONS and 'x' or nil,
-        x = G.F_SWAP_XY_BUTTONS and 'y' or nil,
-    }
+    -- Empty: the A/B and X/Y swap flags this used to read were console-specific and
+    -- have no 3DS equivalent. Rebinding lives in InputBindings.
+    self.button_mapping = {}
     self.keybind_mapping = {{
         a = 'dpleft',
         d = 'dpright',
