@@ -1302,14 +1302,6 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
         for (int i = 0; i < 3; i++)
             colours[c][i] = (float)luaL_checknumber(L, 7 + c * 3 + i);
 
-    if (!g_bd.rampReady)
-    {
-        g_bd.reason = "ramp texture init failed";
-        luax::PushBoolean(L, false);
-        lua_pushstring(L, g_bd.reason);
-        return 2;
-    }
-
     /* Everything that is a pure function of time, including both shaders' min() calls,
        resolved once here rather than per vertex. A and B fold each shader's swirl into the
        same base + A*radius + B shape; K carries whatever scales the field's length on its way
@@ -1351,6 +1343,18 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
         BuildRamp(mode, contrastMod);
         g_bd.rampMode = mode;
         g_bd.rampKey  = contrastMod;
+    }
+
+    /* Checked AFTER the build, which is the only order that works: rampReady starts false and
+       BuildRamp is what sets it. Testing it beforehand -- as an earlier revision did, having
+       moved the build down into the mode branch without moving the check with it -- declines
+       on the first call and therefore on every call, and the backdrop silently never draws. */
+    if (!g_bd.rampReady)
+    {
+        g_bd.reason = "ramp texture init failed";
+        luax::PushBoolean(L, false);
+        lua_pushstring(L, g_bd.reason);
+        return 2;
     }
 
     Grid* gridPtr = EnsureGrid(mode, width);

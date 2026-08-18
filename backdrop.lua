@@ -269,20 +269,48 @@ end
 --- case the caller paints its own background instead.
 --- @param width number screen width, which selects the prebuilt grid
 --- @return boolean drawn
+local reported = false
+
+--- Write one line saying why the backdrop is not drawing, once per process.
+---
+--- This is not the boot guard that used to live here: it changes no behaviour, disables
+--- nothing, and keeps no state across boots. It exists because the alternative is a silent
+--- fallback -- the backdrop declined on hardware for two builds running and looked exactly
+--- like a design decision, which cost more round trips than the file ever will.
+local function report_once(why)
+    if reported then return end
+    reported = true
+    local f = love and love.filesystem
+    if f and f.write then pcall(f.write, "backdrop_why.txt", why .. "\n") end
+end
+
 function Backdrop.draw(width)
-    if not Backdrop.is_supported() then return false end
+    if not Backdrop.is_supported() then
+        report_once(("unsupported: drawBackdrop=%s new3ds=%s"):format(
+            tostring(love.graphics and love.graphics.drawBackdrop ~= nil),
+            tostring(Console.is_new_3ds())))
+        return false
+    end
 
     -- The two shaders take different scalars in p1/p2; see the binding's header.
     local p1 = (state.mode == Backdrop.MODE_BACKGROUND) and state.spin_time or state.vort_speed
     local p2 = (state.mode == Backdrop.MODE_BACKGROUND) and state.spin or state.vort_offset
 
-    local ok, drawn = pcall(love.graphics.drawBackdrop, width,
+    local ok, drawn, reason = pcall(love.graphics.drawBackdrop, width,
         state.mode, state.time, p1, p2, state.contrast,
         state.c1[1], state.c1[2], state.c1[3],
         state.c2[1], state.c2[2], state.c2[3],
         state.c3[1], state.c3[2], state.c3[3])
 
-    return (ok and drawn) and true or false
+    if not ok then
+        report_once("binding raised: " .. tostring(drawn))
+        return false
+    end
+    if not drawn then
+        report_once("declined: " .. tostring(reason))
+        return false
+    end
+    return true
 end
 
 --- Current parameters, for the tests to assert easing without reaching into the module.
