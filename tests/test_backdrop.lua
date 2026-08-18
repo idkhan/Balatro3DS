@@ -42,11 +42,67 @@ suite.test("the menu palette is the reference's red and blue", function()
     T.assert_eq(s.vort_speed, 0.4, "vort_speed matches game.lua:1552")
 end)
 
-suite.test("an unknown palette falls back to the menu one", function()
+suite.test("an unknown state falls back to the blind palette", function()
     local Backdrop = fresh()
-    Backdrop.set_palette("no such state")
-    T.assert_eq(Backdrop.debug_state().c1[1], Backdrop.PALETTES.menu.c1[1],
-        "unknown names must not leave the colours undefined")
+    Backdrop.set_state("no such state", true)
+    T.assert_eq(Backdrop.debug_state().c1[1], Backdrop.STATES.blind.c1[1],
+        "unknown names must fall back to a real palette, never to black")
+end)
+
+--- The two shaders are different fields, not one field recoloured, so the mode has to travel
+--- with the palette.
+suite.test("selecting an in-run state switches shader mode", function()
+    local Backdrop = fresh()
+    T.assert_eq(Backdrop.debug_state().mode, Backdrop.MODE_SPLASH, "menu starts on splash.fs")
+    Backdrop.set_state("tarot", true)
+    T.assert_eq(Backdrop.debug_state().mode, Backdrop.MODE_BACKGROUND,
+        "an in-run state moves to background.fs")
+    Backdrop.set_menu()
+    T.assert_eq(Backdrop.debug_state().mode, Backdrop.MODE_SPLASH, "and back again")
+end)
+
+--- The reference eases background colour over 0.6 s rather than cutting.
+suite.test("a state change eases rather than snapping", function()
+    local Backdrop = fresh()
+    Backdrop.set_state("blind", true)
+    local before = Backdrop.debug_state().c1[1]
+    Backdrop.set_state("standard")
+
+    Backdrop.update(1 / 60)
+    local mid = Backdrop.debug_state().c1[1]
+    T.assert_true(mid ~= before, "it started moving")
+    T.assert_true(math.abs(mid - Backdrop.STATES.standard.c1[1]) > 0.01,
+        "but did not arrive in one frame")
+
+    for _ = 1, 120 do Backdrop.update(1 / 60) end
+    T.assert_true(math.abs(Backdrop.debug_state().c1[1] - Backdrop.STATES.standard.c1[1]) < 0.001,
+        "and lands exactly on the target")
+end)
+
+--- game.lua:2468 -- the spin timer advances only in proportion to the spin amount, which is
+--- what stops a parked spin from rotating the field.
+suite.test("the spin timer only advances with spin", function()
+    local Backdrop = fresh()
+    Backdrop.set_state("blind", true)
+    for _ = 1, 30 do Backdrop.update(1 / 60) end
+    T.assert_eq(Backdrop.debug_state().spin_time, 0, "parked spin leaves the timer alone")
+
+    Backdrop.set_spin(1)
+    for _ = 1, 120 do Backdrop.update(1 / 60) end
+    T.assert_true(Backdrop.debug_state().spin > 0.9, "spin eases in")
+    T.assert_true(Backdrop.debug_state().spin_time > 0, "and the timer moves")
+end)
+
+--- A boss's colour is per-boss, so it is computed rather than tabulated.
+suite.test("a boss colour is derived from the blind's own colour", function()
+    local Backdrop = fresh()
+    Backdrop.set_boss_colour({ 0.8, 0.2, 0.2 })
+    Backdrop.snap()
+    local st = Backdrop.debug_state()
+    T.assert_eq(st.mode, Backdrop.MODE_BACKGROUND, "boss blinds use background.fs")
+    T.assert_true(math.abs(st.c1[1] - 0.8) < 0.001, "colour_1 is the boss colour itself")
+    T.assert_true(st.c2[1] > st.c1[1] * 0.7 - 0.001, "colour_2 is lightened")
+    T.assert_true(math.abs(st.c3[1] - 0.32) < 0.001, "colour_3 is darkened to 0.4")
 end)
 
 --- Committed code has to survive a runtime without the patch: desktop LOVE, nest, and this
@@ -68,8 +124,9 @@ suite.test("with a binding it forwards the parameters splash.fs takes", function
         Backdrop.update(1 / 60)
         T.assert_eq(Backdrop.draw(320), true, "it reports having drawn")
         T.assert_eq(seen[1], 320, "screen width selects the grid")
-        T.assert_eq(seen[3], 0.4, "vort_speed is forwarded")
-        T.assert_eq(#seen, 10, "width, three scalars and two colours")
+        T.assert_eq(seen[2], Backdrop.MODE_SPLASH, "the shader mode is forwarded")
+        T.assert_eq(seen[4], 0.4, "and the menu's vort_speed")
+        T.assert_eq(#seen, 15, "width, mode, four scalars and three colours")
     end)
 
     love.graphics.drawBackdrop = saved

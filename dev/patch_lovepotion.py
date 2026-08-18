@@ -912,6 +912,19 @@ namespace
     constexpr int RAMP_W = 256;
     constexpr int RAMP_H = 8;
 
+    /* The reference uses two different shaders. The main menu is splash.fs -- two colours over
+       a hardcoded slate, a swirl that spreads with radius from the outset, a smoke term with a
+       soft knee, and a white bloom on the brightest cores (game.lua:1548). Every other screen
+       is background.fs -- three eased colours, a contrast that also reshapes the colour
+       weights, and a swirl whose radius dependence only appears as spin_amount rises
+       (game.lua:2283). They share the five warp iterations exactly and little else. */
+    enum FieldMode
+    {
+        MODE_SPLASH     = 0,
+        MODE_BACKGROUND = 1,
+        MODE_COUNT      = 2,
+    };
+
     struct Grid
     {
         float* vbo    = nullptr;   /* interleaved, GPU-visible */
@@ -930,8 +943,11 @@ namespace
         u16* ibo       = nullptr;
         C3D_Tex ramp {};
         bool rampReady = false;
-        bool rampBuilt = false;
-        Grid grids[2];
+        /* [mode][screen]. background.fs offsets uv by 0.12 in x and splash.fs does not, so
+           the precomputed swirl angle and radius differ between them. */
+        Grid grids[MODE_COUNT][2];
+        int rampMode  = -1;
+        float rampKey = -1.0e9f;
         const char* reason = "ok";
         char report[192]   = "not attempted";
     };
@@ -990,7 +1006,7 @@ namespace
        Texture memory is bytes [A,B,G,R], so as a little-endian u32 the red weight takes the
        TOP byte. The TexEnv constant registers below use the opposite order. Confusing the two
        channel-scrambles the whole effect. */
-    void BuildRamp()
+    void BuildRamp(int mode, float contrastMod)
     {
         if (!g_bd.rampReady)
         {
@@ -1007,26 +1023,43 @@ namespace
 
         for (int x = 0; x < RAMP_W; x++)
         {
-            const float smoke = (float)x / (float)(RAMP_W - 1) * 4.0f - 2.0f;
+            const float t = (float)x / (float)(RAMP_W - 1);
+            float c1p, c2p, flash = 0.0f;
 
-            float c1p = 1.0f - 2.0f * std::fabs(1.0f - smoke);
-            float c2p = 1.0f - 2.0f * smoke;
+            if (mode == MODE_BACKGROUND)
+            {
+                /* background.fs spans 0..2 and its factors ARE contrast_mod, which is why this
+                   ramp has to be rebuilt whenever contrast eases to a new value. It has no
+                   bloom term. */
+                const float paint = t * 2.0f;
+                c1p = 1.0f - contrastMod * std::fabs(1.0f - paint);
+                c2p = 1.0f - contrastMod * std::fabs(paint);
+                c1p = c1p < 0.0f ? 0.0f : c1p;
+                c2p = c2p < 0.0f ? 0.0f : c2p;
+            }
+            else
+            {
+            const float smoke = t * 4.0f - 2.0f;
+
+            c1p = 1.0f - 2.0f * std::fabs(1.0f - smoke);
+            c2p = 1.0f - 2.0f * smoke;
             c1p = c1p < 0.0f ? 0.0f : c1p;
             c2p = c2p < 0.0f ? 0.0f : c2p;
 
-            /* splash.fs never clamps these: at the blue core c2p runs past 3, and colour_2 * 3
-               is what blows out toward white on screen. An 8-bit channel cannot carry that, so
-               the channel clamps at 1 and the excess feeds the bloom, which is where the
+            /* splash.fs never clamps these: at the blue core c2p runs past 3, and that excess
+               is what blows out toward white on screen. An 8-bit channel cannot carry it, so
+               the channel clamps and the excess feeds the bloom -- which is where the
                reference's over-bright core visually ends up anyway. */
             const float peak = c1p > c2p ? c1p : c2p;
+
+            flash = peak * 5.0f - 4.4f;
+            flash = flash < 0.0f ? 0.0f : (flash > 1.0f ? 1.0f : flash);
+            }
 
             const float sum = c1p + c2p;
             const float cb  = 1.0f - (sum > 1.0f ? 1.0f : sum);
             c1p = c1p > 1.0f ? 1.0f : c1p;
             c2p = c2p > 1.0f ? 1.0f : c2p;
-
-            float flash = peak * 5.0f - 4.4f;
-            flash = flash < 0.0f ? 0.0f : (flash > 1.0f ? 1.0f : flash);
 
             const u32 texel = ((u32)(c1p * 255.0f) << 24) | ((u32)(c2p * 255.0f) << 16) |
                               ((u32)(cb * 255.0f) << 8) | (u32)(flash * 255.0f);
@@ -1042,7 +1075,7 @@ namespace
        shader, which applies the renderer's ortho projection like any other geometry. The swirl
        angle and radius depend only on the vertex, so they are computed once here and kept off
        to the side rather than recomputed 60 times a second. */
-    bool BuildGrid(Grid& grid, int width)
+    bool BuildGrid(Grid& grid, int width, int mode)
     {
         const float w = (float)width, h = 240.0f;
         const float diag = std::sqrt(w * w + h * h);
@@ -1064,7 +1097,8 @@ namespace
 
                 /* splash.fs: uv = (screen - 0.5*size)/length(size). No 0.12 offset -- that one
                    belongs to background.fs, and is what puts its swirl off-centre. */
-                const float ux = (u * w - 0.5f * w) / diag;
+                const float ux = (u * w - 0.5f * w) / diag
+                                 - (mode == MODE_BACKGROUND ? 0.12f : 0.0f);
                 const float uy = (t * h - 0.5f * h) / diag;
 
                 grid.angle[i]  = std::atan2(uy, ux);
@@ -1093,7 +1127,7 @@ namespace
        This is splash.fs line for line: the radius-dependent swirl, five domain-warp iterations,
        and the smoke term with its soft knee below 0.2. Only the ramp coordinate is written
        back; positions never move. */
-    void UpdateField(Grid& grid, float sp, float A, float B, float K)
+    void UpdateField(Grid& grid, int mode, float sp, float A, float B, float K)
     {
         /* One band per frame. Rows rather than scattered vertices deliberately: a spatially
            interleaved update would put neighbouring vertices one frame apart and shimmer,
@@ -1112,7 +1146,10 @@ namespace
             for (int col = 0; col < stride; col++, i++, v += FLOATS_PER_VERT)
             {
                 const float len = grid.radius[i];
-                const float a   = grid.angle[i] + A * len + B;
+                /* Both shaders reduce to the same shape -- a base angle, a radius term and a
+                   per-frame constant -- so the caller folds each one's arithmetic into A and B
+                   and this loop never learns which shader it is running. */
+                const float a = grid.angle[i] + A * len + B;
 
                 float x = len * 30.0f * FastCos(a);
                 float y = len * 30.0f * FastSin(a);
@@ -1137,17 +1174,46 @@ namespace
                    VFP does; the reciprocal-square-root estimate followed by one multiply is
                    materially cheaper and the error lands far below a ramp texel. */
                 const float d2 = x * x + y * y;
-                float smoke = 1.5f + (d2 > 1.0e-12f ? d2 / std::sqrt(d2) : 0.0f) * 0.12f - K;
+                const float dist = d2 > 1.0e-12f ? d2 / std::sqrt(d2) : 0.0f;
 
-                /* splash.fs flattens everything under 0.2 to 60% slope. Branchless:
-                   out = smoke - 0.4*min(smoke - 0.2, 0) */
-                const float d = smoke - 0.2f;
-                smoke -= 0.4f * (d < 0.0f ? d : 0.0f);
+                if (mode == MODE_BACKGROUND)
+                {
+                    /* background.fs: clamp(length(uv)*0.035*contrast_mod, 0, 2), no knee.
+                       K carries the 0.035*contrast_mod factor. */
+                    float paint = dist * K;
+                    paint = paint < 0.0f ? 0.0f : (paint > 2.0f ? 2.0f : paint);
+                    v[0] = paint * 0.5f;
+                }
+                else
+                {
+                    float smoke = 1.5f + dist * 0.12f - K;
 
-                smoke = smoke < -2.0f ? -2.0f : (smoke > 2.0f ? 2.0f : smoke);
-                v[0] = (smoke + 2.0f) * 0.25f;
+                    /* splash.fs flattens everything under 0.2 to 60% slope. Branchless:
+                       out = smoke - 0.4*min(smoke - 0.2, 0) */
+                    const float d = smoke - 0.2f;
+                    smoke -= 0.4f * (d < 0.0f ? d : 0.0f);
+
+                    smoke = smoke < -2.0f ? -2.0f : (smoke > 2.0f ? 2.0f : smoke);
+                    v[0] = (smoke + 2.0f) * 0.25f;
+                }
             }
         }
+    }
+
+    /* Grids are built the first time a mode and screen are actually asked for. Four exist --
+       two shaders by two screen widths -- and a session that never leaves the menu should not
+       pay for the two it will never draw. */
+    Grid* EnsureGrid(int mode, int width)
+    {
+        Grid& grid = g_bd.grids[mode][(width == 320) ? 1 : 0];
+        if (grid.built)
+            return &grid;
+        if (!BuildGrid(grid, width, mode))
+        {
+            g_bd.reason = "grid alloc failed";
+            return nullptr;
+        }
+        return &grid;
     }
 
     bool EnsureBackdrop()
@@ -1182,17 +1248,6 @@ namespace
             }
         }
 
-        if (!BuildGrid(g_bd.grids[0], 400))
-        {
-            g_bd.reason = "top grid alloc failed";
-            return false;
-        }
-        if (!BuildGrid(g_bd.grids[1], 320))
-        {
-            g_bd.reason = "bottom grid alloc failed";
-            return false;
-        }
-
         g_bd.reason = "ok";
         g_bd.ready  = true;
         std::snprintf(g_bd.report, sizeof(g_bd.report),
@@ -1213,11 +1268,18 @@ static constexpr luaL_Reg functions[] =
     { "set3D",    Wrap_Graphics::Set3D    },
     { "getDepth", Wrap_Graphics::GetDepth }
 };""",
-            """/* Balatro3DS: drawBackdrop(width, time, vortSpeed, vortOffset, c1r,c1g,c1b, c2r,c2g,c2b)
+            """/* Balatro3DS: drawBackdrop(width, mode, time, p1, p2, contrast,
+                              c1r,c1g,c1b, c2r,c2g,c2b, c3r,c3g,c3b)
 
-   One draw call for the whole menu background, mirroring what Game:main_menu sends splash.fs
-   (game.lua:1548-1556). Lua never touches GPU state. Returns (drawn, report); false is the
-   caller's cue to paint its fallback gradient instead. */
+   One draw call for the whole background, in either shader the reference uses.
+
+     mode 0, splash.fs     -- the main menu. p1 = vort_speed, p2 = vort_offset; contrast and
+                              the third colour are unused (that shader hardcodes its slate).
+     mode 1, background.fs -- every other screen. p1 = spin_time, p2 = spin_amount, and all
+                              three colours and the contrast are live.
+
+   Lua never touches GPU state. Returns (drawn, report); false is the caller's cue to paint its
+   fallback gradient instead. */
 int Wrap_Graphics::DrawBackdrop(lua_State* L)
 {
     if (!EnsureBackdrop())
@@ -1227,21 +1289,18 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
         return 2;
     }
 
-    const int width        = (int)luaL_checknumber(L, 1);
-    const float time       = (float)luaL_checknumber(L, 2);
-    const float vortSpeed  = (float)luaL_checknumber(L, 3);
-    const float vortOffset = (float)luaL_checknumber(L, 4);
+    const int width      = (int)luaL_checknumber(L, 1);
+    const int modeArg    = (int)luaL_checknumber(L, 2);
+    const int mode       = (modeArg == MODE_BACKGROUND) ? MODE_BACKGROUND : MODE_SPLASH;
+    const float time     = (float)luaL_checknumber(L, 3);
+    const float p1       = (float)luaL_checknumber(L, 4);
+    const float p2       = (float)luaL_checknumber(L, 5);
+    const float contrast = (float)luaL_checknumber(L, 6);
 
-    float colours[2][3];
-    for (int c = 0; c < 2; c++)
+    float colours[3][3];
+    for (int c = 0; c < 3; c++)
         for (int i = 0; i < 3; i++)
-            colours[c][i] = (float)luaL_checknumber(L, 5 + c * 3 + i);
-
-    if (!g_bd.rampBuilt)
-    {
-        BuildRamp();
-        g_bd.rampBuilt = true;
-    }
+            colours[c][i] = (float)luaL_checknumber(L, 7 + c * 3 + i);
 
     if (!g_bd.rampReady)
     {
@@ -1251,19 +1310,57 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
         return 2;
     }
 
-    /* Everything that is a pure function of time, including both of splash.fs's min() calls,
-       resolved once here rather than per vertex. */
-    const float speed  = time * vortSpeed;
-    const float capped = speed < 6.0f ? speed : 6.0f;
+    /* Everything that is a pure function of time, including both shaders' min() calls,
+       resolved once here rather than per vertex. A and B fold each shader's swirl into the
+       same base + A*radius + B shape; K carries whatever scales the field's length on its way
+       to the ramp. */
+    float sp, A, B, K, contrastMod;
 
-    const float sp = time * 6.0f * vortSpeed + vortOffset + 1033.0f;
-    const float A  = 2.2f + 0.4f * capped;
-    const float B  = -1.0f - speed * 0.05f - capped * speed * 0.02f + vortOffset;
+    if (mode == MODE_BACKGROUND)
+    {
+        /* background.fs's swirl is
+             atan2 + (spin_time*0.1 + 302.2) - 10*(spin_amount*len + (1 - spin_amount))
+           which rearranges to base + (-10*spin_amount)*len + (speed - 10 + 10*spin_amount).
+           With spin parked at zero the radius term vanishes and it becomes a pure rotation,
+           which is why an idle in-run backdrop churns without spiralling. */
+        const float speed = p1 * 0.1f + 302.2f;
 
-    const float rev = (time * 1.2f - 4.0f) < 10.0f ? (time * 1.2f - 4.0f) : 10.0f;
-    const float K   = 0.17f * rev;
+        sp = time * 2.0f;
+        A  = -10.0f * p2;
+        B  = speed - 10.0f + 10.0f * p2;
 
-    Grid& grid = g_bd.grids[(width == 320) ? 1 : 0];
+        contrastMod = 0.25f * contrast + 0.5f * p2 + 1.2f;
+        K = 0.035f * contrastMod;
+    }
+    else
+    {
+        const float speed  = time * p1;
+        const float capped = speed < 6.0f ? speed : 6.0f;
+
+        sp = time * 6.0f * p1 + p2 + 1033.0f;
+        A  = 2.2f + 0.4f * capped;
+        B  = -1.0f - speed * 0.05f - capped * speed * 0.02f + p2;
+
+        const float rev = (time * 1.2f - 4.0f) < 10.0f ? (time * 1.2f - 4.0f) : 10.0f;
+        K = 0.17f * rev;
+        contrastMod = 0.0f;   /* splash.fs's weights are fixed; its ramp ignores this */
+    }
+
+    if (g_bd.rampMode != mode || g_bd.rampKey != contrastMod)
+    {
+        BuildRamp(mode, contrastMod);
+        g_bd.rampMode = mode;
+        g_bd.rampKey  = contrastMod;
+    }
+
+    Grid* gridPtr = EnsureGrid(mode, width);
+    if (gridPtr == nullptr)
+    {
+        luax::PushBoolean(L, false);
+        lua_pushstring(L, g_bd.reason);
+        return 2;
+    }
+    Grid& grid = *gridPtr;
 
     /* The banded refresh leaves the other bands holding whatever was there before, so the
        first frame on each grid has to fill all of them -- otherwise half the screen renders
@@ -1271,12 +1368,12 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
     if (!grid.primed)
     {
         for (int i = 0; i < FIELD_BANDS; i++)
-            UpdateField(grid, sp, A, B, K);
+            UpdateField(grid, mode, sp, A, B, K);
         grid.primed = true;
     }
     else
     {
-        UpdateField(grid, sp, A, B, K);
+        UpdateField(grid, mode, sp, A, B, K);
     }
 
     auto& renderer = Renderer<Console::CTR>::Instance();
@@ -1310,13 +1407,21 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
                                            GPU_TEVOP_RGB_SRC_B };
     const float slate[3] = { 0.6f * 79.0f / 255.0f, 0.6f * 99.0f / 255.0f,
                              0.6f * 103.0f / 255.0f };
-    const float* band[3] = { colours[0], colours[1], slate };
+
+    /* background.fs weights its whole colour sum by (1 - k) and adds k*colour_1 back as a
+       constant; splash.fs has no such term, so k is zero there and the scale is 1. */
+    const float k = (mode == MODE_BACKGROUND)
+                        ? 0.3f / (contrast <= 0.0f ? 1.0f : contrast) : 0.0f;
+    const float scale = 1.0f - k;
+    const float* band[3] = { colours[0], colours[1],
+                             (mode == MODE_BACKGROUND) ? colours[2] : slate };
 
     for (int stage = 0; stage < 3; stage++)
     {
         C3D_TexEnv* env = C3D_GetTexEnv(stage);
         C3D_TexEnvInit(env);
-        C3D_TexEnvColor(env, pack(band[stage][0], band[stage][1], band[stage][2], 1.0f));
+        C3D_TexEnvColor(env, pack(band[stage][0] * scale, band[stage][1] * scale,
+                                  band[stage][2] * scale, 1.0f));
 
         if (stage == 0)
         {
@@ -1338,11 +1443,25 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
     {
         C3D_TexEnv* env = C3D_GetTexEnv(3);
         C3D_TexEnvInit(env);
-        C3D_TexEnvColor(env, pack(1.0f, 1.0f, 1.0f, 1.0f));
-        C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PREVIOUS, GPU_TEXTURE0);
-        C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR,
-                        GPU_TEVOP_RGB_SRC_ALPHA);
-        C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+        if (mode == MODE_BACKGROUND)
+        {
+            /* background.fs's constant term, k*colour_1, added on top. */
+            C3D_TexEnvColor(env, pack(colours[0][0] * k, colours[0][1] * k,
+                                      colours[0][2] * k, 1.0f));
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, GPU_PRIMARY_COLOR);
+            C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR,
+                            GPU_TEVOP_RGB_SRC_COLOR);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_ADD);
+        }
+        else
+        {
+            /* The white bloom on the brightest cores, without which the arms read flat. */
+            C3D_TexEnvColor(env, pack(1.0f, 1.0f, 1.0f, 1.0f));
+            C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PREVIOUS, GPU_TEXTURE0);
+            C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR,
+                            GPU_TEVOP_RGB_SRC_ALPHA);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+        }
         C3D_TexEnvSrc(env, C3D_Alpha, GPU_CONSTANT, GPU_CONSTANT, GPU_CONSTANT);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
     }

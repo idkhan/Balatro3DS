@@ -1690,6 +1690,70 @@ local AUTOSAVE_STATES = {
     OPEN_BOOSTER = true,
 }
 
+--- Which backdrop palette a game state calls for, following `ease_background_colour_blind`
+--- (`common_events.lua:332-358`). The reference recolours the background on every state
+--- change; this is that table, minus the states it leaves alone.
+---
+--- Absent from this map means "leave the backdrop as it is", which is what the reference does
+--- for transient states -- HAND_PLAYED, DRAW_TO_HAND and the like keep whatever the blind set,
+--- and recolouring on each of them would strobe.
+local BACKDROP_STATES = {
+    MENU          = "menu",
+    SPLASH        = "menu",
+    TAROT_PACK    = "tarot",
+    PLANET_PACK   = "planet",
+    SPECTRAL_PACK = "spectral",
+    STANDARD_PACK = "standard",
+    BUFFOON_PACK  = "buffoon",
+    SHOP          = "shop",
+    GAME_OVER     = "boss",
+    BLIND_SELECT  = "blind",
+}
+
+--- Point the backdrop at the palette a state calls for.
+---
+--- Boss blinds are resolved from the blind's own colour rather than the table, because
+--- `ease_background_colour_blind` derives theirs from `boss_colour` per blind, and the
+--- showdown bosses get the blue-and-red pair outright (`common_events.lua:352`).
+function Game:sync_backdrop_state(state_id)
+    local Backdrop = self._backdrop or require("backdrop")
+    self._backdrop = Backdrop
+    if not Backdrop.is_supported() then return end
+
+    if state_id == self.STATES.MENU or state_id == self.STATES.SPLASH then
+        Backdrop.set_menu()
+        return
+    end
+
+    if state_id == self.STATES.WON or (self.GAME and self.GAME.won) then
+        Backdrop.set_state("won")
+        return
+    end
+
+    local name
+    for key, palette in pairs(BACKDROP_STATES) do
+        if self.STATES[key] == state_id then name = palette break end
+    end
+
+    -- A live boss blind outranks the table: its colour is per-blind.
+    local blind = self.GAME and self.GAME.blind
+    if blind and (state_id == self.STATES.SELECTING_HAND or state_id == self.STATES.NEW_ROUND
+        or name == "blind") then
+        if blind.boss then
+            if blind.showdown then
+                Backdrop.set_state("showdown")
+            else
+                Backdrop.set_boss_colour(blind.boss_colour or blind.colour)
+            end
+            return
+        end
+        Backdrop.set_state("blind")
+        return
+    end
+
+    if name then Backdrop.set_state(name) end
+end
+
 function Game:set_state(state_id)
     local prev = self.STATE
     local menu = self.STATES and self.STATES.MENU
@@ -1697,6 +1761,9 @@ function Game:set_state(state_id)
         self:unload_animation_atlas("menu")
     end
     self.STATE = state_id
+    if prev ~= state_id and self.sync_backdrop_state then
+        self:sync_backdrop_state(state_id)
+    end
     -- Check-point on arrival at a stable state, the way the reference saves on every state
     -- transition. Without this the only saves were deck-select, save-and-quit and victory,
     -- so closing the lid mid-run lost the run.

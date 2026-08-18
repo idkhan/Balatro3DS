@@ -210,8 +210,17 @@ function love.draw(screen)
         ScreenWipe.draw(G, screen)
         return
     end
+    -- The backdrop is not a menu decoration in the reference: it is behind every screen, and
+    -- the palette it uses is part of how a state reads. It only became menu-only here because
+    -- the old implementation was a 4 MiB sprite sheet that could not stay resident during a
+    -- run. It is generated now, so it goes everywhere.
+    --
+    -- The menu keeps its own path because that screen also paints a gradient fallback when the
+    -- backdrop is unavailable, which every other screen already has its own background for.
     if G and G.STATE == G.STATES.MENU then
         MainMenuUI.draw_background(G, screen)
+    elseif G then
+        Backdrop.draw((screen == "bottom") and 320 or 400)
     end
     if screen == "bottom" then
         love.graphics.setColor(1, 1, 1)
