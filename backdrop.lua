@@ -173,7 +173,8 @@ function Backdrop.reset()
 end
 
 --- Put the backdrop on the menu shader.
-function Backdrop.set_menu(immediate)
+function Backdrop.set_menu()
+    local changed_shader = (state.mode ~= Backdrop.MODE_SPLASH)
     state.mode = Backdrop.MODE_SPLASH
     local p = Backdrop.MENU
     state.vort_speed = p.vort_speed
@@ -181,7 +182,7 @@ function Backdrop.set_menu(immediate)
         state.t1[i], state.t2[i], state.t3[i] = p.c1[i], p.c2[i], 0
     end
     state.contrast_target = 1.0
-    if immediate ~= false then Backdrop.snap() end
+    if changed_shader then Backdrop.snap() end
 end
 
 --- Put the backdrop on the in-run shader with one of the reference's state palettes. Unknown
@@ -191,12 +192,18 @@ end
 --- @param immediate boolean|nil snap rather than ease
 function Backdrop.set_state(name, immediate)
     local p = Backdrop.STATES[name] or Backdrop.STATES.blind
+    -- Easing across a change of SHADER is meaningless: splash.fs and background.fs are
+    -- different fields, so a 0.6 s crossfade between them just renders one field wearing the
+    -- other's colours. That is what made Continue hold the menu's red and blue over the shop
+    -- for a beat instead of arriving green. Within a shader, easing is the reference's own
+    -- behaviour and is kept.
+    local changed_shader = (state.mode ~= Backdrop.MODE_BACKGROUND)
     state.mode = Backdrop.MODE_BACKGROUND
     for i = 1, 3 do
         state.t1[i], state.t2[i], state.t3[i] = p.c1[i], p.c2[i], p.c3[i]
     end
     state.contrast_target = p.contrast or 1.0
-    if immediate then Backdrop.snap() end
+    if immediate or changed_shader then Backdrop.snap() end
 end
 
 --- A boss blind's colour is per-boss, so it cannot live in a static table. Applies the
@@ -205,6 +212,7 @@ end
 --- @param colour table {r, g, b} the boss's own colour
 function Backdrop.set_boss_colour(colour)
     if type(colour) ~= "table" then return Backdrop.set_state("boss") end
+    local changed_shader = (state.mode ~= Backdrop.MODE_BACKGROUND)
     state.mode = Backdrop.MODE_BACKGROUND
     for i = 1, 3 do
         local c = tonumber(colour[i]) or 0
@@ -214,6 +222,7 @@ function Backdrop.set_boss_colour(colour)
         state.t3[i] = c * 0.4
     end
     state.contrast_target = 2.0
+    if changed_shader then Backdrop.snap() end
 end
 
 --- Land every eased value on its target at once.

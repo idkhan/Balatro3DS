@@ -895,11 +895,16 @@ namespace
 
     /* The field is refreshed in this many row bands, one band per frame, so a frame pays a
        fraction of the grid rather than all of it. The warp's phase moves about 0.3 rad/s, so
-       the oldest band in a four-band rotation is three frames -- about 0.015 rad -- behind
-       the newest. The seams that produces sit on single rows and are not resolvable. This is
-       what lets a grid this dense be carried at all: the first hardware measurement put the
-       whole-grid-per-frame version at 14.8 ms on a New 3DS, which is 30 fps. */
-    constexpr int FIELD_BANDS = 4;
+       the oldest band in an eight-band rotation trails the newest by seven frames, about
+       0.035 rad. The seams that produces sit on single rows of a 48-row grid and are not
+       resolvable against a field this soft; the whole point of the band split is that the
+       thing being sampled barely moves.
+
+       This is what lets a grid this dense be carried at all. The first hardware measurement of
+       a whole-grid-per-frame version was 14.8 ms on a New 3DS -- 30 fps -- and even after the
+       libm calls came out of the sine, a static shop frame was spending 3.7 ms of a 16.7 ms
+       budget here across both screens. Eight bands halve that again. */
+    constexpr int FIELD_BANDS = 8;
     constexpr int VERTS  = (GRID_W + 1) * (GRID_H + 1);
     constexpr int INDICES = GRID_W * GRID_H * 6;
 

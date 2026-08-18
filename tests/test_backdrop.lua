@@ -61,8 +61,21 @@ suite.test("selecting an in-run state switches shader mode", function()
     T.assert_eq(Backdrop.debug_state().mode, Backdrop.MODE_SPLASH, "and back again")
 end)
 
---- The reference eases background colour over 0.6 s rather than cutting.
-suite.test("a state change eases rather than snapping", function()
+--- Crossing between the two shaders must snap: they are different fields, so easing renders
+--- one wearing the other's colours. This is what held the menu's red and blue over the shop
+--- for a beat after Continue.
+suite.test("changing shader snaps instead of easing", function()
+    local Backdrop = fresh()
+    T.assert_eq(Backdrop.debug_state().mode, Backdrop.MODE_SPLASH, "starts on the menu shader")
+    Backdrop.set_state("blind")
+    local st = Backdrop.debug_state()
+    T.assert_eq(st.mode, Backdrop.MODE_BACKGROUND, "mode switched")
+    T.assert_eq(st.c1[1], Backdrop.STATES.blind.c1[1],
+        "and the colour arrived with it rather than easing from the menu's")
+end)
+
+--- Within one shader the reference eases over 0.6 s rather than cutting.
+suite.test("a state change within a shader eases rather than snapping", function()
     local Backdrop = fresh()
     Backdrop.set_state("blind", true)
     local before = Backdrop.debug_state().c1[1]
