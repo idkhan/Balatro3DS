@@ -105,8 +105,8 @@ suite.test("a boss colour is derived from the blind's own colour", function()
     T.assert_true(math.abs(st.c3[1] - 0.32) < 0.001, "colour_3 is darkened to 0.4")
 end)
 
---- Committed code has to survive a runtime without the patch: desktop LOVE, nest, and this
---- stub all lack the binding.
+--- Committed code has to survive a runtime without the patch: desktop LOVE, nest, an Old 3DS
+--- and this stub all lack it, and every one of them must fall back rather than error.
 suite.test("without the binding it reports unsupported and draws nothing", function()
     local Backdrop = fresh()
     T.assert_eq(Backdrop.is_supported(), false, "the stub has no drawBackdrop")
@@ -148,99 +148,6 @@ suite.test("a throwing binding is contained", function()
     love.graphics.drawBackdrop = saved
     Backdrop.reset()
     if not ok then error(err, 0) end
-end)
-
---- The boot guard: the game must be incapable of hanging on boot twice. A boot that never
---- reaches "proven" leaves "pending" on the card; the next boot reads that as a fatal verdict
---- and refuses the backdrop for this revision. These tests drive the guard through an
---- in-memory filesystem, since the real one costs SD writes.
-local function with_guarded_fs(body)
-    local Backdrop = require("backdrop")
-    local files = {}
-    local saved = {
-        read = love.filesystem.read, write = love.filesystem.write,
-        drawBackdrop = love.graphics.drawBackdrop,
-    }
-    love.filesystem.read = function(name) return files[name] end
-    love.filesystem.write = function(name, data) files[name] = data return true end
-    local calls = {}
-    love.graphics.drawBackdrop = function(...) calls[#calls + 1] = { ... } return true, "cpu-field ok" end
-    Backdrop.reset()
-
-    local ok, err = pcall(body, Backdrop, files, calls)
-
-    love.filesystem.read, love.filesystem.write = saved.read, saved.write
-    love.graphics.drawBackdrop = saved.drawBackdrop
-    Backdrop.reset()
-    if not ok then error(err, 0) end
-end
-
-suite.test("a clean boot writes pending, then proven after the proof window", function()
-    with_guarded_fs(function(Backdrop, files)
-        T.assert_eq(Backdrop.draw(320), true, "first draw goes through")
-        T.assert_eq(files["backdrop_state.txt"], "pending " .. Backdrop.REVISION,
-            "the sentinel is on the card before anything can hang")
-
-        for _ = 1, Backdrop.PROOF_FRAMES do Backdrop.draw(320) end
-        T.assert_eq(files["backdrop_state.txt"], "proven " .. Backdrop.REVISION,
-            "surviving the window upgrades it")
-        T.assert_true(files["backdrop_trace.txt"]:find("marking proven", 1, true) ~= nil,
-            "and the trace closes out")
-    end)
-end)
-
-suite.test("a boot that died mid-proof disables the backdrop", function()
-    with_guarded_fs(function(Backdrop, files)
-        files["backdrop_state.txt"] = "pending " .. Backdrop.REVISION
-        Backdrop.reset()
-
-        T.assert_eq(Backdrop.draw(320), false, "the guard refuses to draw")
-        T.assert_eq(Backdrop.is_guard_tripped(), true, "and says so")
-        T.assert_eq(files["backdrop_state.txt"], "failed " .. Backdrop.REVISION,
-            "the verdict is recorded")
-
-        Backdrop.reset()
-        T.assert_eq(Backdrop.draw(320), false, "and holds on later boots of the same build")
-    end)
-end)
-
-suite.test("a new revision gets one fresh attempt after a failure", function()
-    with_guarded_fs(function(Backdrop, files)
-        files["backdrop_state.txt"] = "failed 0-previous"
-        Backdrop.reset()
-        T.assert_eq(Backdrop.draw(320), true,
-            "a failure recorded by an older build must not condemn this one")
-    end)
-end)
-
---- A native refusal is not a hang, so it must not burn the guard: the reason is recorded and
---- the next boot is free to try again.
-suite.test("a clean decline records its reason and stays retryable", function()
-    with_guarded_fs(function(Backdrop, files)
-        love.graphics.drawBackdrop = function() return false, "ramp texture init failed" end
-        Backdrop.reset()
-
-        T.assert_eq(Backdrop.draw(320), false, "it reports unpainted")
-        T.assert_true(files["backdrop_trace.txt"]:find("ramp texture init failed", 1, true) ~= nil,
-            "and the trace names the reason, got " .. tostring(files["backdrop_trace.txt"]))
-        T.assert_eq(files["backdrop_state.txt"], "declined " .. Backdrop.REVISION,
-            "recorded as declined, not pending")
-
-        Backdrop.reset()
-        T.assert_eq(Backdrop.draw(320), false, "still declining")
-        T.assert_eq(files["backdrop_state.txt"], "declined " .. Backdrop.REVISION,
-            "but a decline never escalates to failed")
-    end)
-end)
-
-suite.test("a proven build skips the proof dance entirely", function()
-    with_guarded_fs(function(Backdrop, files)
-        files["backdrop_state.txt"] = "proven " .. Backdrop.REVISION
-        Backdrop.reset()
-        T.assert_eq(Backdrop.draw(320), true, "draws immediately")
-        T.assert_eq(files["backdrop_state.txt"], "proven " .. Backdrop.REVISION,
-            "without rewriting the sentinel")
-    end)
 end)
 
 return suite

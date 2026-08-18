@@ -12,6 +12,14 @@
 --- resident, reloaded on every entry to the menu. That is why the backdrop used to exist only
 --- on the menu -- there was no room to keep it during a run. There is now.
 ---
+--- There was a boot guard here that wrote a sentinel to the SD card and disabled the backdrop
+--- if a boot failed to report back. It existed while a custom vertex program was hanging the
+--- GPU hard enough to need a hard reset, and it did its job: it bisected that fault and kept
+--- the console recoverable. The field runs on the CPU now, through the stock shader and calls
+--- the runtime already makes every frame, so the failure it guarded against no longer has a
+--- mechanism -- and a stale sentinel on the card could silently keep the backdrop off, which
+--- is exactly what it started doing.
+---
 --- Timers follow the reference exactly, and the distinction matters:
 ---   * REAL_SHADER always advances; it is the warp, and it is the whole of the motion on a menu.
 ---   * BACKGROUND advances only in proportion to `spin_amount` (`game.lua:2468`), which is zero
@@ -154,104 +162,9 @@ function Backdrop.is_supported()
     return supported
 end
 
---- Bumped whenever the backdrop's native side changes. The boot guard keys off it, so a build
---- that fixes a hang gets one fresh chance instead of staying disabled forever.
-Backdrop.REVISION = "10"
-
---- Frames of successful drawing before this build is marked proven. 1.5 s: long enough to
---- know the pipeline survived, short enough that a quick quit rarely false-marks a failure.
-Backdrop.PROOF_FRAMES = 90
-
-local GUARD_FILE = "backdrop_state.txt"
-local TRACE_FILE = "backdrop_trace.txt"
-
--- nil = not yet decided, true/false = decided for this process.
-local guard_enabled = nil
-local proof_frames = 0
-local proven = false
-
-local function fs()
-    return love and love.filesystem or nil
-end
-
-local log_lines = {}
-
---- Append to the on-card log and rewrite it. Read over FTP, so it is deliberately wordy: a
---- reboot is expensive and a line that turns out to be missing costs another one.
-local function trace(msg)
-    log_lines[#log_lines + 1] = msg
-    local f = fs()
-    if not (f and f.write) then return end
-    pcall(f.write, TRACE_FILE, table.concat(log_lines, "\n") .. "\n")
-end
-
---- The boot guard. The game must be incapable of hanging on boot twice: a sentinel is written
---- before the first draw and only upgraded to "proven" after PROOF_FRAMES survive. A boot that
---- dies in between leaves "pending" on the card, and the next boot reads that as a verdict and
---- refuses the backdrop -- for this REVISION, so a build that changes the native side gets one
---- fresh attempt automatically. A clean refusal is recorded as "declined" instead, which stays
---- retryable, because a call that returned cannot have hung.
----
---- This is kept even though the custom vertex program that hung is gone: the backdrop still
---- reaches straight into the GPU, and a hang here costs a hard reset rather than a crash.
-local function read_guard()
-    local f = fs()
-    if not (f and f.read) then return nil end
-    local ok, data = pcall(f.read, GUARD_FILE)
-    if not ok or type(data) ~= "string" then return nil end
-    return data:match("^(%w+)%s+(%S+)")
-end
-
-local function write_guard(status)
-    local f = fs()
-    if not (f and f.write) then return end
-    pcall(f.write, GUARD_FILE, status .. " " .. Backdrop.REVISION)
-end
-
-local function guard_allows_draw()
-    if guard_enabled ~= nil then return guard_enabled end
-
-    local status, rev = read_guard()
-    trace(("boot: revision %s; card says %s rev %s")
-        :format(Backdrop.REVISION, tostring(status), tostring(rev)))
-
-    if rev ~= Backdrop.REVISION then
-        trace("guard: new build, arming")
-        write_guard("pending")
-        guard_enabled = true
-        return true
-    end
-    if status == "proven" then
-        proven = true
-        trace("guard: proven, drawing")
-        guard_enabled = true
-        return true
-    end
-    if status == "declined" then
-        trace("guard: last boot declined cleanly, retrying")
-        write_guard("pending")
-        guard_enabled = true
-        return true
-    end
-
-    trace("guard: last boot never finished -- treating as a hang, backdrop OFF")
-    write_guard("failed")
-    guard_enabled = false
-    return false
-end
-
---- Whether the guard has shut the backdrop off. Surfaced so a settings screen can say so
---- rather than leaving a silently plain background.
-function Backdrop.is_guard_tripped()
-    return guard_enabled == false
-end
-
 --- Test seam; the probe is cached for the process otherwise.
 function Backdrop.reset()
     supported = nil
-    guard_enabled = nil
-    proof_frames = 0
-    proven = false
     state.mode = Backdrop.MODE_SPLASH
     state.time = 12
     state.spin, state.spin_target, state.spin_time = 0, 0, 0
@@ -352,60 +265,24 @@ function Backdrop.update(dt)
     end
 end
 
---- Draw it. Returns false when the runtime has no binding, when the boot guard has tripped,
---- or when the call declines -- in every case the caller paints its fallback.
----
---- The binding returns (drawn, reason). A clean decline is recorded as "declined" rather than
---- left as "pending": pending means "a boot started drawing and never came back", and using it
---- for a refusal that returned normally would disable the backdrop for a failure that carries
---- no risk of hanging. Only silence counts as a hang.
+--- Draw it. Returns false when the runtime has no binding or the call declines -- in either
+--- case the caller paints its own background instead.
 --- @param width number screen width, which selects the prebuilt grid
 --- @return boolean drawn
 function Backdrop.draw(width)
     if not Backdrop.is_supported() then return false end
-    if not guard_allows_draw() then return false end
-
-    local first = (proof_frames == 0) and not proven
-    if first then trace("calling drawBackdrop") end
 
     -- The two shaders take different scalars in p1/p2; see the binding's header.
     local p1 = (state.mode == Backdrop.MODE_BACKGROUND) and state.spin_time or state.vort_speed
     local p2 = (state.mode == Backdrop.MODE_BACKGROUND) and state.spin or state.vort_offset
 
-    local ok, drawn, reason = pcall(love.graphics.drawBackdrop, width,
+    local ok, drawn = pcall(love.graphics.drawBackdrop, width,
         state.mode, state.time, p1, p2, state.contrast,
         state.c1[1], state.c1[2], state.c1[3],
         state.c2[1], state.c2[2], state.c2[3],
         state.c3[1], state.c3[2], state.c3[3])
 
-    if not ok then
-        -- The binding raised rather than returning: `drawn` holds the error.
-        trace("ERROR from drawBackdrop: " .. tostring(drawn))
-        write_guard("declined")
-        guard_enabled = false
-        return false
-    end
-
-    if not drawn then
-        trace("declined: " .. tostring(reason or "no reason given"))
-        write_guard("declined")
-        guard_enabled = false
-        return false
-    end
-
-    if first then
-        trace("drew frame 1 -- " .. tostring(reason))
-    end
-
-    if not proven then
-        proof_frames = proof_frames + 1
-        if proof_frames >= Backdrop.PROOF_FRAMES then
-            proven = true
-            write_guard("proven")
-            trace(("healthy: %d frames drawn, marking proven"):format(Backdrop.PROOF_FRAMES))
-        end
-    end
-    return true
+    return (ok and drawn) and true or false
 end
 
 --- Current parameters, for the tests to assert easing without reaching into the module.

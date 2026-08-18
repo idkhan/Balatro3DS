@@ -44,9 +44,9 @@ Fonts.CELL_HEIGHTS = { 9, 13, 18, 22, 27, 33 }
 
 --- Role -> requested pixel size.
 ---
---- SHARED is the historical ladder and stays the baseline so toggling the experiment off is a
---- true A/B. NATIVE snaps each role to the nearest available cell height *at or above* its current
---- size. Rounding down would buy back a sheet or two, but the complaint this addresses is that
+--- NATIVE is what ships. SHARED is the historical ladder, kept so toggling the experiment is
+--- still a true A/B against what was released before. NATIVE snaps each role to the nearest
+--- available cell height *at or above* its current size. Rounding down would buy back a sheet or two, but the complaint this addresses is that
 --- text reads small on a 240p screen, so trading legibility for sharpness would be answering the
 --- wrong question (`tests/test_fonts.lua` enforces the direction).
 ---
@@ -66,7 +66,10 @@ Fonts.PROFILES = {
     },
 }
 
-Fonts.DEFAULT_PROFILE = "shared"
+--- NATIVE is the default. Every role is requested at a size some sheet was baked at, so the
+--- draw scale is exactly 1.0 and text is rendered rather than resampled; SHARED remains for
+--- the A/B, and is what the experiment toggles back to.
+Fonts.DEFAULT_PROFILE = "native"
 
 --- Role order is fixed so `apply` rebuilds deterministically and `next_smaller` walks a stable
 --- set. It is not a size ordering: `next_smaller` sorts by height, because the roles collapse
@@ -242,11 +245,12 @@ function Fonts.status_line(game)
     return string.format("FONT %s  native %d/%d faces", profile, native, faces)
 end
 
--- Off is the shipped ladder, so toggling is a true A/B rather than a comparison against something
--- that was never released.
+-- Native is the default now, so the toggle runs the other way: switching it OFF returns to the
+-- historical shared ladder, which keeps the A/B available against what was released before.
 PerformanceLab.register("crisp_fonts", {
     available = true,
     label = "Crisp fonts",
+    default = true,
     on_change = function(enabled)
         if not G then return end
         Fonts.apply(G, enabled and "native" or "shared")
