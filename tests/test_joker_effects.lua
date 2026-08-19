@@ -755,7 +755,7 @@ suite.test("full played hand controls Half, Square, DNA, and Sixth Sense", funct
         destroy_card_node = function() destroyed = destroyed + 1; return true end,
     }
     local sixth = JokerEffects.get(fake_joker("j_sixth_sense"))
-    sixth.apply_effect(nil, { event_name = "on_hand_scored", cards = { scoring_only }, full_hand = { scoring_only, {} } })
+    sixth.apply_effect(nil, { event_name = "on_hand_after", cards = { scoring_only }, full_hand = { scoring_only, {} } })
     T.assert_eq(destroyed, 0, "Sixth Sense must reject a multi-card played hand")
 
     game.hand, game.hands, game.notify_cards_added_to_deck = old_hand, old_hands, old_notify

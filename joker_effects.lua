@@ -1286,9 +1286,12 @@ local SPECIAL = {
     },
 
     j_sixth_sense = {
-        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        -- reference/Balatro/card.lua:2603-2620 -- `destroying_card`, which the reference runs
+        -- after `joker_main` and after the deck's `final_scoring_step`, not during scoring.
+        -- The port's nearest slot is the after pass, one step past the chip commit.
+        matches_trigger = function(_, e) return e == "on_hand_after" end,
         apply_effect = function(_, ctx)
-            if ctx.event_name ~= "on_hand_scored" then return end
+            if ctx.event_name ~= "on_hand_after" then return end
             if ctx.blueprint then return end
             local eff = G and G.get_effective_hands_per_round and G:get_effective_hands_per_round() or 5
             if (tonumber(G and G.hands) or 0) ~= eff - 1 then return end
