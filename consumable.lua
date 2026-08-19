@@ -1,13 +1,7 @@
 ---@class Consumable : Moveable
 Consumable = Moveable:extend()
 
-local TOOLTIP_PAD_X = 8
-local TOOLTIP_HEADER_PAD_Y = 3
-local TOOLTIP_BODY_PAD_Y = 10
-local TOOLTIP_SPACING = 1
-local TOOLTIP_SECTION_GAP = 2
-local TOOLTIP_OUTER_PAD_X = 3
-local TOOLTIP_OUTER_PAD_Y = 3
+local TooltipDraw = require("tooltip_draw")
 -- Tarots.png starts its negative variants at cell 56. Cells 24-27 are card backs,
 -- so the offset is larger than the number of base consumables.
 local NEGATIVE_CONSUMABLE_INDEX_OFFSET = 56
@@ -391,109 +385,15 @@ function Consumable:draw_tooltip(draw_x, draw_y)
         title = "Not Discovered"
     end
     local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
-    local prev_font = love.graphics.getFont()
-    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-    love.graphics.setFont(font)
 
-    local header_w = font:getWidth(title)
-    local body_max_w = 0
+    local resolved = {}
     for _, line in ipairs(lines) do
-        local w = font:getWidth(line)
-        if w > body_max_w then body_max_w = w end
-    end
-    local line_h = font:getHeight()
-    local header_w_total = header_w + (TOOLTIP_PAD_X * 2)
-    local header_h_total = line_h + (TOOLTIP_HEADER_PAD_Y * 2)
-    local body_w_total = body_max_w + (TOOLTIP_PAD_X * 2)
-    local body_h_total = (#lines * line_h) + ((#lines - 1) * TOOLTIP_SPACING) + (TOOLTIP_BODY_PAD_Y * 2)
-    local inner_w = math.max(header_w_total, body_w_total)
-    local inner_h = header_h_total + TOOLTIP_SECTION_GAP + body_h_total
-    local box_w = inner_w + (TOOLTIP_OUTER_PAD_X * 2)
-    local box_h = inner_h + (TOOLTIP_OUTER_PAD_Y * 2)
-
-    local card_w = self.VT.w * self.VT.scale
-    local card_h = self.VT.h * self.VT.scale
-    local tx = draw_x + (card_w - box_w) * 0.5
-    -- Row sits near the top of the screen; prefer below the sprite, flip above if needed.
-    local ty = draw_y + card_h + 3
-    local margin = 2
-    local sw = 320
-    if love.graphics.getWidth then
-        sw = love.graphics.getWidth("bottom")
-        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
-        if not sw or sw <= 0 then sw = 320 end
-    end
-    tx = math.max(margin, math.min(tx, sw - box_w - margin))
-    local sh = nil
-    if love.graphics.getHeight then
-        sh = love.graphics.getHeight("bottom")
-        if not sh or sh <= 0 then
-            sh = love.graphics.getHeight()
-        end
-    end
-    if not sh or sh <= 0 then sh = 240 end
-    if ty + box_h > sh - 2 then
-        ty = draw_y - box_h - 3
-    end
-    if ty < 2 then ty = 2 end
-    tx = math.floor(tx + 0.5)
-    ty = math.floor(ty + 0.5)
-
-    if not _G.draw_rect_with_shadow or not _G.draw_rounded_rect then
-        love.graphics.setFont(prev_font)
-        love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
-        return
+        resolved[#resolved + 1] = TooltipDraw.build_segments_from_text(line)
     end
 
-    draw_rect_with_shadow(tx, ty, box_w, box_h, 4, 0, G.C.TOOLTIP, G.C.BLOCK.SHADOW, 1)
-    love.graphics.setColor(1, 1, 1, 1)
-    draw_rounded_rect(tx, ty, box_w, box_h, 4, 2, "line")
-
-    local header_x = tx + TOOLTIP_OUTER_PAD_X
-    local header_y = ty + TOOLTIP_OUTER_PAD_Y
-    local body_x = header_x
-    local body_y = header_y + header_h_total + TOOLTIP_SECTION_GAP
-
-    love.graphics.setColor(G.C.TOOLTIP)
-    draw_rounded_rect(header_x, header_y, inner_w, header_h_total, 4, 0, "fill")
-    draw_rounded_rect(body_x, body_y, inner_w, body_h_total, 4, 0, "fill")
-
-    local inner_pad = 2
-    local inner_header_h = math.max(1, header_h_total - (inner_pad * 2))
-    local inner_body_h = math.max(1, body_h_total - (inner_pad * 2))
-    love.graphics.setColor(G.C.WHITE)
-    draw_rect_with_shadow(header_x + inner_pad, header_y + inner_pad, inner_w - (inner_pad * 2), inner_header_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
-    draw_rect_with_shadow(body_x + inner_pad, body_y + inner_pad - 1, inner_w - (inner_pad * 2), inner_body_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
-
-    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5)
-    local header_text_x = header_x + math.floor((inner_w - header_w) * 0.5 + 0.5)
-    love.graphics.setColor(G.C.PANEL)
-    love.graphics.print(title, header_text_x, header_text_y)
-
-    local text_y = body_y + TOOLTIP_BODY_PAD_Y
-    local gray = { 0.22, 0.24, 0.26, 1 }
-    local emph = (G.C and G.C.MULT) or { 0.9, 0.45, 0.45, 1 }
-
-    for _, line in ipairs(lines) do
-        local line_y = math.floor(text_y + 0.5)
-        if def.kind == "planet" and type(def.hand) == "string" and def.hand ~= "" then
-            local prefix = "Increases the value of "
-            local hand = def.hand
-            local total_w = font:getWidth(prefix) + font:getWidth(hand)
-            local x = body_x + math.floor((inner_w - total_w) * 0.5 + 0.5)
-            love.graphics.setColor(gray[1], gray[2], gray[3], gray[4])
-            love.graphics.print(prefix, x, line_y)
-            love.graphics.setColor(emph[1], emph[2], emph[3], emph[4])
-            love.graphics.print(hand, x + font:getWidth(prefix), line_y)
-        else
-            local line_w = font:getWidth(line)
-            local line_x = body_x + math.floor((inner_w - line_w) * 0.5 + 0.5)
-            love.graphics.setColor(gray[1], gray[2], gray[3], gray[4])
-            love.graphics.print(line, line_x, line_y)
-        end
-        text_y = text_y + line_h + TOOLTIP_SPACING
-    end
-
-    love.graphics.setFont(prev_font)
-    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
+    TooltipDraw.draw_tooltip_layout(
+        font, title, resolved,
+        draw_x, draw_y,
+        self.VT.w * self.VT.scale, self.VT.h * self.VT.scale
+    )
 end
