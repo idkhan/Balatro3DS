@@ -2011,13 +2011,20 @@ function Hand:start_card_dissolve(node)
     -- Timing, the override rule and the pop all live on Moveable, shared with destroyed
     -- Jokers and used consumables.
     if node._card_lifecycle and node._card_lifecycle.kind == "dissolve" then return end
-    node:begin_lifecycle("dissolve")
+    -- One list drives the burn and the shards, as the reference's `dissolve_colours` does. A
+    -- card with something specific to say burns in that colour: the reference shatters Glass
+    -- white rather than dissolving it (`reference/Balatro/card.lua:2080-2090`), and a Gold seal
+    -- goes out gold (`card.lua:1609`). Anything else keeps the default black on orange, which
+    -- is the pair `begin_lifecycle` falls back to when it is handed nothing.
+    local tint = dissolve_colour_for(node)
+    local burn = (type(tint[1]) == "number") and tint or nil
+    node:begin_lifecycle("dissolve", burn)
     node.states.hover.can = false
     node.states.click.can = false
     node.states.drag.can = false
     -- Shards come off the card for the whole tween rather than in one salvo at t = 0; the
     -- rate and the tint follow the node from `update_card_lifecycles`.
-    node._dissolve_tint = dissolve_colour_for(node)
+    node._dissolve_tint = tint
     self._destroying_nodes[#self._destroying_nodes + 1] = node
 end
 

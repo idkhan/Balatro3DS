@@ -5008,7 +5008,8 @@ end
 ---@param def_id string
 ---@param create_params table|nil optional `{ edition = "negative" }`
 ---@return boolean
-function Game:add_consumable(def_id, create_params)
+---@param arrive_from Moveable|nil node this one replaces; see `Game:add_joker_by_def`
+function Game:add_consumable(def_id, create_params, arrive_from)
     if type(def_id) ~= "string" or def_id == "" then return false end
     if not CONSUMABLE_DEFS or type(CONSUMABLE_DEFS) ~= "table" then return false end
     local def = CONSUMABLE_DEFS[def_id]
@@ -5042,9 +5043,15 @@ function Game:add_consumable(def_id, create_params)
     self:draw_consumables_row()
     self:_snap_consumables_vt()
     self:sync_consumables_interactivity()
-    -- After the layout snap, so the burst converges on where the node actually landed rather
-    -- than on the origin it was constructed at.
-    self:begin_materializing_node(node)
+    if arrive_from and arrive_from.VT and node.VT then
+        node.VT.x, node.VT.y = arrive_from.VT.x, arrive_from.VT.y
+        node.VT.scale = arrive_from.VT.scale or node.VT.scale
+        node.VT.r = arrive_from.VT.r or node.VT.r
+    else
+        -- After the layout snap, so the burst converges on where the node actually landed
+        -- rather than on the origin it was constructed at.
+        self:begin_materializing_node(node)
+    end
     return true
 end
 
@@ -8830,7 +8837,14 @@ end
 ---@param def_id string
 ---@param create_params table|nil optional `{ edition = "foil"|"holo"|... }` (single edition only)
 ---@return boolean
-function Game:add_joker_by_def(def_id, create_params)
+--- `arrive_from` is a node this one is taking the place of - the shop shelf card behind a
+--- purchase. The reference does not materialise a bought card: `buy_from_shop` moves the
+--- existing card out of the shop CardArea into `G.jokers` and lets the spring carry it to its
+--- slot (`button_callbacks.lua:2414-2437`), so what the player sees is one card travelling,
+--- not one vanishing and another burning in. Passing the old node here reproduces that - the
+--- new one starts where the old one sat and springs across - and suppresses the materialise.
+--- A card that genuinely comes into being passes nothing and burns in as before.
+function Game:add_joker_by_def(def_id, create_params, arrive_from)
     if type(def_id) ~= "string" or def_id == "" then return false end
     if not JOKER_DEFS or type(JOKER_DEFS) ~= "table" then return false end
     local def = JOKER_DEFS[def_id]
@@ -8883,9 +8897,15 @@ function Game:add_joker_by_def(def_id, create_params)
         end
     end
 
-    -- After the snap above, for the same reason as `add_consumable`: the burst has to converge
-    -- on the slot the joker took, not on the (0, 0) it was constructed at.
-    self:begin_materializing_node(j)
+    if arrive_from and arrive_from.VT and j.VT then
+        j.VT.x, j.VT.y = arrive_from.VT.x, arrive_from.VT.y
+        j.VT.scale = arrive_from.VT.scale or j.VT.scale
+        j.VT.r = arrive_from.VT.r or j.VT.r
+    else
+        -- After the snap above, for the same reason as `add_consumable`: the burst has to
+        -- converge on the slot the joker took, not on the (0, 0) it was constructed at.
+        self:begin_materializing_node(j)
+    end
 
     return true
 end
@@ -11498,6 +11518,13 @@ function Game:_booster_build_choices(offer)
     return choices
 end
 
+--- Pack contents arrive white and slow: `card.lua:1779` materialises every card a booster
+--- lays out with `{G.C.WHITE, G.C.WHITE}` at 1.5x the usual tween. White because a pack has
+--- not told you what is in it yet, and slow because it is the one moment the player is
+--- looking at nothing else.
+local BOOSTER_MATERIALIZE_COLOUR = { 1, 1, 1, 1 }
+local BOOSTER_MATERIALIZE_TIMEFAC = 1.5
+
 function Game:_booster_spawn_choice_nodes(choices)
     local nodes = {}
     for i, ch in ipairs(choices) do
@@ -11512,6 +11539,7 @@ function Game:_booster_spawn_choice_nodes(choices)
                 node.states.drag.can = false
                 nodes[i] = node
                 self:add(node)
+                self:_booster_materialize_choice_node(node)
             end
         elseif ch.kind == "joker" and Joker then
             local jd = JOKER_DEFS and JOKER_DEFS[ch.joker_id]
@@ -11524,6 +11552,7 @@ function Game:_booster_spawn_choice_nodes(choices)
                 node.states.drag.can = false
                 nodes[i] = node
                 self:add(node)
+                self:_booster_materialize_choice_node(node)
             end
         elseif ch.kind == "playing" and Card then
             local node = Card(0, 0, nil, nil, ch.playing_data, nil, { face_up = true })
@@ -11532,9 +11561,18 @@ function Game:_booster_spawn_choice_nodes(choices)
             node.states.drag.can = false
             nodes[i] = node
             self:add(node)
+            self:_booster_materialize_choice_node(node)
         end
     end
     return nodes
+end
+
+--- Burn one pack card in. No burst: these are spawned before `layout_choice_nodes` has put
+--- them anywhere, so a converging ring would collapse onto the origin instead of the card.
+---@param node Moveable
+function Game:_booster_materialize_choice_node(node)
+    self:begin_materializing_node(node, BOOSTER_MATERIALIZE_COLOUR,
+        BOOSTER_MATERIALIZE_TIMEFAC, true)
 end
 
 --- Wrapper art for a pack that did not come from the shop. Shop offers roll a random frame
@@ -11882,7 +11920,12 @@ function Game:pick_booster_choice(idx)
         local ed = ch.edition or "base"
         if not self:joker_has_room_for_new(ed) then return false end
         local create_params = type(ch.create_params) == "table" and copy_table(ch.create_params) or ((ed ~= "base") and { edition = ed } or nil)
-        self:add_joker_by_def(ch.joker_id, create_params)
+        -- Taking a card out of a pack is an acquisition, not a creation: the reference's pack
+        -- cards materialised when the pack opened (`card.lua:1779`) and `use_card` then moves
+        -- the existing card into the joker row. Fly it off the pack shelf rather than burning
+        -- a second copy in on top of the one the player just clicked.
+        self:add_joker_by_def(ch.joker_id, create_params,
+            sess.choice_nodes and sess.choice_nodes[idx])
     elseif ch.kind == "playing" then
         if self.deck and self.deck.insert_random then
             self.deck:insert_random(ch.playing_data)
@@ -12314,7 +12357,12 @@ function Game:retain_dissolving_node(node, colour)
         if node then self:remove(node) end
         return
     end
-    node.begin_lifecycle(node, "dissolve")
+    -- The reference's `dissolve_colours` drive the shader and the particles from one list
+    -- (`sprite.lua:103-104`, `card.lua:2140`), so a joker sold for gold burns gold as well as
+    -- throwing gold. Passing the tint only to the shards left every destruction burning the
+    -- default black-on-orange whatever it was.
+    local burn = (colour and type(colour[1]) == "number") and colour or nil
+    node.begin_lifecycle(node, "dissolve", burn)
     -- A ghost keeps the screen its owner row was on. Unlinking the node from `self.jokers` /
     -- `self.consumable_nodes` is what takes it out of `TopUI`'s draw, so without this a joker
     -- eaten off the readout would come apart on the bottom screen instead.
@@ -12464,15 +12512,19 @@ end
 --- Fade a newly created node in and converge a burst onto it.
 ---@param node Moveable|nil already linked into run state
 ---@param colour table|nil override tint; defaults to the node's set colour
-function Game:begin_materializing_node(node, colour)
+---@param timefac number|nil stretch the tween
+---@param no_burst boolean|nil mask only; for nodes whose position is not settled yet
+function Game:begin_materializing_node(node, colour, timefac, no_burst)
     if not node or not node.begin_lifecycle then return end
     if not self:node_creation_animates() then return end
-    node:begin_lifecycle("materialize")
+    local burn1, burn2
+    if colour and type(colour[1]) == "number" then burn1, burn2 = colour, nil end
+    node:begin_lifecycle("materialize", burn1, burn2, timefac)
 
     self._materializing_nodes = self._materializing_nodes or {}
     self._materializing_nodes[#self._materializing_nodes + 1] = node
 
-    self:begin_materialize_burst(node, colour)
+    if not no_burst then self:begin_materialize_burst(node, colour) end
 end
 
 --- Tick fade-ins. Unlike `_update_dissolving_nodes` this never unlinks the node: the entry is
@@ -13069,6 +13121,9 @@ function Game:buy_shop_joker(slot_index)
 
     local ok = false
     local k = offer.kind
+    -- The shelf node the purchase is taking the place of, read before the removal below so the
+    -- new node can start where it sat.
+    local shelf = self.shop_offer_nodes and self.shop_offer_nodes[slot_index]
     if k == nil or k == "joker" then
         local neg_owned = 0
         if Joker then
@@ -13107,11 +13162,11 @@ function Game:buy_shop_joker(slot_index)
                 end
             end
         end
-        ok = self:add_joker_by_def(offer.id, create_params) and true or false
+        ok = self:add_joker_by_def(offer.id, create_params, shelf) and true or false
     elseif k == "tarot" or k == "planet" or k == "spectral" then
         local params = offer.edition and { edition = offer.edition } or nil
         if not self:can_add_consumable(params) then return false end
-        ok = self:add_consumable(offer.id, params)
+        ok = self:add_consumable(offer.id, params, shelf)
     elseif k == "playing_card" then
         ok = self:_deck_inject_playing_card(offer.card_data)
     else

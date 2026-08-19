@@ -250,7 +250,10 @@ end
 -- five glass cards), where the reference allocates an emitter per card.
 --------------------------------------------------------------------------------
 
-local SHED_INTERVAL = 0.045
+-- Rate and speed were both settled by eye against the shader running beside it: a shard every
+-- 36 ms over a 0.7 s dissolve is about twenty per card, enough to read as shedding without
+-- crowding a 96-slot pool when five cards go at once.
+local SHED_INTERVAL = 0.036
 --- Shards outlive most of the tween they came from, which is what stops a dissolve
 --- ending on an empty screen.
 local SHED_LIFETIME = 0.49
@@ -262,8 +265,8 @@ local SHED_SIZE = 3
 --- which reads as embers hanging around the card rather than debris dropping out of it. That
 --- is most of the difference between a card burning and a card breaking, so gravity is zero
 --- here and the spread is the whole circle. The speed is above the reference's ~28 px/s
---- equivalent because a 240p screen swallows anything slower.
-local SHED_SPEED_MIN, SHED_SPEED_MAX = 18, 46
+--- equivalent because a 240p screen swallows anything slower, and again by eye from there.
+local SHED_SPEED_MIN, SHED_SPEED_MAX = 23, 60
 local SHED_SPEC = {
     x = 0, y = 0, vx = 0, vy = 0, gravity = 0,
     lifetime = SHED_LIFETIME, w = SHED_SIZE, h = SHED_SIZE,

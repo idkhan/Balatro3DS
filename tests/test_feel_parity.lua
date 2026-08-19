@@ -1050,6 +1050,108 @@ suite.test("the materialise tint follows the set", function()
     T.assert_not_nil(tint(nil), "an unset node falls back rather than crashing")
 end)
 
+--- The reference's `dissolve_colours` are one list feeding both the shader and the particles
+--- (`sprite.lua:103-104`, `card.lua:2140`). Handing the tint only to the shards left a joker
+--- sold for gold throwing gold while it burned the default black on orange.
+suite.test("a destruction burns in the colour it throws", function()
+    local g = bootstrap.new_game()
+    T.assert_true(g:add_joker_by_def("j_joker"))
+    local node = g.jokers[1]
+    local gold = { 0.918, 0.753, 0.345, 1 }
+
+    g:remove_owned_joker_at(1, false, true, gold)
+    local b1, b2 = node:lifecycle_burn()
+    T.assert_eq(b1, gold, "the leading edge is the tint it was given")
+    T.assert_eq(b2, nil, "one colour named means one colour used")
+    T.assert_eq(node._dissolve_tint, gold, "and the shards match it")
+end)
+
+--- Without a tint of its own a destruction keeps the reference's default pair.
+suite.test("an untinted destruction keeps the default burn", function()
+    local g = bootstrap.new_game()
+    T.assert_true(g:add_joker_by_def("j_joker"))
+    local node = g.jokers[1]
+
+    g:remove_owned_joker_at(1, false, true)
+    local b1, b2 = node:lifecycle_burn()
+    T.assert_eq(b1, Moveable.DISSOLVE_BURN_1)
+    T.assert_eq(b2, Moveable.DISSOLVE_BURN_2)
+    T.assert_true(type(node._dissolve_tint[1]) == "table", "and sheds the whole palette")
+end)
+
+--- The reference shatters a Glass card white rather than dissolving it
+--- (`reference/Balatro/card.lua:2080-2090`), and takes a Gold seal out in gold
+--- (`card.lua:1609`). A card with nothing specific to say burns as paper does.
+suite.test("a card burns in whatever colour it has to offer", function()
+    local g = bootstrap.new_game()
+    local hand = hand_of(g, { { rank = 4, suit = "Spades" } })
+    local node = hand.card_nodes[1]
+    node.card_data.enhancement = "glass"
+
+    hand:start_card_dissolve(node)
+    local b1, b2 = node:lifecycle_burn()
+    T.assert_true(b1[1] > 0.8 and b1[2] > 0.8 and b1[3] > 0.8, "glass goes out pale, not orange")
+    T.assert_eq(b2, nil)
+
+    local plain = hand.card_nodes[1]
+    plain._card_lifecycle = nil
+    plain.card_data.enhancement = nil
+    hand:start_card_dissolve(plain)
+    T.assert_eq(({ plain:lifecycle_burn() })[1], Moveable.DISSOLVE_BURN_1,
+        "a plain card is paper catching")
+end)
+
+--- The reference does not materialise a bought card. `buy_from_shop` moves the existing card
+--- out of the shop CardArea into `G.jokers` and lets the spring carry it to its slot
+--- (`reference/Balatro/functions/button_callbacks.lua:2414-2437`), so what the player sees is
+--- one card travelling. Burning a second copy in on top of the one they just clicked is two
+--- events where the game has one.
+suite.test("an acquired joker flies from where it was, rather than burning in", function()
+    local g = bootstrap.new_game()
+    g.STAGE = g.STAGES.RUN
+    g.STATE = g.STATES.SHOP
+
+    local shelf = { VT = { x = 213, y = 47, w = 40, h = 60, scale = 0.8, r = 0.1 } }
+    T.assert_true(g:add_joker_by_def("j_joker", nil, shelf))
+    local node = g.jokers[#g.jokers]
+    T.assert_eq(node._card_lifecycle, nil, "no materialise on an acquisition")
+    T.assert_eq(node.VT.x, shelf.VT.x, "it starts on the shelf it came off")
+    T.assert_eq(node.VT.y, shelf.VT.y)
+    T.assert_eq(node.VT.scale, shelf.VT.scale, "including the shelf's scale, so it grows in")
+    T.assert_true(node.VT.x ~= node.T.x or node.VT.y ~= node.T.y,
+        "and has somewhere to spring to")
+end)
+
+--- The other half of the same rule: something that genuinely comes into being still burns in.
+suite.test("a created joker still materialises", function()
+    local g = bootstrap.new_game()
+    g.STAGE = g.STAGES.RUN
+    g.STATE = g.STATES.SHOP
+
+    T.assert_true(g:add_joker_by_def("j_joker"))
+    T.assert_not_nil(g.jokers[#g.jokers]._card_lifecycle, "created, so it materialises")
+end)
+
+--- `card.lua:1779` lays a booster pack out with `start_materialize({G.C.WHITE, G.C.WHITE},
+--- nil, 1.5*GAMESPEED)`: white, because the pack has not told you what is in it yet, and half
+--- again as long, because it is the one moment the player is looking at nothing else.
+suite.test("booster pack contents arrive white and slow", function()
+    local g = bootstrap.new_game()
+    g.STAGE = g.STAGES.RUN
+    g.STATE = g.STATES.OPEN_BOOSTER
+
+    local nodes = g:_booster_spawn_choice_nodes({ { kind = "joker", joker_id = "j_joker" } })
+    local node = nodes[1]
+    T.assert_not_nil(node, "the pack laid a card out")
+    local life = node._card_lifecycle
+    T.assert_not_nil(life, "and burned it in")
+    T.assert_eq(life.kind, "materialize")
+    T.assert_near(life.duration, Moveable.MATERIALIZE_DURATION * 1.5, 0.0001, "half again as long")
+    local b1, b2 = node:lifecycle_burn()
+    T.assert_eq(b1[1], 1) T.assert_eq(b1[2], 1) T.assert_eq(b1[3], 1)
+    T.assert_eq(b2, nil, "one colour, so the ring does not cross to another")
+end)
+
 --- A fade-in must not unlink the node the way a dissolve does - it is joining the run.
 suite.test("a finished materialise leaves its node in the run", function()
     local g = bootstrap.new_game()

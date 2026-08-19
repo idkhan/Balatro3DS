@@ -1037,10 +1037,25 @@ function Card:draw()
     love.graphics.scale(flip_sx, 1)
     love.graphics.translate(-w * 0.5, -h * 0.5)
     love.graphics.setColor(0, 0, 0, shadow_alpha * lifecycle_alpha)
+    local shadow_atlas, shadow_quad, shadow_w, shadow_h
     if shown_up and self.face_quad then
-        self:draw_layer(self.face_atlas, self.face_quad, self.face_w, self.face_h, 0, 0)
+        shadow_atlas, shadow_quad, shadow_w, shadow_h =
+            self.face_atlas, self.face_quad, self.face_w, self.face_h
     elseif self.back_quad then
-        self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, 0, 0)
+        shadow_atlas, shadow_quad, shadow_w, shadow_h =
+            self.back_atlas, self.back_quad, self.back_w, self.back_h
+    end
+    -- The shadow comes apart on the same holes as the card above it. Fading it flat instead
+    -- left a solid card-shaped silhouette under a card that was two thirds gone, which at
+    -- 240p is the most visible thing on screen.
+    local shadow_masked = false
+    if dissolve and shadow_atlas and shadow_atlas.image and shadow_quad then
+        local qx, qy, qw, qh = shadow_quad:getViewport()
+        shadow_masked = Fx.draw_dissolve_shadow(shadow_atlas.image, qx, qy, qw, qh, 0, 0,
+            shadow_w, shadow_h, dissolve, shadow_alpha, self:lifecycle_seed())
+    end
+    if not shadow_masked then
+        self:draw_layer(shadow_atlas, shadow_quad, shadow_w, shadow_h, 0, 0)
     end
     love.graphics.pop()
 

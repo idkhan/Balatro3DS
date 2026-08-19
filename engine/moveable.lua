@@ -98,7 +98,9 @@ local lifecycle_seq = 0
 ---@param kind string "dissolve" or "materialize"
 ---@param burn1 table|nil leading-edge colour; defaults to the reference's black
 ---@param burn2 table|nil wash colour; defaults to the reference's orange
-function Moveable:begin_lifecycle(kind, burn1, burn2)
+---@param timefac number|nil stretch the tween; the reference passes one per call site
+---        (`card.lua:1779` opens a booster pack at 1.5)
+function Moveable:begin_lifecycle(kind, burn1, burn2, timefac)
     -- A node can be destroyed while it is still fading in, so a dissolve overrides a
     -- materialise. Only an in-flight dissolve is left alone, to keep one ghost per node.
     local current = self._card_lifecycle
@@ -108,7 +110,8 @@ function Moveable:begin_lifecycle(kind, burn1, burn2)
         kind = kind,
         age = 0,
         seed = lifecycle_seq,
-        duration = (kind == "dissolve") and Moveable.DISSOLVE_DURATION or Moveable.MATERIALIZE_DURATION,
+        duration = ((kind == "dissolve") and Moveable.DISSOLVE_DURATION or Moveable.MATERIALIZE_DURATION)
+            * (tonumber(timefac) or 1),
         -- One colour given means one colour used, which is the shape every materialise takes
         -- (`card.lua:2188-2194` passes a single set colour); only the bare default is a pair.
         burn1 = burn1 or Moveable.DISSOLVE_BURN_1,
