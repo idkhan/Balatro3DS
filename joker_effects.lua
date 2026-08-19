@@ -840,11 +840,8 @@ local SPECIAL = {
     j_business = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if rank_is_face(ctx.rank) and G:do_random(1, 2, 1, "business") then add_money(ctx, 2) end end },
     j_ticket = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) local cd = ctx.card_node and ctx.card_node.card_data; if cd and cd.enhancement == "gold" then add_money(ctx, 4) end end },
     j_photograph = {
-        matches_trigger = function(_, e) return e == "card_played" or e == "on_hand_played" end,
+        matches_trigger = function(_, e) return e == "card_played" end,
         apply_effect = function(j, ctx)
-            if ctx.event_name == "on_hand_played" then
-                return
-            end
             local target = ctx.photograph_first_face_node
             if not target or ctx.card_node ~= target then
                 return
@@ -1037,9 +1034,12 @@ local SPECIAL = {
     },
 
     j_seltzer = {
-        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        -- reference/Balatro/card.lua:3595-3630 -- `after`: the counter drops once the score
+        -- has landed, so this hand's retriggers all used the pre-decrement value.
+        matches_trigger = function(_, e) return e == "on_hand_after" end,
         apply_effect = function(j, ctx)
             if ctx.blueprint then return end
+            mark_effect_applied(ctx)
             j.runtime_counter = (tonumber(j.runtime_counter) or 0) - 1
             if (tonumber(j.runtime_counter) or 0) < 1 then
                 if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
@@ -1100,11 +1100,17 @@ local SPECIAL = {
     },
 
     j_midas_mask = {
-        matches_trigger = function(_, e) return e == "card_played" end,
+        -- reference/Balatro/card.lua:3442-3462 -- Midas Mask is a `before` joker: every
+        -- scoring face card is gold *before* the first card scores, so whatever enhancement
+        -- it carried is gone for this hand, and a Vampire to its right can drain the gold.
+        matches_trigger = function(_, e) return e == "on_hand_played" end,
         apply_effect = function(_, ctx)
-            if rank_is_face(ctx.rank) and not ctx.blueprint then
-                local node = ctx.card_node
-                if node and type(node.set_enhancement) == "function" then
+            if ctx.blueprint then return end
+            for _, node in ipairs(ctx.full_hand or {}) do
+                local data = node and node.card_data
+                if data and node.counts_for_play_score == true
+                    and rank_is_face(data.rank)
+                    and type(node.set_enhancement) == "function" then
                     node:set_enhancement("gold")
                     mark_effect_applied(ctx)
                 end
@@ -1188,10 +1194,18 @@ local SPECIAL = {
     },
 
     j_ice_cream = {
-        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        -- reference/Balatro/card.lua:3570-3594 -- the chips are `joker_main`, but the melt is
+        -- `after`: Ice Cream pays in full and only then loses 5.
+        matches_trigger = function(_, e) return e == "on_hand_scored" or e == "on_hand_after" end,
         apply_effect = function(j, ctx)
-            add_chips(ctx, tonumber(j.runtime_counter) or 0)
+            if ctx.event_name == "on_hand_scored" then
+                add_chips(ctx, tonumber(j.runtime_counter) or 0)
+                return
+            end
             if ctx.blueprint then return end
+            -- The reference announces the melt with a blocking status event, so it owns a
+            -- beat in the after pass (`state_events.lua:1063-1070`).
+            mark_effect_applied(ctx)
             j.runtime_counter = tonumber(j.runtime_counter) - 5
             if tonumber(j.runtime_counter) <= 0 then
                 if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
@@ -1426,7 +1440,8 @@ local SPECIAL = {
     },
 
     j_superposition = {
-        matches_trigger = function(_, e) return e == "on_hand_played" end,
+        -- reference/Balatro/card.lua -- `joker_main`: the tarot arrives after the cards score.
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
             local cards = ctx.cards
             if has_hand_type(ctx, "Straight") then 
@@ -1504,7 +1519,9 @@ local SPECIAL = {
     },
 
     j_vagabond = {
-        matches_trigger = function(_, e) return e == "on_hand_played" end,
+        -- reference/Balatro/card.lua:3730-3746 -- `joker_main`, so the dollar test sees the
+        -- money this hand's cards just paid out (Business Card, Golden Ticket, To Do List).
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(_,ctx)
             if G and G.money and G.money <= 4 then
                 local tid = G:random_consumable_id_of_kind("tarot", nil, "vagabond")
@@ -1564,9 +1581,14 @@ local SPECIAL = {
         end
     },
     j_matador = {
-        matches_trigger = function(_, e) return e == "on_boss_effect_triggered" end,
+        -- reference/Balatro/card.lua:3718-3729 -- `joker_main`, gated on `blind.triggered`,
+        -- which the reference clears when the hand is played and sets when a boss ability
+        -- fires during it (`state_events.lua:454`). One payout per hand, not one per trigger.
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(_, ctx)
-            add_money(ctx, 8)
+            if G and G.blind_triggered_this_hand == true then
+                add_money(ctx, 8)
+            end
         end
     },
 
@@ -1632,9 +1654,10 @@ local SPECIAL = {
     },
 
     j_seance = {
-        matches_trigger = function(_, e) return e == "on_hand_played" end,
+        -- reference/Balatro/card.lua -- `joker_main`: the spectral arrives after the cards score.
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
-            if ctx.event_name == "on_hand_played" then
+            if ctx.event_name == "on_hand_scored" then
                 local hand = "Straight Flush"
                 if ctx.hand_type == hand then
                     local tid = G:random_consumable_id_of_kind("spectral", nil, "seance")

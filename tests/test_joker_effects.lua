@@ -36,6 +36,7 @@ local EVENT_NAMES = {
     "on_blind_selected", "on_joker_sold", "on_round_begin", "card_held",
     "on_shop_reroll", "on_destroy", "on_consumable_used", "on_cards_added_to_deck",
     "on_booster_skip", "lucky_trigger", "on_boss_effect_triggered", "on_booster_open",
+    "on_hand_after",
     "glass_broken",
 }
 
