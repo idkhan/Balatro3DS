@@ -656,6 +656,20 @@ function Game:_boss_select_forced_card_if_needed()
     end
 end
 
+--- Turn every owned Joker face up again. Amber Acorn is the only thing that flips them, and
+--- the reference undoes the flip in three places rather than one: at the blind's defeat
+--- (`reference/Balatro/blind.lua:338`), when the boss ability is disabled mid-round
+--- (`:357`), and defensively when the next blind is set. Doing it only at the next blind
+--- left the Jokers face down through the cash out, the shop and blind select.
+function Game:restore_joker_facing()
+    if type(self.jokers) ~= "table" then return end
+    for _, j in ipairs(self.jokers) do
+        if j and j.face_up == false and j.set_face_up then
+            j:set_face_up(true)
+        end
+    end
+end
+
 function Game:boss_reset_for_new_blind()
     self.boss_runtime = {
         hand_count = 0,
@@ -674,13 +688,7 @@ function Game:boss_reset_for_new_blind()
         clear_card_debuffs_after_win = false,
     }
     local boss_id = self:get_boss_blind_id_for_blind()
-    if type(self.jokers) == "table" then
-        for _, j in ipairs(self.jokers) do
-            if j and j.set_face_up then
-                j:set_face_up(true)
-            end
-        end
-    end
+    self:restore_joker_facing()
     if not boss_id then return end
     if self:hasJoker("j_chicot") then return end
 
@@ -1042,6 +1050,9 @@ function Game:boss_on_joker_sold(sold_joker)
         self.boss_runtime = self.boss_runtime or {}
         self.boss_runtime.disable_current_boss_ability = true
         self.boss_runtime.verdant_leaf_active = false
+        -- Disabling the boss undoes its effects, including a face-down Joker row
+        -- (`blind.lua:357`).
+        self:restore_joker_facing()
         return
     end
     if self:get_active_boss_blind_id() == "bl_final_leaf" then
@@ -12090,6 +12101,9 @@ function Game:apply_joker_sticker_round_end()
 end
 
 function Game:enter_round_win_after_blind()
+    -- `Blind:defeat` flips the Jokers back before the round even ends (`blind.lua:338`), so
+    -- Amber Acorn's flip does not follow the player into the cash out and the shop.
+    self:restore_joker_facing()
     -- Garbage Tag counts unused discards across completed blinds (reference tag.lua:158-165).
     self.discardsUnused = math.max(0, tonumber(self.discardsUnused) or 0)
         + math.max(0, tonumber(self.discards) or 0)
@@ -13385,6 +13399,9 @@ function Game:evaluate_blind_progress()
 end
 
 function Game:handle_failed_blind_reset()
+    -- The round is over either way - Mr. Bones' rescue or the game over - and `Blind:defeat`
+    -- runs on both paths in the reference (`blind.lua:338`).
+    self:restore_joker_facing()
     local mr_bones_index = nil
     local goal = (tonumber(self.current_blind_target) or 0) * 0.25
     local score = tonumber(self.round_score) or 0
