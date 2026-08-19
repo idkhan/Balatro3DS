@@ -611,7 +611,11 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_hand_played" or e == "on_discard" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
             if ctx.event_name == "on_hand_played" and not ctx.blueprint then j.stored_mult = (tonumber(j.stored_mult) or 0) + 1
-            elseif ctx.event_name == "on_discard" and ctx.discard_reason == "discard" and not ctx.blueprint then j.stored_mult = math.max(0, (tonumber(j.stored_mult) or 0) - 1)
+            -- Once per discard, not once per card: the reference gates on the last card of
+            -- the discarded set (reference/Balatro/card.lua:2847-2858).
+            elseif ctx.event_name == "on_discard" and ctx.discard_reason == "discard"
+                and ctx.is_last ~= false and not ctx.blueprint then
+                j.stored_mult = math.max(0, (tonumber(j.stored_mult) or 0) - 1)
             elseif ctx.event_name == "on_hand_scored" then add_mult(ctx, tonumber(j.stored_mult) or 0) end
         end
     },
@@ -891,11 +895,13 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_discard" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
             if ctx.event_name == "on_discard" and ctx.discard_reason == "discard" and not ctx.blueprint then
-                local n = type(ctx.discarded_cards) == "table" and #ctx.discarded_cards or 0
-                j.runtime_counter = (tonumber(j.runtime_counter) or 0) + n
-                while (tonumber(j.runtime_counter) or 0) >= 23 do
+                -- Counted a card at a time (reference/Balatro/card.lua:2788-2800).
+                if not ctx.card then return end
+                j.runtime_counter = (tonumber(j.runtime_counter) or 0) + 1
+                if (tonumber(j.runtime_counter) or 0) >= 23 then
                     j.runtime_counter = j.runtime_counter - 23
                     j.stored_xmult = (tonumber(j.stored_xmult) or 1) + 1
+                    mark_effect_applied(ctx)
                 end
             elseif ctx.event_name == "on_hand_scored" then
                 mul_mult(ctx, tonumber(j.stored_xmult) or 1)
@@ -996,10 +1002,10 @@ local SPECIAL = {
                 mul_mult(ctx, tonumber(j.runtime_counter) or 1)
             elseif ctx.event_name == "on_discard" then
                 if ctx.blueprint then return end
-                local discardCount = type(ctx.discarded_cards) == "table" and #ctx.discarded_cards or 0
-                if discardCount < 1 then return end
-                local x = tonumber(j.runtime_counter) or 0
-                j.runtime_counter = x - (0.01 * discardCount)
+                -- One card, one bite (reference/Balatro/card.lua:2757-2786): a Ramen that
+                -- runs out partway through a discard stops eating the rest of it.
+                if not ctx.card then return end
+                j.runtime_counter = (tonumber(j.runtime_counter) or 0) - 0.01
                 -- reference/Balatro/card.lua:2757-2775 — Ramen is consumed at x1.00 too.
                 if j.runtime_counter <= 1 then
                     if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
@@ -1080,13 +1086,13 @@ local SPECIAL = {
                 add_chips(ctx, tonumber(j.runtime_counter) or 0)
             elseif ctx.event_name == "on_discard" then
                 if ctx.blueprint then return end
-                local discarded = ctx.discarded_cards
-                for n,c in ipairs(discarded) do
-                    -- Debuffed discarded cards do not grow Castle
-                    -- (reference/Balatro/card.lua:2814-2823).
-                    if not discarded_card_is_debuffed(ctx, n, c) and is_suit(c.suit, j.random_suit) then
-                        j.runtime_counter = (tonumber(j.runtime_counter) or 0) + 3
-                    end
+                -- Debuffed discarded cards do not grow Castle
+                -- (reference/Balatro/card.lua:2814-2823).
+                local c = ctx.card
+                if c and not discarded_card_is_debuffed(ctx, ctx.card_index, c)
+                    and is_suit(c.suit, j.random_suit) then
+                    j.runtime_counter = (tonumber(j.runtime_counter) or 0) + 3
+                    mark_effect_applied(ctx)
                 end
             elseif ctx.event_name == "on_round_end" then
                 if G and G.roll_joker_shared_picks and G.set_joker_shared_picks then
@@ -1337,7 +1343,9 @@ local SPECIAL = {
     j_faceless = {
         matches_trigger = function(_, e) return e == "on_discard" end,
         apply_effect = function(j, ctx) 
-            if(ctx.discard_reason == "discard") then
+            -- Once per discard, on the last card of the set
+            -- (reference/Balatro/card.lua:2860-2872).
+            if ctx.discard_reason == "discard" and ctx.is_last ~= false then
                 local discarded = ctx.discarded_cards
                 local faceCount = 0
                 for n,c in ipairs(discarded) do
@@ -1554,14 +1562,12 @@ local SPECIAL = {
             if ctx.event_name == "on_discard" then
                 if ctx.discard_reason == "discard" then
                     local payout = tonumber(type(j.def) == "table" and j.def.config and j.def.config.extra) or 5
-                    local discarded = ctx.discarded_cards
-                    for n, c in ipairs(discarded or {}) do
-                        -- Debuffed discarded cards do not pay Mail-In Rebate
-                        -- (reference/Balatro/card.lua:2825-2833).
-                        if c and not discarded_card_is_debuffed(ctx, n, c)
-                            and tonumber(c.rank) == tonumber(j.random_rank) then
-                            add_money(ctx, payout)
-                        end
+                    -- Debuffed discarded cards do not pay Mail-In Rebate
+                    -- (reference/Balatro/card.lua:2825-2833).
+                    local c = ctx.card
+                    if c and not discarded_card_is_debuffed(ctx, ctx.card_index, c)
+                        and tonumber(c.rank) == tonumber(j.random_rank) then
+                        add_money(ctx, payout)
                     end
                 end
             else
@@ -1817,15 +1823,17 @@ local SPECIAL = {
     },
 
     j_burnt = {
-        matches_trigger = function(_, e) return e == "on_discard" or e == "on_round_begin" or e == "on_blind_selected" end,
+        -- reference/Balatro/card.lua:2748-2755 -- `pre_discard`: Burnt levels the hand the
+        -- discarded cards make *before* any of them are evaluated or leave.
+        matches_trigger = function(_, e) return e == "on_pre_discard" or e == "on_round_begin" or e == "on_blind_selected" end,
         apply_effect = function(j, ctx)
             if ctx.event_name == "on_round_begin" or ctx.event_name == "on_blind_selected" then
                 j._burnt_used_this_round = false
                 return
             end
-            -- The Hook's forced discard reaches the same event path but must leave the
-            -- first voluntary discard available (reference/Balatro/card.lua:2749-2755).
-            if ctx.event_name ~= "on_discard" or ctx.discard_reason ~= "discard" or ctx.hook == true then return end
+            -- The Hook's forced discard must leave the first voluntary discard available
+            -- (reference/Balatro/card.lua:2749-2755).
+            if ctx.event_name ~= "on_pre_discard" or ctx.hook == true then return end
             if j._burnt_used_this_round == true then return end
             local hand_idx = tonumber(G and G.selectedHand)
             if not hand_idx or hand_idx < 1 then return end
@@ -1886,11 +1894,13 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_discard" or e == "on_hand_scored" or e == "on_round_end" end,
         apply_effect = function(j, ctx)
             if ctx.event_name == "on_discard" and ctx.discard_reason == "discard" and not ctx.blueprint then
-                local discarded = ctx.discarded_cards
-                for _, c in ipairs(discarded or {}) do
-                    if c and tonumber(c.rank) == 11 then
-                        j.stored_xmult = j.stored_xmult + 0.5
-                    end
+                -- Per Jack, and a debuffed one does not count
+                -- (reference/Balatro/card.lua:2835-2845).
+                local c = ctx.card
+                if c and tonumber(c.rank) == 11
+                    and not discarded_card_is_debuffed(ctx, ctx.card_index, c) then
+                    j.stored_xmult = j.stored_xmult + 0.5
+                    mark_effect_applied(ctx)
                 end
             elseif ctx.event_name == "on_hand_scored" then
                 mul_mult(ctx, tonumber(j.stored_xmult) or 1)

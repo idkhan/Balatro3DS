@@ -36,7 +36,7 @@ local EVENT_NAMES = {
     "on_blind_selected", "on_joker_sold", "on_round_begin", "card_held",
     "on_shop_reroll", "on_destroy", "on_consumable_used", "on_cards_added_to_deck",
     "on_booster_skip", "lucky_trigger", "on_boss_effect_triggered", "on_booster_open",
-    "on_hand_after",
+    "on_hand_after", "on_pre_discard",
     "glass_broken",
 }
 
@@ -969,9 +969,13 @@ suite.test("Ramen is consumed when its Xmult reaches one", function()
     game.jokers = { ramen }
     game.remove_owned_joker_at = function(_, index) removed[#removed + 1] = index end
 
+    -- The discard pass dispatches one event per discarded card, each carrying that card.
     JokerEffects.get(ramen).apply_effect(ramen, {
         event_name = "on_discard",
         discarded_cards = { {} },
+        card = {},
+        card_index = 1,
+        is_last = true,
         VT = { x = 0, y = 0, w = 10, h = 10, scale = 1 },
     })
 
@@ -1040,6 +1044,15 @@ suite.test("Burnt Joker keeps its first-discard trigger when The Hook discards",
 
     T.assert_eq(upgrades, 0, "The Hook must not spend Burnt Joker's upgrade")
     T.assert_false(burnt._burnt_used_this_round == true, "Burnt remains armed for a player discard")
+
+    -- Burnt is a `pre_discard` joker: it levels the hand the discarded cards make before any
+    -- of them is evaluated (reference/Balatro/card.lua:2748-2755).
+    JokerEffects.get(burnt).apply_effect(burnt, {
+        event_name = "on_pre_discard",
+        discard_reason = "discard",
+    })
+    T.assert_eq(upgrades, 1, "a player discard's pre-discard pass spends it")
+    T.assert_true(burnt._burnt_used_this_round == true, "and only once a round")
 end)
 
 suite.test("Mail takes its rerolled rank from the deck and Castle and Mail skip debuffed cards", function()
@@ -1060,10 +1073,14 @@ suite.test("Mail takes its rerolled rank from the deck and Castle and Mail skip 
     _G.Top = { addPopup = function() end }
     game.money = 0
     mail.random_rank = 13
+    local subject = { rank = 13, suit = "Hearts", debuff = true }
     local ctx = {
         event_name = "on_discard",
         discard_reason = "discard",
-        discarded_cards = { { rank = 13, suit = "Hearts", debuff = true } },
+        discarded_cards = { subject },
+        card = subject,
+        card_index = 1,
+        is_last = true,
         VT = { x = 0, y = 0, w = 10, h = 10, scale = 1 },
     }
     JokerEffects.get(castle).apply_effect(castle, ctx)
@@ -1071,7 +1088,7 @@ suite.test("Mail takes its rerolled rank from the deck and Castle and Mail skip 
     T.assert_eq(castle.runtime_counter, 0, "a debuffed card must not grow Castle")
     T.assert_eq(game.money, 0, "a debuffed card must not pay Mail")
 
-    ctx.discarded_cards[1].debuff = false
+    subject.debuff = false
     JokerEffects.get(castle).apply_effect(castle, ctx)
     JokerEffects.get(mail).apply_effect(mail, ctx)
     T.assert_eq(castle.runtime_counter, 3, "a non-debuffed matching suit grows Castle")

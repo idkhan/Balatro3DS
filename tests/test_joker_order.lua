@@ -169,46 +169,117 @@ end)
 -- The discard beat
 --------------------------------------------------------------------------------
 
-suite.test("a player discard holds its second half until the joker batch drains", function()
+suite.test("a player discard walks a pre-discard batch then one batch per card", function()
     local game = bootstrap.new_game(4106)
     local hand = game.hand or Hand(game)
     game.hand = hand
+    -- The discarded set is built as the cards are pushed to the discard pile.
+    game.deck = game.deck or Deck(game)
     for i = 1, 5 do
         hand:add_card({ rank = 2 + i, suit = "Spades", enhancement = "none" }, true)
     end
-    T.assert_true(#hand.card_nodes > 1, "the hand was stocked")
+    T.assert_true(#hand.card_nodes > 2, "the hand was stocked")
 
     local size_before = #hand.card_nodes
-    local target = hand.card_nodes[1]
-    hand.selected = { target }
-    target.selected = true
+    local picked = { hand.card_nodes[1], hand.card_nodes[2] }
+    hand.selected = { picked[1], picked[2] }
+    picked[1].selected, picked[2].selected = true, true
     G.discards = 3
 
-    local busy = true
-    local staggered = 0
-    game.begin_joker_emit = function(_, event)
-        if event ~= "on_discard" then return false end
-        staggered = staggered + 1
+    local busy = false
+    local batches = {}
+    game.begin_joker_emit = function(_, event, ctx)
+        batches[#batches + 1] = { event = event, index = ctx.card_index, last = ctx.is_last }
+        busy = true
         return true
     end
     game.joker_emit_busy = function() return busy end
 
     hand:discard_selected()
-    T.assert_eq(staggered, 1, "the discard batch was staggered")
-    T.assert_eq(#hand.card_nodes, size_before,
-        "the card is still in hand while the jokers are announcing themselves")
-    T.assert_true(hand._pending_discard_finish ~= nil, "the second half is pending")
+    T.assert_eq(#batches, 1, "the pre-discard batch runs first")
+    T.assert_eq(batches[1].event, "on_pre_discard",
+        "Burnt Joker's pass precedes every card (reference state_events.lua:395)")
+    T.assert_eq(#hand.card_nodes, size_before, "nothing has left the hand yet")
 
-    -- A second discard must not start on top of the pending one.
-    hand.selected = { hand.card_nodes[2] }
-    hand:discard_selected()
-    T.assert_eq(staggered, 1, "a second discard is refused while one is draining")
+    -- Each batch drains, then the next one starts.
+    busy = false
+    hand:update(0.016)
+    T.assert_eq(#batches, 2, "the first card's batch follows")
+    T.assert_eq(batches[2].event, "on_discard")
+    T.assert_eq(batches[2].index, 1, "it carries the first discarded card")
+    T.assert_eq(batches[2].last, false, "and knows it is not the last")
 
     busy = false
     hand:update(0.016)
-    T.assert_eq(hand._pending_discard_finish, nil, "the pending half ran")
+    T.assert_eq(#batches, 3, "then the second card's batch")
+    T.assert_eq(batches[3].index, 2)
+    T.assert_eq(batches[3].last, true, "the last card carries the once-per-discard flag")
+    T.assert_true(hand._discard_sequence ~= nil, "the pass is still in flight")
+    T.assert_eq(#hand.card_nodes, size_before, "and the cards are still in hand")
+
+    -- A second discard must not start on top of one in flight.
+    hand.selected = { hand.card_nodes[3] }
+    hand:discard_selected()
+    T.assert_eq(#batches, 3, "a second discard is refused while a pass is draining")
+
+    busy = false
+    hand:update(0.016)
+    T.assert_eq(hand._discard_sequence, nil, "the pass finished")
     T.assert_true(#hand.card_nodes < size_before or #hand._draw_queue > 0,
-        "the card left the hand once the batch drained")
+        "the cards left the hand once the pass was done")
+end)
+
+suite.test("a play-cleanup discard does not stage anything", function()
+    local game = bootstrap.new_game(4107)
+    local hand = game.hand or Hand(game)
+    game.hand = hand
+    game.deck = game.deck or Deck(game)
+    hand:add_card({ rank = 5, suit = "Spades", enhancement = "none" }, true)
+    hand.selected = { hand.card_nodes[1] }
+
+    local staggered = 0
+    game.begin_joker_emit = function() staggered = staggered + 1; return true end
+    game.joker_emit_busy = function() return true end
+
+    hand:_discard_selected_impl("play")
+    T.assert_eq(staggered, 0,
+        "every on_discard joker gates on discard_reason, so play cleanup has nothing to announce")
+    T.assert_eq(hand._discard_sequence, nil, "and nothing is left in flight")
+end)
+
+suite.test("Green Joker and Faceless fire once per discard, on its last card", function()
+    local game = bootstrap.new_game(4108)
+    local old_top = _G.Top
+    _G.Top = { addPopup = function() end }
+
+    local green = fake_joker("j_green_joker")
+    green.stored_mult = 5
+    local faceless = fake_joker("j_faceless")
+    game.money = 0
+
+    local cards = {
+        { rank = 11, suit = "Spades" },
+        { rank = 12, suit = "Spades" },
+        { rank = 13, suit = "Spades" },
+    }
+    for i, c in ipairs(cards) do
+        local ctx = {
+            event_name = "on_discard",
+            discard_reason = "discard",
+            discarded_cards = cards,
+            discarded_nodes = {},
+            card = c,
+            card_index = i,
+            is_last = (i == #cards),
+            VT = { x = 0, y = 0, w = 10, h = 10, scale = 1 },
+        }
+        JokerEffects.get(green).apply_effect(green, ctx)
+        JokerEffects.get(faceless).apply_effect(faceless, ctx)
+    end
+
+    T.assert_eq(green.stored_mult, 4, "Green Joker loses one Mult for the discard, not one per card")
+    T.assert_eq(game.money, 5, "Faceless pays once for three discarded face cards")
+    _G.Top = old_top
 end)
 
 return suite
