@@ -15,6 +15,7 @@ local CollectionCatalog = require("collection_catalog")
 local YouWinUI = require("you_win")
 local TooltipDraw = require("tooltip_draw")
 local InputBindings = require("input_bindings")
+local BuildFlags = require("build_flags")
 local PerformanceLab = require("performance_lab")
 local RenderProfiler = require("render_profiler")
 local Particles = require("particles")
@@ -7222,14 +7223,24 @@ function Game:draw_bottom_pause()
                 self._pause_tilt_rect = nil
             end
 
-            local open_x = panel_x + math.floor((panel_w - row_w * 2 - row_gap) * 0.5 + 0.5)
-            self._pause_controls_open_rect = { x = open_x, y = panel_y + 190, w = row_w, h = row_h }
-            self._pause_performance_open_rect = {
-                x = open_x + row_w + row_gap, y = panel_y + 190, w = row_w, h = row_h,
-            }
+            local open_x
+            self._pause_controls_open_rect = { x = 0, y = panel_y + 190, w = row_w, h = row_h }
+            if BuildFlags.release then
+                open_x = panel_x + math.floor((panel_w - row_w) * 0.5 + 0.5)
+                self._pause_controls_open_rect.x = open_x
+                self._pause_performance_open_rect = nil
+            else
+                open_x = panel_x + math.floor((panel_w - row_w * 2 - row_gap) * 0.5 + 0.5)
+                self._pause_controls_open_rect.x = open_x
+                self._pause_performance_open_rect = {
+                    x = open_x + row_w + row_gap, y = panel_y + 190, w = row_w, h = row_h,
+                }
+            end
             draw_btn(self._pause_controls_open_rect, "Controls", self.C.BOOSTER, is_pause_focused("controls_open"))
-            draw_btn(self._pause_performance_open_rect, "Performance", self.C.ORANGE,
-                is_pause_focused("performance_open"))
+            if self._pause_performance_open_rect then
+                draw_btn(self._pause_performance_open_rect, "Performance", self.C.ORANGE,
+                    is_pause_focused("performance_open"))
+            end
 
             self._pause_back_rect = {
                 x = panel_x + math.floor((panel_w - row_w) * 0.5 + 0.5), y = panel_y + 216,
@@ -8047,8 +8058,14 @@ function Game:update(dt, real_dt)
     self:_update_blind_defeat(real_dt)
     self:_update_card_ripple(real_dt)
     self:_update_boss_announce_sting(real_dt)
-    self:_update_hand_levelup(real_dt)
-    self:_update_consumable_flight(real_dt)
+    -- The level-up ladder is an event-queue sequence in the reference, and events run off the
+    -- `TOTAL` timer by default (`engine/event.lua:22`), so it scales with the game-speed
+    -- setting like every other beat of a run. It was running on wall time here, which left a
+    -- Planet taking three seconds at 4x while the rest of the run flew past.
+    self:_update_hand_levelup(dt)
+    -- Flight is motion (real time); the hold before the card comes apart is sequencing, so it
+    -- rides the same scaled clock as the ladder it is waiting on.
+    self:_update_consumable_flight(real_dt, dt)
     self:_update_dissolving_nodes(real_dt)
     self:_update_materializing_nodes(real_dt)
     -- Once per frame, not per screen: `love.draw` runs per screen and the tooltip would open at
@@ -12213,18 +12230,22 @@ function Game:begin_consumable_use_flight(node)
 end
 
 --- Advance the flight, then hand the node to the dissolve list.
----@param dt number real seconds
-function Game:_update_consumable_flight(dt)
+---@param dt number real seconds, for the flight itself
+---@param scaled_dt number|nil game-speed-scaled seconds, for the hold that follows it
+function Game:_update_consumable_flight(dt, scaled_dt)
     local f = self._consumable_flight
     if not f then return end
     if self.STATE == self.STATES.PAUSED then return end
-    f.t = f.t + dt
     if f.phase == "fly" then
+        f.t = f.t + dt
         if f.t >= CONSUMABLE_FLY_DURATION then
             f.phase = "hold"
             f.t = 0
         end
-    elseif f.t >= (f.hold or CONSUMABLE_HOLD_DURATION) then
+        return
+    end
+    f.t = f.t + (tonumber(scaled_dt) or dt)
+    if f.t >= (f.hold or CONSUMABLE_HOLD_DURATION) then
         self._consumable_flight = nil
         self:retain_dissolving_node(f.node)
     end
@@ -12528,7 +12549,8 @@ function Game:begin_hand_levelup_flourish(hand_name, from_level, from_chips, fro
 end
 
 --- Advance the level-up flourish.
----@param dt number real seconds
+---@param dt number game-speed-scaled seconds (the reference's `TOTAL` clock, which is what its
+--- event queue runs on)
 function Game:_update_hand_levelup(dt)
     local f = self._hand_levelup
     if not f then return end

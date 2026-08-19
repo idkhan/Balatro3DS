@@ -627,6 +627,17 @@ suite.test("levelling a hand rings three beats, not one", function()
     T.assert_eq(g._hand_levelup, nil, "and then retires")
 end)
 
+suite.test("a level-up runs on the game-speed clock, not wall time", function()
+    local g = bootstrap.new_game()
+    g.STATE = g.STATES.SELECTING_HAND
+    g:begin_hand_levelup_flourish("Pair", 1, 10, 2, 2, 25, 4)
+    -- `Game:update(scaled, real)`: the ladder is an event-queue sequence in the reference and
+    -- events default to the `TOTAL` timer (`engine/event.lua:22`), so 2x speed halves it.
+    g:update(2 / 60, 1 / 60)
+    T.assert_true(math.abs(g._hand_levelup.t - 2 / 60) < 1e-9,
+        "the flourish advances on the scaled clock")
+end)
+
 suite.test("a level-up walks the readout up one slot per beat", function()
     local g = bootstrap.new_game()
     g.STATE = g.STATES.SELECTING_HAND

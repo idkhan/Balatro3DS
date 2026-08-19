@@ -1029,7 +1029,12 @@ function TopUI:update_counters(dt)
     -- moves and the chips simply climb. Popping both made the chips look like they were
     -- breathing on every card.
     -- Restart before stepping, so the frame the value changes already shows the curve's first step.
-    if self.mult_seen ~= nil and mult ~= self.mult_seen then
+    -- Except during a level-up ladder: the reference raises `G.TAROT_INTERRUPT_PULSE` across it
+    -- precisely to suppress this pop (`common_events.lua:473-484`, `button_callbacks.lua:1923`),
+    -- because the delta plate is already covering that readout and a number popping out from
+    -- under a plate reads as two things happening at once.
+    if self.mult_seen ~= nil and mult ~= self.mult_seen
+        and not (G and G._hand_levelup) then
         self.mult_juice_state = begin_juice(self.mult_juice_state)
     end
     self.chips_seen, self.mult_seen = chips, mult
