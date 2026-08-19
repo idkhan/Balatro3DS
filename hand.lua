@@ -250,6 +250,8 @@ function Hand:init(game)
     self._draw_queue = {}
     self._draw_timer = 0
     self._destroying_nodes = {}
+    -- A pending discard resume must not survive a hand reset; its nodes are gone.
+    self._pending_discard_finish = nil
     self._materializing_nodes = {}
     self.sort_mode = "rank"
     self._play_sequence = nil
@@ -579,6 +581,8 @@ function Hand:clear()
     self._draw_queue = {}
     self._draw_timer = 0
     self._destroying_nodes = {}
+    -- A pending discard resume must not survive a hand reset; its nodes are gone.
+    self._pending_discard_finish = nil
     self._materializing_nodes = {}
     self._play_sequence = nil
     self._deal_n = nil
@@ -747,7 +751,7 @@ function Hand:clear_selection()
 end
 
 function Hand:discard_selected()
-    if self._play_sequence then return end
+    if self._play_sequence or self._pending_discard_finish then return end
     if #self.selected == 0 or not self.game or G.discards <= 0 then return end
     local discard_cost = self.game.challenge_modifiers and tonumber(self.game.challenge_modifiers.discard_cost)
     if discard_cost and discard_cost > 0 then
@@ -846,14 +850,45 @@ function Hand:_discard_selected_impl(reason, opts)
     local selected_set = {}
     for _, n in ipairs(self.selected) do selected_set[n] = true end
     if not skip_events and self.game and self.game.emit_joker_event then
-        self.game:emit_joker_event("on_discard", {
+        local dctx = {
             event = "on_discard",
             event_name = "on_discard",
             discarded_nodes = discarded_nodes,
             discarded_cards = discarded_cards,
             discard_reason = reason,
-        })
+        }
+        -- A player-initiated discard is the reference's `context.discard` pass, and its
+        -- status events are blocking: Burnt Joker's level-up, Ramen shrinking, Hit the Road
+        -- and Yorick each own a beat (`state_events.lua:395-430`). Hold the rest of the
+        -- discard until the batch drains rather than resolving it all in one frame. Only
+        -- this path staggers -- every on_discard joker gates on `discard_reason ==
+        -- "discard"`, so the play-cleanup and boss-forced paths have nothing to announce.
+        if reason == "discard" and self.game.begin_joker_emit
+            and self.game:begin_joker_emit("on_discard", dctx) then
+            self._pending_discard_finish = {
+                reason = reason,
+                skip_events = skip_events,
+                discarded_nodes = discarded_nodes,
+                discarded_cards = discarded_cards,
+                selected_set = selected_set,
+            }
+            return
+        end
+        if not (reason == "discard" and self.game.begin_joker_emit) then
+            self.game:emit_joker_event("on_discard", dctx)
+        end
     end
+    self:_finish_discard(reason, skip_events, discarded_nodes, discarded_cards, selected_set)
+end
+
+--- The half of a discard that runs once the `on_discard` joker batch has finished: the
+--- per-card discard events, removal from the hand, the flight queue and the refill.
+---@param reason string|nil
+---@param skip_events boolean
+---@param discarded_nodes table[]
+---@param discarded_cards table[]
+---@param selected_set table<table, boolean>
+function Hand:_finish_discard(reason, skip_events, discarded_nodes, discarded_cards, selected_set)
     if reason == "discard" and not skip_events then
         if self.game.record_cards_discarded then
             self.game:record_cards_discarded(#discarded_nodes)
@@ -1995,6 +2030,14 @@ end
 function Hand:update(dt)
     self:update_card_lifecycles((G and G.real_dt) or dt)
     self:apply_idle_sway()
+    -- A staggered `on_discard` batch holds the second half of the discard; the stagger
+    -- itself runs in `Game:update` (`_update_joker_emit_queue`).
+    local pending = self._pending_discard_finish
+    if pending and not (self.game and self.game.joker_emit_busy and self.game:joker_emit_busy()) then
+        self._pending_discard_finish = nil
+        self:_finish_discard(pending.reason, pending.skip_events, pending.discarded_nodes,
+            pending.discarded_cards, pending.selected_set)
+    end
     if self._play_sequence then
         self:_update_play_sequence(dt)
     end
@@ -2236,7 +2279,7 @@ end
 
 function Hand:play_selected()
     if #self.selected == 0 or G.hands <= 0 then return end
-    if self._play_sequence then return end
+    if self._play_sequence or self._pending_discard_finish then return end
 
     if self.game then
         self.game:clear_bottom_tooltips()

@@ -165,4 +165,50 @@ suite.test("Vagabond, Superposition and Seance create their card at joker_main",
     end
 end)
 
+--------------------------------------------------------------------------------
+-- The discard beat
+--------------------------------------------------------------------------------
+
+suite.test("a player discard holds its second half until the joker batch drains", function()
+    local game = bootstrap.new_game(4106)
+    local hand = game.hand or Hand(game)
+    game.hand = hand
+    for i = 1, 5 do
+        hand:add_card({ rank = 2 + i, suit = "Spades", enhancement = "none" }, true)
+    end
+    T.assert_true(#hand.card_nodes > 1, "the hand was stocked")
+
+    local size_before = #hand.card_nodes
+    local target = hand.card_nodes[1]
+    hand.selected = { target }
+    target.selected = true
+    G.discards = 3
+
+    local busy = true
+    local staggered = 0
+    game.begin_joker_emit = function(_, event)
+        if event ~= "on_discard" then return false end
+        staggered = staggered + 1
+        return true
+    end
+    game.joker_emit_busy = function() return busy end
+
+    hand:discard_selected()
+    T.assert_eq(staggered, 1, "the discard batch was staggered")
+    T.assert_eq(#hand.card_nodes, size_before,
+        "the card is still in hand while the jokers are announcing themselves")
+    T.assert_true(hand._pending_discard_finish ~= nil, "the second half is pending")
+
+    -- A second discard must not start on top of the pending one.
+    hand.selected = { hand.card_nodes[2] }
+    hand:discard_selected()
+    T.assert_eq(staggered, 1, "a second discard is refused while one is draining")
+
+    busy = false
+    hand:update(0.016)
+    T.assert_eq(hand._pending_discard_finish, nil, "the pending half ran")
+    T.assert_true(#hand.card_nodes < size_before or #hand._draw_queue > 0,
+        "the card left the hand once the batch drained")
+end)
+
 return suite
