@@ -2,7 +2,8 @@
 local MainMenuUI = {}
 local CollectionUI = require("collection_ui")
 local ProfileUI = require("profile_ui")
-local Benchmark = require("benchmark")
+local BuildFlags = require("build_flags")
+local Benchmark = (not BuildFlags.release) and require("benchmark") or nil
 -- The animated background, evaluated on the GPU; see backdrop.lua.
 local Backdrop = require("backdrop")
 
@@ -138,13 +139,7 @@ end
 
 local MENU_ANIM_FPS = 12
 
-local cia_build_timestamp = nil
-do
-    local ok, build_info = pcall(require, "build_info")
-    if ok and type(build_info) == "table" and type(build_info.timestamp) == "string" then
-        cia_build_timestamp = build_info.timestamp
-    end
-end
+local cia_build_timestamp = BuildFlags.timestamp
 
 local function menu_ping_pong_frame(frame_count, fps, time)
     frame_count = math.max(1, tonumber(frame_count) or 1)
@@ -568,7 +563,8 @@ local MENU_PAGES = {
             -- performance suite and writes the numbers to the save directory. It lives here
             -- because hardware is the only place the numbers mean anything, and the menu is
             -- the only way to reach anything on a console.
-            { kind = "benchmark",   label = "Benchmark",   colour = "GREY" },
+            { kind = "benchmark",   label = "Benchmark",   colour = "GREY",
+                visible = function() return not BuildFlags.release end },
         },
     },
 }

@@ -109,6 +109,7 @@ PAGE = """<!doctype html>
     font: inherit;
   }}
   button:disabled {{ opacity: .5; cursor: wait; }}
+  .actions {{ display: flex; gap: .75rem; flex-wrap: wrap; justify-content: center; }}
   #status {{ min-height: 1.5em; color: #8b949e; }}
 </style>
 </head>
@@ -116,22 +117,33 @@ PAGE = """<!doctype html>
   <img src="/qr.png" alt="QR code for {url}">
   <div><a href="{url}">{url}</a></div>
   <div class="meta" id="meta">{name} &middot; {size} &middot; built {built}</div>
-  <button id="rebuild" type="button">Rebuild CIA</button>
-  <button id="reveal" type="button">Reveal in File Explorer</button>
+  <div class="actions">
+    <button id="rebuild" type="button">Rebuild CIA</button>
+    <button id="package-release" type="button">Package release</button>
+    <button id="reveal" type="button">Reveal in File Explorer</button>
+  </div>
   <div id="status" role="status" aria-live="polite"></div>
   <script>
     const button = document.getElementById('rebuild');
+    const releaseButton = document.getElementById('package-release');
     const revealButton = document.getElementById('reveal');
     const status = document.getElementById('status');
     const meta = document.getElementById('meta');
     let timer;
 
+    function setButtonsDisabled(disabled) {{
+      button.disabled = disabled;
+      releaseButton.disabled = disabled;
+    }}
+
     function updateStatus() {{
       fetch('/status', {{ cache: 'no-store' }})
         .then(response => response.json())
         .then(state => {{
-          button.disabled = state.running;
-          status.textContent = state.running ? 'Building CIA…' : (state.message || '');
+          setButtonsDisabled(state.running);
+          status.textContent = state.running
+            ? (state.label || 'Building…')
+            : (state.message || '');
           if (state.meta) {{
             meta.textContent = `${{state.meta.name}} · ${{state.meta.size}} · built ${{state.meta.built}}`;
           }}
@@ -140,16 +152,24 @@ PAGE = """<!doctype html>
         }});
     }}
 
-    button.addEventListener('click', () => {{
-      button.disabled = true;
-      status.textContent = 'Starting build…';
-      fetch('/rebuild', {{ method: 'POST' }})
+    function startBuild(path, startingText) {{
+      setButtonsDisabled(true);
+      status.textContent = startingText;
+      fetch(path, {{ method: 'POST' }})
         .then(response => response.json())
         .then(() => updateStatus())
         .catch(() => {{
-          button.disabled = false;
+          setButtonsDisabled(false);
           status.textContent = 'Could not start the build.';
         }});
+    }}
+
+    button.addEventListener('click', () => {{
+      startBuild('/rebuild', 'Starting CIA build…');
+    }});
+
+    releaseButton.addEventListener('click', () => {{
+      startBuild('/package-release', 'Starting release package…');
     }});
 
     revealButton.addEventListener('click', () => {{
@@ -177,24 +197,43 @@ class BuildState:
         self.lock = threading.Lock()
         self.running = False
         self.message = ""
+        self.label = ""
 
-    def start(self) -> bool:
+    def start(self, mode: str = "cia") -> bool:
         with self.lock:
             if self.running:
                 return False
             self.running = True
             self.message = ""
-        threading.Thread(target=self._run, daemon=True).start()
+            if mode == "release":
+                self.label = "Packaging release (CIA + 3DSX)…"
+            else:
+                self.label = "Building CIA…"
+        threading.Thread(target=self._run, args=(mode,), daemon=True).start()
         return True
 
     def snapshot(self) -> dict[str, object]:
         with self.lock:
-            return {"running": self.running, "message": self.message}
+            return {
+                "running": self.running,
+                "message": self.message,
+                "label": self.label,
+            }
 
-    def _run(self):
+    def _run(self, mode: str):
+        if mode == "release":
+            command = ["bash", str(DEV_DIR / "build.sh"), "all", "--release"]
+            success_message = "Release package complete (CIA + 3DSX)."
+            failure_message = "Release package failed."
+            start_error = "Release package could not start"
+        else:
+            command = ["bash", str(DEV_DIR / "build.sh"), "cia"]
+            success_message = "CIA build complete."
+            failure_message = "CIA build failed."
+            start_error = "CIA build could not start"
         try:
             result = subprocess.run(
-                ["bash", str(DEV_DIR / "build.sh"), "cia"],
+                command,
                 cwd=REPO_ROOT,
                 capture_output=True,
                 text=True,
@@ -203,15 +242,16 @@ class BuildState:
             output = (result.stdout + result.stderr).strip().splitlines()
             with self.lock:
                 if result.returncode == 0:
-                    self.message = output[-1] if output else "CIA build complete."
+                    self.message = output[-1] if output else success_message
                 else:
-                    self.message = output[-1] if output else "CIA build failed."
+                    self.message = output[-1] if output else failure_message
         except OSError as error:
             with self.lock:
-                self.message = f"CIA build could not start: {error}"
+                self.message = f"{start_error}: {error}"
         finally:
             with self.lock:
                 self.running = False
+                self.label = ""
 
 
 def reveal_in_file_manager(target: Path) -> tuple[bool, str]:
@@ -363,9 +403,20 @@ def build_handler(target: Path, url: str, qr_png: bytes, build_state: BuildState
             import json
 
             if path == "/rebuild":
-                started = build_state.start()
+                started = build_state.start("cia")
                 status = 202 if started else 409
-                message = "CIA rebuild started." if started else "CIA rebuild already running."
+                message = "CIA rebuild started." if started else "Build already running."
+                self._send(
+                    json.dumps({"started": started, "message": message}).encode(),
+                    "application/json; charset=utf-8",
+                    status=status,
+                )
+                return
+
+            if path == "/package-release":
+                started = build_state.start("release")
+                status = 202 if started else 409
+                message = "Release package started." if started else "Build already running."
                 self._send(
                     json.dumps({"started": started, "message": message}).encode(),
                     "application/json; charset=utf-8",

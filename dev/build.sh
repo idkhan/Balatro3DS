@@ -5,6 +5,7 @@
 #   ./dev/build.sh            build the CIA (default)
 #   ./dev/build.sh 3dsx       build the fused .3dsx for the Homebrew Launcher
 #   ./dev/build.sh all        build both
+#   ./dev/build.sh --release  strip dev tools and stamp a release build_info.lua
 #   ./dev/build.sh clean      drop staged files, converted assets and output
 #
 # Output goes to dev/dist. Run ./dev/setup.sh once first.
@@ -18,7 +19,17 @@ set -euo pipefail
 # shellcheck source=dev/config.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/config.sh"
 
-TARGET="${1:-cia}"
+TARGET="cia"
+RELEASE=0
+for arg in "$@"; do
+    case "$arg" in
+        --release) RELEASE=1 ;;
+        cia|3dsx|all|clean) TARGET="$arg" ;;
+        "") ;;
+        *) die "unknown argument: $arg (expected cia, 3dsx, all, clean, or --release)" ;;
+    esac
+done
+
 JOBS="$(getconf _NPROCESSORS_ONLN)"
 ASSET_CACHE="$CACHE_DIR/assets"
 
@@ -69,6 +80,11 @@ rsync -a --delete --delete-excluded \
     --exclude '.vscode/' \
     --exclude '.DS_Store' \
     "$REPO_ROOT/" "$STAGE_DIR/"
+
+if [[ "$RELEASE" == "1" ]]; then
+    rm -f "$STAGE_DIR/benchmark.lua"
+    info "release build: omitted benchmark.lua"
+fi
 
 # The soundtrack stays Vorbis: as PCM it would add roughly 23 MB to romfs, and only two
 # stems ever overlap. What made crossfades drop frames was never decoder throughput but
@@ -252,14 +268,27 @@ build_smdh "$SMDH" nosavebackups,visible
 
 # --- targets ---------------------------------------------------------------
 
+prepare_build_info() {
+    if [[ "$RELEASE" == "1" ]]; then
+        printf 'return { release = true }\n' > "$STAGE_DIR/build_info.lua"
+    elif [[ "$1" == "cia" ]]; then
+        local cia_build_timestamp
+        cia_build_timestamp="$(LC_ALL=C TZ=CST6 date '+%m/%d, %-I:%M%p CST')"
+        printf 'return { timestamp = "%s" }\n' "$cia_build_timestamp" > "$STAGE_DIR/build_info.lua"
+    else
+        rm -f "$STAGE_DIR/build_info.lua"
+    fi
+}
+
 build_3dsx() {
+    prepare_build_info 3dsx
     info "packaging .3dsx"
     ( cd "$STAGE_DIR" && rm -f "$BUILD_DIR/game.love" && zip -qr "$BUILD_DIR/game.love" . )
     3dsxtool "$ELF" "$BUILD_DIR/base.3dsx" \
         --smdh="$SMDH" \
         --romfs="$LOVEPOTION_DIR/platform/ctr/romfs"
-    cat "$BUILD_DIR/base.3dsx" "$BUILD_DIR/game.love" > "$DIST_DIR/$APP_TITLE.3dsx"
-    info "wrote $DIST_DIR/$APP_TITLE.3dsx"
+    cat "$BUILD_DIR/base.3dsx" "$BUILD_DIR/game.love" > "$DIST_DIR/$GAME_ROOT.3dsx"
+    info "wrote $DIST_DIR/$GAME_ROOT.3dsx"
 }
 
 build_cia() {
@@ -268,16 +297,11 @@ build_cia() {
 
     # The stock runtime cannot find a game when launched as a title, so refuse
     # to ship a CIA that would boot to the no-game screen.
-    if ! LC_ALL=C grep -aq "romfs:/$GAME_ROOT" "$ELF"; then
+    if ! LC_ALL=C grep -ao "romfs:/[[:alnum:]_.-]*" "$ELF" | grep -qx "romfs:/$GAME_ROOT"; then
         die "runtime at $ELF is not patched for RomFS booting; run ./dev/setup.sh"
     fi
 
-    # Generated after staging so it is embedded only in the CIA, never local
-    # development or 3dsx builds. CST6 is fixed Central Standard Time (UTC-6),
-    # independent of the builder's machine and daylight-saving time.
-    local cia_build_timestamp
-    cia_build_timestamp="$(LC_ALL=C TZ=CST6 date '+%m/%d, %-I:%M%p CST')"
-    printf 'return { timestamp = "%s" }\n' "$cia_build_timestamp" > "$STAGE_DIR/build_info.lua"
+    prepare_build_info cia
 
     local romfs="$BUILD_DIR/romfs" banner_audio="$DEV_DIR/cia/banner.wav"
 
