@@ -2,6 +2,7 @@
 Hand = Object:extend()
 
 local Particles = require("particles")
+local JokerDisplay = require("joker_display")
 
 local SCREEN_W = 320
 local SCREEN_H = 240
@@ -2562,8 +2563,13 @@ function Hand:calculate_play()
         G.selectedHandLevel = 1
         G.selectedHandChips = 0
         G.selectedHandMult = 0
+        -- The Joker readouts are all relative to the selection, so clearing it invalidates
+        -- every one of them (`joker_display.lua`).
+        JokerDisplay.invalidate()
         return
     end
+
+    JokerDisplay.invalidate()
 
     print("Selected cards:")
 

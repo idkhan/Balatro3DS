@@ -23,6 +23,7 @@ local Fonts = require("fonts")
 local NumberFormat = require("number_format")
 local Tilt = require("tilt")
 local ScreenWipe = require("screen_wipe")
+local JokerDisplay = require("joker_display")
 
 --- Seconds between revealing each payout line on the round-win screen.
 ---
@@ -2500,6 +2501,7 @@ function Game:enter_pause_menu()
     self._pause_sfx_slider_drag = false
     self._pause_reduced_motion_rect = nil
     self._pause_tilt_rect = nil
+    self._pause_joker_display_rect = nil
     self._pause_focus_index = 1
     self:set_state(self.STATES.PAUSED)
     return true
@@ -2640,6 +2642,9 @@ function Game:build_pause_focus_targets()
         if self._pause_tilt_rect then
             targets[#targets + 1] = { kind = "tilt", rect = self._pause_tilt_rect }
         end
+        if self._pause_joker_display_rect then
+            targets[#targets + 1] = { kind = "joker_display", rect = self._pause_joker_display_rect }
+        end
         if self._pause_back_rect then
             targets[#targets + 1] = { kind = "back", rect = self._pause_back_rect }
         end
@@ -2702,6 +2707,9 @@ function Game:activate_pause_focus()
         return true
     elseif t.kind == "tilt" then
         self:set_tilt_enabled(not self:tilt_enabled())
+        return true
+    elseif t.kind == "joker_display" then
+        self:set_joker_display_enabled(not self:joker_display_enabled())
         return true
     elseif t.kind == "perf_toggle" and t.rect and t.rect.experiment_id then
         PerformanceLab.toggle(t.rect.experiment_id)
@@ -3183,6 +3191,10 @@ function Game:default_settings()
         -- movement setting separate (`UI_definitions.lua:2303-2309`); the shake's own off switch is
         -- SCREENSHAKE at 0.
         TILT = true,
+        -- Live per-Joker readouts under the Joker row (`joker_display.lua`). Off by default:
+        -- it is an information overlay the base game does not have, and it costs the 20 px
+        -- under the row.
+        JOKER_DISPLAY = false,
         GRAPHICS = { texture_scaling = 1 },
         CONTROLS = InputBindings.default_settings(),
         UNLOCKS = self:build_unlocks(),
@@ -3233,6 +3245,9 @@ function Game:normalize_settings(data)
     if type(data.TILT) == "boolean" then
         out.TILT = data.TILT
     end
+    if type(data.JOKER_DISPLAY) == "boolean" then
+        out.JOKER_DISPLAY = data.JOKER_DISPLAY
+    end
 
     out.CONTROLS = InputBindings.normalize_controls(data.CONTROLS)
     out.UNLOCKS = self:normalize_unlocks(data.UNLOCKS)
@@ -3261,6 +3276,7 @@ function Game:snapshot_settings()
         SCREENSHAKE = self:get_screenshake_percent(),
         REDUCED_MOTION = self:reduced_motion_enabled(),
         TILT = self:tilt_enabled(),
+        JOKER_DISPLAY = self:joker_display_enabled(),
         CONTROLS = InputBindings.normalize_controls(self.SETTINGS and self.SETTINGS.CONTROLS),
         UNLOCKS = self:normalize_unlocks(self.unlocks or (self.SETTINGS and self.SETTINGS.UNLOCKS)),
         JOKER_UNLOCKS = self:normalize_joker_unlocks(self.joker_unlocks
@@ -3495,6 +3511,22 @@ function Game:set_tilt_enabled(enabled)
     if not self.SETTINGS then return end
     self.SETTINGS.TILT = enabled == true
     self:refresh_tilt_sensor()
+    self:save_settings()
+end
+
+--- Live per-Joker readouts under the Joker row; see `joker_display.lua`.
+---@return boolean
+function Game:joker_display_enabled()
+    return (self.SETTINGS and self.SETTINGS.JOKER_DISPLAY) == true
+end
+
+---@param enabled boolean
+function Game:set_joker_display_enabled(enabled)
+    if not self.SETTINGS then return end
+    self.SETTINGS.JOKER_DISPLAY = enabled == true
+    -- Nothing has been recomputed while the readouts were off, so the first frame after
+    -- turning them on must not trust the cached signature.
+    JokerDisplay.invalidate()
     self:save_settings()
 end
 
@@ -4774,6 +4806,7 @@ function Game:draw()
         for _, jj in ipairs(self.jokers) do
             if jj == dragged and jj.draw then jj:draw() end
         end
+        JokerDisplay.draw_row(self, self.jokers, self._joker_row_step_bottom)
     end
     if self.consumables_on_bottom == true and self.consumable_nodes then
         for _, cn in ipairs(self.consumable_nodes) do
@@ -7213,24 +7246,48 @@ function Game:draw_bottom_pause()
             -- reference gates rumble on `G.F_RUMBLE` rather than showing a setting that does
             -- nothing (`UI_definitions.lua:2303`).
             local show_tilt = Tilt.supported()
-            local toggles_w = show_tilt and (row_w * 2 + row_gap) or row_w
-            local toggle_x = panel_x + math.floor((panel_w - toggles_w) * 0.5 + 0.5)
-            self._pause_reduced_motion_rect = { x = toggle_x, y = panel_y + 164, w = row_w, h = row_h }
-            draw_btn(self._pause_reduced_motion_rect,
-                "Reduce  " .. (reduced and "ON" or "OFF"),
-                reduced and self.C.PANEL or self.C.GREEN,
-                is_pause_focused("reduced_motion"))
+            local jd_on = self:joker_display_enabled()
+            -- Three toggles do not fit at the old 140 px, and 22 px tall buttons take the
+            -- MEDIUM face (`draw_btn`), which does not fit either. The row is laid out to the
+            -- panel's full width at 20 px tall so all three read at SMALL.
+            local toggle_row = {
+                { key = "reduced_motion", label = "Reduce", on = reduced, on_is_good = false },
+            }
             if show_tilt then
-                local tilt_on = self:tilt_enabled()
-                self._pause_tilt_rect = {
-                    x = toggle_x + row_w + row_gap, y = panel_y + 164, w = row_w, h = row_h,
+                toggle_row[#toggle_row + 1] = { key = "tilt", label = "Tilt", on = self:tilt_enabled() }
+            end
+            toggle_row[#toggle_row + 1] = { key = "joker_display", label = "Joker Info", on = jd_on }
+
+            local toggle_h = 20
+            local toggle_margin = 2
+            local toggle_count = #toggle_row
+            local toggle_w = math.floor(
+                (panel_w - toggle_margin * 2 - row_gap * (toggle_count - 1)) / toggle_count)
+            local toggle_span = toggle_w * toggle_count + row_gap * (toggle_count - 1)
+            local toggle_x = panel_x + math.floor((panel_w - toggle_span) * 0.5 + 0.5)
+            self._pause_reduced_motion_rect = nil
+            self._pause_tilt_rect = nil
+            self._pause_joker_display_rect = nil
+            for i, t in ipairs(toggle_row) do
+                local r = {
+                    x = toggle_x + (i - 1) * (toggle_w + row_gap),
+                    y = panel_y + 164,
+                    w = toggle_w,
+                    h = toggle_h,
                 }
-                draw_btn(self._pause_tilt_rect,
-                    "Tilt  " .. (tilt_on and "ON" or "OFF"),
-                    tilt_on and self.C.GREEN or self.C.PANEL,
-                    is_pause_focused("tilt"))
-            else
-                self._pause_tilt_rect = nil
+                -- Reduced motion is the one toggle whose "on" is a reduction, so it keeps the
+                -- inverted colouring it has always had.
+                local good = (t.on_is_good == false) and not t.on or (t.on_is_good ~= false and t.on)
+                draw_btn(r, t.label .. " " .. (t.on and "ON" or "OFF"),
+                    good and self.C.GREEN or self.C.PANEL,
+                    is_pause_focused(t.key))
+                if t.key == "reduced_motion" then
+                    self._pause_reduced_motion_rect = r
+                elseif t.key == "tilt" then
+                    self._pause_tilt_rect = r
+                else
+                    self._pause_joker_display_rect = r
+                end
             end
 
             local open_x
@@ -13973,6 +14030,12 @@ function Game:handle_pause_settings_touch(x, y)
         if self._pause_tilt_rect and self:_point_in_rect_simple(x, y, self._pause_tilt_rect) then
             self:end_pause_slider_drag()
             self:set_tilt_enabled(not self:tilt_enabled())
+            return
+        end
+        if self._pause_joker_display_rect
+            and self:_point_in_rect_simple(x, y, self._pause_joker_display_rect) then
+            self:end_pause_slider_drag()
+            self:set_joker_display_enabled(not self:joker_display_enabled())
             return
         end
         if self._pause_controls_open_rect and self:_point_in_rect_simple(x, y, self._pause_controls_open_rect) then

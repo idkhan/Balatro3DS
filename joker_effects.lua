@@ -1129,7 +1129,12 @@ local SPECIAL = {
         query_retrigger = function(joker, ctx)
             -- reference/Balatro/card.lua:3360-3372 — Dusk only repeats played cards.
             if ctx.held then return 0 end
-            if G.hands == 0 then
+            -- `jd_preview` is the Joker readout asking what *would* happen if the selection
+            -- were played (`joker_display.lua`). The hand has not been spent at that point, so
+            -- the final hand still shows one remaining.
+            local hands = tonumber(G.hands) or 0
+            if ctx.jd_preview then hands = hands - 1 end
+            if hands <= 0 then
                 return 1
             end
             return 0

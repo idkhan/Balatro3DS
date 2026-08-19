@@ -5,6 +5,7 @@ local NumberFormat = require("number_format")
 -- Static labels are shaped once and redrawn; see text_cache.lua for why that is the
 -- largest saving on this screen.
 local TextCache = require("text_cache")
+local JokerDisplay = require("joker_display")
 
 ---@class TopUI
 TopUI = Object:extend()
@@ -638,7 +639,12 @@ function TopUI:draw(screen)
     -- (`cardarea.lua:283-289`, jokers left-aligned and consumables right-aligned). Without
     -- it there is nothing on screen telling the player how many slots they have — which is
     -- exactly the number you need before buying.
+    -- The Joker readouts are their own small panels hanging under the cards, over the tray
+    -- rather than inside it, so the slot count moves down past them (`joker_display.lua`).
     local counter_y = slot_y + slot_h + 1
+    if G.jokers_on_bottom ~= true then
+        counter_y = counter_y + JokerDisplay.band_height(G)
+    end
     love.graphics.setFont(G.FONTS.PIXEL.MICRO or G.FONTS.PIXEL.SMALL)
     love.graphics.setColor(G.C.DARK_WHITE or G.C.GREY)
     local joker_cap = math.max(0, math.floor(tonumber(G.joker_capacity) or 5))
@@ -708,6 +714,10 @@ function TopUI:draw(screen)
                     if joker.states then joker.states.visible = prev_visible end
                 end
             end
+            -- After the whole row, so a readout is never covered by the Joker overlapping it
+            -- from the right. The step is the fanned spacing, which is narrower than a card
+            -- once the row is full (`Game:_compute_fanned_joker_row`).
+            JokerDisplay.draw_row(G, G.jokers, G._joker_row_step_top)
             love.graphics.pop()
         end
 
