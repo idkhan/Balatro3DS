@@ -237,16 +237,28 @@ function Consumable:draw()
 
     local cx = draw_x + (self.VT.w * self.VT.scale) / 2
     local cy = draw_y + (self.VT.h * self.VT.scale) / 2
-    -- A used consumable collapses on its way out rather than vanishing on the frame it fires.
-    local draw_scale = self.VT.scale * self:lifecycle_collapse()
+    -- A used consumable keeps its size and comes apart inside the sprite, the way the
+    -- reference's dissolve shader does it (`reference/Balatro/card.lua:2130`).
+    local dissolve = self._card_lifecycle and self:lifecycle_dissolve() or nil
     love.graphics.translate(cx, cy)
     love.graphics.rotate(self.VT.r)
-    love.graphics.scale(draw_scale, draw_scale)
+    love.graphics.scale(self.VT.scale, self.VT.scale)
     love.graphics.translate(-cx, -cy)
 
     if self.atlas and self.atlas.image and self.quad then
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.draw(self.atlas.image, self.quad, draw_x, draw_y, 0, 1, 1)
+        love.graphics.setColor(1, 1, 1, dissolve and (1 - dissolve) or 1)
+        local masked = false
+        -- `Fx` is a global wired up by main.lua; a consumable can be drawn by a harness that
+        -- never loaded it, and a dissolve is not worth erroring over.
+        if dissolve and Fx and Fx.draw_dissolve_cell then
+            local b1, b2 = self:lifecycle_burn()
+            local qx, qy, qw, qh = self.quad:getViewport()
+            masked = Fx.draw_dissolve_cell(self.atlas.image, qx, qy, qw, qh, draw_x, draw_y,
+                qw, qh, dissolve, b1, b2, self:lifecycle_seed())
+        end
+        if not masked then
+            love.graphics.draw(self.atlas.image, self.quad, draw_x, draw_y, 0, 1, 1)
+        end
     else
         -- Visual fallback helps distinguish "not drawn" vs "texture failed."
         love.graphics.setColor(0.9, 0.25, 0.25, 0.9)

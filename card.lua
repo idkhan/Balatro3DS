@@ -1005,16 +1005,14 @@ function Card:draw()
     local w, h = self.VT.w, self.VT.h
     local s = self.VT.scale or 1
     local r = self.VT.r or 0
-    local lifecycle_alpha = 1
-    if self._card_lifecycle then
-        local lifecycle_scale
-        lifecycle_scale, lifecycle_alpha = self:lifecycle_visuals()
-        -- A Card is drawn from its top-left, so shrinking it has to be re-centred by hand;
-        -- Joker and Consumable already draw about their centre.
-        draw_x = draw_x + (1 - lifecycle_scale) * w * s * 0.5
-        draw_y = draw_y + (1 - lifecycle_scale) * h * s * 0.5
-        s = s * lifecycle_scale
-    end
+    -- A card being destroyed or created keeps its size and position: the reference does the
+    -- whole animation inside the sprite through `dissolve.fs`, and nothing about the card's
+    -- geometry moves (`reference/Balatro/card.lua:2130`, `:2183`). The base layer goes through
+    -- the mask below; everything stacked on it - shadow, rank, seal, washes - rides a plain
+    -- fade instead, because six mesh passes per card is not a thing an Old 3DS can do five
+    -- cards at a time and a seal is four pixels at 240p.
+    local dissolve = self._card_lifecycle and self:lifecycle_dissolve() or nil
+    local lifecycle_alpha = dissolve and (1 - dissolve) or 1
 
     -- Trigger pop: grow about the card's centre rather than its top-left corner.
     local js = self.juice_scale
@@ -1054,28 +1052,53 @@ function Card:draw()
     love.graphics.scale(flip_sx, 1)
     love.graphics.translate(-w * 0.5, -h * 0.5)
 
+    love.graphics.setColor(1, 1, 1, lifecycle_alpha)
+
     -- base layer: back or face, depending on orientation. An edition replaces the
     -- plain draw with the Fx mesh passes; editions only show on the face (the
     -- reference never applies edition shaders to card backs).
-    if shown_up then
-        if self.face_quad then
-            if ed and (self.shop_offer_slot == nil or Fx.shop_editions_animated()) then
-                -- Reference card drawing applies the edition shader without an area check
-                -- (`reference/Balatro/card.lua:4416-4424`). Each animated edition creates two
-                -- transient meshes per frame, so shop shelves keep the flat tint only on the
-                -- Old 3DS's 268 MHz CPU (`Fx.shop_editions_animated`).
-                draw_layer_with_edition(self.face_atlas, self.face_quad, self.face_w, self.face_h, ed, Fx.time(), self)
-            else
-                set_shop_edition_tint(ed)
-                self:draw_layer(self.face_atlas, self.face_quad, self.face_w, self.face_h, 0, 0)
-                love.graphics.setColor(1, 1, 1, lifecycle_alpha)
-            end
+    --
+    -- A dissolve replaces both. It is the same two-pass mesh an edition uses, so running
+    -- an edition underneath it would be four meshes on a card that is on its way out; the
+    -- reference stacks them, and this is where the port stops matching it.
+    local masked = false
+    if dissolve then
+        local atlas, quad, cw, ch
+        if shown_up and self.face_quad then
+            atlas, quad, cw, ch = self.face_atlas, self.face_quad, self.face_w, self.face_h
         elseif self.back_quad then
-            self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, 0, 0)
+            atlas, quad, cw, ch = self.back_atlas, self.back_quad, self.back_w, self.back_h
         end
-    else
-        if self.back_quad then
-            self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, 0, 0)
+        if atlas and atlas.image and quad then
+            local b1, b2 = self:lifecycle_burn()
+            local qx, qy, qw, qh = quad:getViewport()
+            masked = Fx.draw_dissolve_cell(atlas.image, qx, qy, qw, qh, 0, 0, cw, ch,
+                dissolve, b1, b2, self:lifecycle_seed())
+            love.graphics.setColor(1, 1, 1, lifecycle_alpha)
+        end
+    end
+
+    if not masked then
+        if shown_up then
+            if self.face_quad then
+                if ed and (self.shop_offer_slot == nil or Fx.shop_editions_animated()) then
+                    -- Reference card drawing applies the edition shader without an area check
+                    -- (`reference/Balatro/card.lua:4416-4424`). Each animated edition creates two
+                    -- transient meshes per frame, so shop shelves keep the flat tint only on the
+                    -- Old 3DS's 268 MHz CPU (`Fx.shop_editions_animated`).
+                    draw_layer_with_edition(self.face_atlas, self.face_quad, self.face_w, self.face_h, ed, Fx.time(), self)
+                else
+                    set_shop_edition_tint(ed)
+                    self:draw_layer(self.face_atlas, self.face_quad, self.face_w, self.face_h, 0, 0)
+                end
+                love.graphics.setColor(1, 1, 1, lifecycle_alpha)
+            elseif self.back_quad then
+                self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, 0, 0)
+            end
+        else
+            if self.back_quad then
+                self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, 0, 0)
+            end
         end
     end
 
@@ -1103,7 +1126,7 @@ function Card:draw()
     -- same, greying instead of filtering (`UI_definitions.lua:3260-3266`, `copy.greyed`).
     -- No X over it: it is not debuffed, just spent.
     if self.greyed then
-        love.graphics.setColor(GREYED_WASH_R, GREYED_WASH_G, GREYED_WASH_B, GREYED_WASH_A)
+        love.graphics.setColor(GREYED_WASH_R, GREYED_WASH_G, GREYED_WASH_B, GREYED_WASH_A * lifecycle_alpha)
         if shown_up and self.face_quad then
             self:draw_layer(self.face_atlas, self.face_quad, self.face_w, self.face_h, 0, 0)
         elseif self.back_quad then
@@ -1114,7 +1137,7 @@ function Card:draw()
     if card_is_debuffed_for_display(self) then
         -- Grey wash: redraw the base layer tinted so the card keeps its silhouette (rounded corners
         -- included) instead of picking up a hard rectangle.
-        love.graphics.setColor(DEBUFF_WASH_R, DEBUFF_WASH_G, DEBUFF_WASH_B, DEBUFF_WASH_A)
+        love.graphics.setColor(DEBUFF_WASH_R, DEBUFF_WASH_G, DEBUFF_WASH_B, DEBUFF_WASH_A * lifecycle_alpha)
         if shown_up and self.face_quad then
             self:draw_layer(self.face_atlas, self.face_quad, self.face_w, self.face_h, 0, 0)
         elseif self.back_quad then

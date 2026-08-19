@@ -972,9 +972,10 @@ function Joker:draw_tooltip_overlay()
     self:draw_tooltip(draw_x, draw_y)
 end
 
-function Joker:draw_sub_pos_overlay(draw_x, draw_y)
+---@param alpha number|nil lifecycle fade, 1 when the joker is settled
+function Joker:draw_sub_pos_overlay(draw_x, draw_y, alpha)
     if not self.face_up then return end
-    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.setColor(1, 1, 1, alpha or 1)
     if self.sub_sprite and self.sub_sprite.image then
         love.graphics.draw(self.sub_sprite.image, draw_x, draw_y, 0, 1, 1)
         return
@@ -1029,8 +1030,11 @@ function Joker:draw()
         render_scale = render_scale * self.juice_scale
         rot = rot + self.juice_r
     end
-    -- A destroyed Joker (Gros Michel, Immolate) collapses instead of blinking out.
-    render_scale = render_scale * self:lifecycle_collapse()
+    -- A destroyed Joker keeps its size: the reference's dissolve happens inside the sprite,
+    -- not to the node's transform (`reference/Balatro/card.lua:2130`). The front goes through
+    -- the mask below; the stickers and the debuff wash over it ride a plain fade.
+    local dissolve = self._card_lifecycle and self:lifecycle_dissolve() or nil
+    local lifecycle_alpha = dissolve and (1 - dissolve) or 1
     local cx = draw_x + (self.VT.w * base_scale) / 2
     local cy = draw_y + (self.VT.h * base_scale) / 2
     local shown_up = self.sprite_face_up
@@ -1041,7 +1045,30 @@ function Joker:draw()
     love.graphics.scale(render_scale * flip_sx, render_scale)
     love.graphics.translate(-cx, -cy)
 
-    if shown_up then
+    love.graphics.setColor(1, 1, 1, lifecycle_alpha)
+
+    -- A dissolve replaces the edition pass rather than stacking on it: both are the same
+    -- two-pass mesh, and four of them on a joker that is leaving is not worth the frame.
+    local masked = false
+    if dissolve then
+        local b1, b2 = self:lifecycle_burn()
+        local seed = self:lifecycle_seed()
+        if shown_up and self.front_sprite and self.front_sprite.image then
+            masked = Fx.draw_dissolve_image(self.front_sprite.image, draw_x, draw_y,
+                dissolve, b1, b2, seed)
+        elseif not shown_up and self.back_atlas and self.back_atlas.image and self.back_quad then
+            local qx, qy, qw, qh = self.back_quad:getViewport()
+            masked = Fx.draw_dissolve_cell(self.back_atlas.image, qx, qy, qw, qh,
+                draw_x, draw_y, qw, qh, dissolve, b1, b2, seed)
+        end
+        love.graphics.setColor(1, 1, 1, lifecycle_alpha)
+    end
+
+    if masked then
+        -- The sub-position overlay (the soul/floating sprite) is part of the art, so it is
+        -- masked with it or not at all; it fades on the same curve instead.
+        if shown_up then self:draw_sub_pos_overlay(draw_x, draw_y, lifecycle_alpha) end
+    elseif shown_up then
         if self.front_sprite and self.front_sprite.image then
             local ed = Joker.normalize_edition(self.edition)
             if Fx.has_edition_fx(ed) and (self.shop_offer_slot == nil or Fx.shop_editions_animated()) then
@@ -1055,9 +1082,9 @@ function Joker:draw()
                 set_shop_edition_tint(ed)
                 love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)
             end
-            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.setColor(1, 1, 1, lifecycle_alpha)
         end
-        self:draw_sub_pos_overlay(draw_x, draw_y)
+        self:draw_sub_pos_overlay(draw_x, draw_y, lifecycle_alpha)
     else
         if self.back_atlas and self.back_atlas.image and self.back_quad then
             love.graphics.draw(self.back_atlas.image, self.back_quad, draw_x, draw_y, 0, 1, 1)
@@ -1069,7 +1096,7 @@ function Joker:draw()
     if joker_is_debuffed_for_display(self) then
         -- Grey wash: redraw the art tinted so the wash follows the sprite's silhouette rather than
         -- painting a hard rectangle over the card.
-        love.graphics.setColor(DEBUFF_WASH_R, DEBUFF_WASH_G, DEBUFF_WASH_B, DEBUFF_WASH_A)
+        love.graphics.setColor(DEBUFF_WASH_R, DEBUFF_WASH_G, DEBUFF_WASH_B, DEBUFF_WASH_A * lifecycle_alpha)
         if shown_up then
             if self.front_sprite and self.front_sprite.image then
                 love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)

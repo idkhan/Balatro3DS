@@ -71,28 +71,58 @@ function Moveable:flip_sx()
     return f and f.sx or 1
 end
 
--- Dissolve / materialise. The reference runs a shader over 0.7 s to take a card apart and
--- 0.6 s to fade one in (`reference/Balatro/card.lua:2131`, `2181`); with no fragment shaders
--- on the 3DS this is a scale-and-alpha tween instead. It lives on Moveable rather than on Card
--- because a destroyed Joker and a used consumable have to come apart the same way a card does,
--- and three copies of these durations would drift apart.
+-- Dissolve / materialise. The reference eases a single scalar - 0 to 1 over 0.7 s to take a
+-- card apart, 1 to 0 over 0.6 s to bring one in (`reference/Balatro/card.lua:2130`, `:2183`) -
+-- and draws every sprite layer through `dissolve.fs` with it. The card never changes size and
+-- never fades as a whole; `Fx.draw_dissolve_cell` is the shader-free stand-in for that mask.
+--
+-- This lives on Moveable rather than on Card because a destroyed Joker and a used consumable
+-- have to come apart the same way a card does, and three copies of these durations would
+-- drift apart.
 Moveable.DISSOLVE_DURATION = 0.7
 Moveable.MATERIALIZE_DURATION = 0.6
 
+-- `card.lua:2133`'s default `dissolve_colours`, the first two of which are what the shader
+-- actually reads (`sprite.lua:103-104`): a black leading edge over an orange wash, which is
+-- paper catching. Anything with a set of its own overrides this when it starts.
+Moveable.DISSOLVE_BURN_1 = { 0.216, 0.259, 0.267 } -- G.C.BLACK, HEX("374244")
+Moveable.DISSOLVE_BURN_2 = { 0.992, 0.635, 0.000 } -- G.C.ORANGE, HEX("fda200")
+
+-- Which noise field a lifecycle draws from. The reference seeds this off the card's ID
+-- (`sprite.lua:100`), but a Card, a Joker and a Consumable share no stable identity here, and
+-- all the seed ever buys is that two nodes coming apart at once do not come apart in step -
+-- which a rotating counter buys just as well, and without a lookup.
+local lifecycle_seq = 0
+
 --- Begin a dissolve or materialise on this node.
 ---@param kind string "dissolve" or "materialize"
-function Moveable:begin_lifecycle(kind)
+---@param burn1 table|nil leading-edge colour; defaults to the reference's black
+---@param burn2 table|nil wash colour; defaults to the reference's orange
+function Moveable:begin_lifecycle(kind, burn1, burn2)
     -- A node can be destroyed while it is still fading in, so a dissolve overrides a
     -- materialise. Only an in-flight dissolve is left alone, to keep one ghost per node.
     local current = self._card_lifecycle
     if current and current.kind == "dissolve" then return end
+    lifecycle_seq = lifecycle_seq + 1
     self._card_lifecycle = {
         kind = kind,
         age = 0,
+        seed = lifecycle_seq,
         duration = (kind == "dissolve") and Moveable.DISSOLVE_DURATION or Moveable.MATERIALIZE_DURATION,
+        -- One colour given means one colour used, which is the shape every materialise takes
+        -- (`card.lua:2188-2194` passes a single set colour); only the bare default is a pair.
+        burn1 = burn1 or Moveable.DISSOLVE_BURN_1,
+        burn2 = burn2 or (burn1 == nil and Moveable.DISSOLVE_BURN_2 or nil),
+        -- Restored rather than forced back on: a node parked somewhere unhoverable (a shop
+        -- shelf, a collection page) must not become hoverable just by arriving.
+        hover_was = self.states and self.states.hover.can,
     }
-    -- The reference pops the card at both ends (`card.lua:2135`, `card.lua:2196`).
-    if self.juice_up then self:juice_up(0.6, 0.4) end
+    -- The reference pops the card at both ends, with its own `juice_up` defaults
+    -- (`card.lua:2135`, `card.lua:2196` -> `moveable.lua:252`, amount 0.4, rotation +-0.24).
+    -- These two arguments are what this port's mapping needs to land on those numbers.
+    if self.juice_up then self:juice_up(1.0, 0.6) end
+    -- `card.lua:2186`: a card that has not finished arriving cannot be picked up.
+    if self.states then self.states.hover.can = false end
 end
 
 --- Advance this node's lifecycle.
@@ -103,39 +133,42 @@ function Moveable:advance_lifecycle(dt)
     if not life then return true end
     life.age = (life.age or 0) + (tonumber(dt) or 0)
     if life.age >= life.duration then
+        -- A materialise hands the node back to the player; a dissolve is about to be
+        -- unlinked, and its caller has already shut interaction off for good.
+        if life.kind ~= "dissolve" and self.states then
+            self.states.hover.can = life.hover_was ~= false
+        end
         self._card_lifecycle = nil
         return true
     end
     return false
 end
 
---- Scale multiplier and alpha for the current lifecycle phase; 1, 1 when idle.
----@return number scale
----@return number alpha
-function Moveable:lifecycle_visuals()
+--- The reference's `dissolve` scalar for this node: 0 whole, 1 gone. Nil while idle, which
+--- is the flag every draw site tests before reaching for the mask pass.
+---@return number|nil
+function Moveable:lifecycle_dissolve()
     local life = self._card_lifecycle
-    if not life then return 1, 1 end
+    if not life then return nil end
     local duration = math.max(0.001, tonumber(life.duration) or Moveable.DISSOLVE_DURATION)
     local p = math.min(1, math.max(0, (tonumber(life.age) or 0) / duration))
-    if life.kind == "dissolve" then
-        return 1 - p * 0.65, 1 - p
-    end
-    return 0.35 + p * 0.65, p
+    if life.kind == "dissolve" then return p end
+    return 1 - p
 end
 
---- Lifecycle as a single scale factor, for nodes that cannot cheaply fade.
----
---- `Card:draw` composites the alpha itself, but a Joker or Consumable resets the draw colour
---- several times inside its own transform (editions, tints, overlays), so threading an alpha
---- through every one of those call sites would be far more invasive than it is worth. Folding
---- the alpha into the scale instead collapses the node to nothing over the same curve, which
---- reads as the card shrinking away rather than fading — close enough at 240p, and it reaches
---- a true zero rather than snapping out of existence at 35% size.
----@return number factor 1 when idle
-function Moveable:lifecycle_collapse()
-    if not self._card_lifecycle then return 1 end
-    local scale, alpha = self:lifecycle_visuals()
-    return scale * alpha
+--- Burn colours for the running lifecycle, or nil while idle.
+---@return table|nil burn1, table|nil burn2
+function Moveable:lifecycle_burn()
+    local life = self._card_lifecycle
+    if not life then return nil, nil end
+    return life.burn1, life.burn2
+end
+
+--- Noise variant seed for the running lifecycle; 0 while idle.
+---@return number
+function Moveable:lifecycle_seed()
+    local life = self._card_lifecycle
+    return life and life.seed or 0
 end
 
 function Moveable:touchpressed(id, x, y)

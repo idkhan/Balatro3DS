@@ -23,9 +23,9 @@ local RARITY_BADGE_PAD_Y = 3
 --- box the same short overshoot.
 ---
 --- Scale only, no alpha: the box is drawn through a dozen `setColor` calls plus two global
---- rounded-rect helpers, so threading an alpha would touch every one of them. Folding the
---- appearance into scale is the same trade `Moveable:lifecycle_collapse` already makes for
---- Jokers and Consumables, and at this size it reads the same.
+--- rounded-rect helpers, so threading an alpha would touch every one of them, and at this
+--- size a scale pop reads the same. A card uses `Fx.draw_dissolve_cell` for its own
+--- appearance instead; a tooltip has no single sprite to run a mask over.
 local TOOLTIP_APPEAR_DURATION = 0.13
 --- Start size and the overshoot it passes through on the way to 1.
 local TOOLTIP_APPEAR_FROM = 0.72

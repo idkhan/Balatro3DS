@@ -301,7 +301,7 @@ suite.test("money, hands and discards bump when they change", function()
     T.assert_eq(ui.field_juice.money, nil, "the pop settles")
 end)
 
-suite.test("a destroyed joker collapses instead of blinking out", function()
+suite.test("a destroyed joker comes apart instead of blinking out", function()
     local g = bootstrap.new_game()
     T.assert_true(g:add_joker_by_def("j_joker"))
     local node = g.jokers[1]
@@ -309,9 +309,9 @@ suite.test("a destroyed joker collapses instead of blinking out", function()
     g:remove_owned_joker_at(1, false, true)
     T.assert_eq(#g.jokers, 0, "it leaves run state at once")
     T.assert_true(node._card_lifecycle ~= nil, "the node plays out on screen")
-    T.assert_eq(node:lifecycle_collapse(), 1, "at full size on the frame it starts")
+    T.assert_eq(node:lifecycle_dissolve(), 0, "whole on the frame it starts")
     node:advance_lifecycle(0.2)
-    T.assert_true(node:lifecycle_collapse() < 1, "and shrinks from there")
+    T.assert_true(node:lifecycle_dissolve() > 0, "and erodes from there")
 
     g:_update_dissolving_nodes(Moveable.DISSOLVE_DURATION + 0.01)
     T.assert_eq(node._card_lifecycle, nil, "the ghost is unlinked once it has run out")
@@ -422,7 +422,68 @@ suite.test("dissolve and materialise share one set of durations", function()
     T.assert_eq(node._card_lifecycle.kind, "dissolve", "an in-flight dissolve is left alone")
 
     T.assert_true(node:advance_lifecycle(Moveable.DISSOLVE_DURATION + 0.01))
-    T.assert_eq(node:lifecycle_collapse(), 1, "an idle node is unscaled")
+    T.assert_eq(node:lifecycle_dissolve(), nil, "an idle node reports no dissolve")
+end)
+
+--- The reference eases `dissolve` 0 -> 1 to destroy and 1 -> 0 to create
+--- (`reference/Balatro/card.lua:2130`, `:2183`), so the two directions are the same
+--- animation read in opposite order and the draw path only ever sees one number.
+suite.test("a materialise is a dissolve run backwards", function()
+    local g = bootstrap.new_game()
+    local hand = hand_of(g, { { rank = 4, suit = "Spades" } })
+    local node = hand.card_nodes[1]
+
+    node:begin_lifecycle("materialize")
+    T.assert_eq(node:lifecycle_dissolve(), 1, "it starts entirely absent")
+    node:advance_lifecycle(Moveable.MATERIALIZE_DURATION * 0.5)
+    T.assert_near(node:lifecycle_dissolve(), 0.5, 0.001, "and resolves linearly")
+
+    node._card_lifecycle = nil
+    node:begin_lifecycle("dissolve")
+    T.assert_eq(node:lifecycle_dissolve(), 0, "a dissolve starts whole")
+    node:advance_lifecycle(Moveable.DISSOLVE_DURATION * 0.5)
+    T.assert_near(node:lifecycle_dissolve(), 0.5, 0.001)
+end)
+
+--- `card.lua:2186` blocks hover for the length of a materialise and hands it back after.
+--- Handing it back unconditionally would make a node parked somewhere unhoverable - a shop
+--- shelf, a collection page - hoverable just by arriving.
+suite.test("a materialise suspends hover and restores what it found", function()
+    local g = bootstrap.new_game()
+    local hand = hand_of(g, { { rank = 4, suit = "Spades" } })
+    local node = hand.card_nodes[1]
+
+    node.states.hover.can = true
+    node:begin_lifecycle("materialize")
+    T.assert_eq(node.states.hover.can, false, "not while it is arriving")
+    node:advance_lifecycle(Moveable.MATERIALIZE_DURATION + 0.01)
+    T.assert_eq(node.states.hover.can, true, "handed back once it has landed")
+
+    node.states.hover.can = false
+    node:begin_lifecycle("materialize")
+    node:advance_lifecycle(Moveable.MATERIALIZE_DURATION + 0.01)
+    T.assert_eq(node.states.hover.can, false, "a node that was never hoverable stays that way")
+end)
+
+--- The reference's default is a black leading edge over an orange wash
+--- (`card.lua:2133`); a caller that names one colour gets exactly that one, which is the
+--- shape every materialise takes (`card.lua:2188-2194`).
+suite.test("burn colours default to the reference pair and honour an override", function()
+    local g = bootstrap.new_game()
+    local hand = hand_of(g, { { rank = 4, suit = "Spades" } })
+    local node = hand.card_nodes[1]
+
+    node:begin_lifecycle("dissolve")
+    local b1, b2 = node:lifecycle_burn()
+    T.assert_eq(b1, Moveable.DISSOLVE_BURN_1)
+    T.assert_eq(b2, Moveable.DISSOLVE_BURN_2)
+
+    node._card_lifecycle = nil
+    local gold = { 1, 0.8, 0.2 }
+    node:begin_lifecycle("dissolve", gold)
+    b1, b2 = node:lifecycle_burn()
+    T.assert_eq(b1, gold)
+    T.assert_eq(b2, nil, "one colour named means one colour used")
 end)
 
 suite.test("each cash-out row reveals its label as it lands", function()
