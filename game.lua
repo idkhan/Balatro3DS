@@ -8101,6 +8101,12 @@ function Game:update(dt, real_dt)
         return
     end
     self:_update_joker_emit_queue(dt)
+    -- The Cash Out panel is built only once the staggered `on_round_end` batch has drained.
+    if self._pending_round_win_eval and not self:joker_emit_busy() then
+        local pending = self._pending_round_win_eval
+        self._pending_round_win_eval = nil
+        self:_finish_round_win_eval(pending.ctx, pending.hands_left)
+    end
     if self._nope_sfx_timer then
         self._nope_sfx_timer = self._nope_sfx_timer - dt
         if self._nope_sfx_timer <= 0 then
@@ -12058,7 +12064,26 @@ function Game:enter_round_win_after_blind()
             JokerEffects.mark_effect_applied(ctx)
         end
     end
-    self:emit_joker_event("on_round_end", ctx)
+    -- The round-end jokers that pop rather than pay -- Popcorn shrinking, Turtle Bean
+    -- wilting, Gros Michel and Cavendish rolling for extinction, Invisible Joker -- announce
+    -- themselves with blocking status events in the reference (`state_events.lua:1149-1207`).
+    -- Stagger the batch and run the rest of the round-win evaluation once it drains. The
+    -- state is still PLAY here, so the pops land on the playfield before the blind falls and
+    -- the Cash Out panel slides in -- the reference's order. The money rows already have
+    -- their own per-row, per-dollar reveal in `update_round_win_eval`.
+    if self:begin_joker_emit("on_round_end", ctx) then
+        self._pending_round_win_eval = { ctx = ctx, hands_left = hands_left }
+        return
+    end
+    self:_finish_round_win_eval(ctx, hands_left)
+end
+
+--- The half of `enter_round_win_after_blind` that runs once the staggered `on_round_end`
+--- joker batch has finished: card end-of-round effects, tag payouts, interest, the Cash Out
+--- panel and the blind-defeat ladder that reveals it.
+---@param ctx table
+---@param hands_left number
+function Game:_finish_round_win_eval(ctx, hands_left)
     self:emit_hand_cards_event("on_round_end", ctx)
 
     if tonumber(self.current_blind_index) == 3 then
