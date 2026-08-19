@@ -75,7 +75,18 @@ local DEAL_LEAD_IN = 0.3
 --- default, and callers override it (a Gold seal being destroyed passes gold, `card.lua:1609`).
 --- Falling back to one hard-coded orange made every destruction look the same regardless of
 --- what was destroyed.
-local DISSOLVE_PARTICLE_COLOUR = { 1, 0.34, 0.16, 1 }
+---
+--- The default is the reference's whole five-colour list, because `Particles.emit` picks one
+--- per shard out of a list and a plain card breaking has nothing more specific to say. A card
+--- that does - a Gold seal, a Glass enhancement - overrides it with its own single colour, so
+--- that read is not diluted by four others it does not mean.
+local DISSOLVE_PARTICLE_COLOURS = {
+    { 0.216, 0.259, 0.267, 1 }, -- G.C.BLACK,      HEX("374244")
+    { 0.992, 0.635, 0.000, 1 }, -- G.C.ORANGE,     HEX("fda200")
+    { 0.996, 0.373, 0.333, 1 }, -- G.C.RED,        HEX("FE5F55")
+    { 0.918, 0.753, 0.345, 1 }, -- G.C.GOLD,       HEX("eac058")
+    { 0.749, 0.780, 0.835, 1 }, -- G.C.JOKER_GREY, HEX("bfc7d5")
+}
 --- Dissolve tints keyed by what the card is, so the burst reads as a Gold card breaking
 --- rather than a generic puff. Values are the port's palette entries where they exist.
 --- Held by reference on every emitted shard, so these are shared constants rather than
@@ -92,11 +103,11 @@ local DISSOLVE_COLOURS = {
 
 local function dissolve_colour_for(node)
     local card = node and node.card_data
-    if not card then return DISSOLVE_PARTICLE_COLOUR end
+    if not card then return DISSOLVE_PARTICLE_COLOURS end
     -- A seal is the louder read, so it wins over the enhancement underneath it.
     return DISSOLVE_COLOURS[card.seal]
         or DISSOLVE_COLOURS[card.enhancement]
-        or DISSOLVE_PARTICLE_COLOUR
+        or DISSOLVE_PARTICLE_COLOURS
 end
 
 -- Play / scoring sequence (bottom screen)
@@ -2038,7 +2049,7 @@ function Hand:update_card_lifecycles(dt)
             Particles.shed_dissolve(node._card_lifecycle, dt,
                 vt.x + vt.w * vt.scale * 0.5, vt.y + vt.h * vt.scale * 0.5,
                 vt.w * vt.scale, vt.h * vt.scale,
-                node._dissolve_tint or DISSOLVE_PARTICLE_COLOUR)
+                node._dissolve_tint or DISSOLVE_PARTICLE_COLOURS)
         end
         if not node or not node._card_lifecycle or node:advance_lifecycle(dt) then
             if node then self.game:remove(node) end

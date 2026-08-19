@@ -8,6 +8,13 @@ local Particles = {}
 
 local DEFAULT_CAPACITY = 96
 local WHITE = { 1, 1, 1, 1 }
+
+--- Randomness for particle variety, 0..1. Deliberately not `math.random`: the run reseeds
+--- that stream for reproducibility, and an animation must never advance it.
+local function pick_random()
+    if love and love.math and love.math.random then return love.math.random() end
+    return 0.5
+end
 local capacity = 0
 local active = {}
 local active_count = 0
@@ -17,8 +24,8 @@ local function new_particle()
     return {
         x = 0, y = 0, vx = 0, vy = 0, gravity = 0,
         age = 0, lifetime = 0,
-        w = 1, h = 1,
-        colour = WHITE, fade = true, point = false,
+        w = 1, h = 1, base_w = 1, base_h = 1,
+        colour = WHITE, fade = true, grow = false, point = false,
     }
 end
 
@@ -107,7 +114,7 @@ local function draw_batched()
             alpha = alpha * (1 - particle.age / particle.lifetime)
         end
         local r, g, b = colour[1] or 1, colour[2] or 1, colour[3] or 1
-        local x0, y0 = particle.x, particle.y
+        local x0, y0 = particle.x - particle.w * 0.5, particle.y - particle.h * 0.5
         local x1, y1 = x0 + particle.w, y0 + particle.h
         local o = (i - 1) * 6
         write_vertex(verts[o + 1], x0, y0, r, g, b, alpha)
@@ -208,9 +215,21 @@ function Particles.emit(spec)
     particle.gravity = tonumber(spec.gravity) or 0
     particle.age = 0
     particle.lifetime = lifetime
-    particle.w = tonumber(spec.w) or size
-    particle.h = tonumber(spec.h) or size
-    particle.colour = spec.colour or spec.color or WHITE
+    particle.base_w = tonumber(spec.w) or size
+    particle.base_h = tonumber(spec.h) or size
+    -- `grow` particles start at nothing; anything else is full size on its first frame.
+    particle.grow = spec.grow == true
+    particle.w = particle.grow and 0 or particle.base_w
+    particle.h = particle.grow and 0 or particle.base_h
+    -- The reference picks each particle's colour out of the emitter's whole list
+    -- (`reference/Balatro/engine/particles.lua:92`), which is what stops a burst reading as
+    -- one flat puff. A single `colour` is still accepted; most callers only have one.
+    local list = spec.colours
+    if list and #list > 0 then
+        particle.colour = list[math.floor(pick_random() * #list) + 1] or list[1]
+    else
+        particle.colour = spec.colour or spec.color or WHITE
+    end
     particle.fade = spec.fade ~= false
     particle.point = spec.shape == "point"
 
@@ -235,15 +254,21 @@ local SHED_INTERVAL = 0.045
 --- Shards outlive most of the tween they came from, which is what stops a dissolve
 --- ending on an empty screen.
 local SHED_LIFETIME = 0.49
+--- Peak size, reached at half life. The reference's shards are 0.1 game units against a card
+--- roughly 3.5 units wide, so on a 71 px card that is about three pixels.
+local SHED_SIZE = 3
+--- The reference's shards do not fall. They set off in a random direction at
+--- `speed * 0.7 * random` and bleed 7% of that a second (`engine/particles.lua:84`, `:126`),
+--- which reads as embers hanging around the card rather than debris dropping out of it. That
+--- is most of the difference between a card burning and a card breaking, so gravity is zero
+--- here and the spread is the whole circle. The speed is above the reference's ~28 px/s
+--- equivalent because a 240p screen swallows anything slower.
+local SHED_SPEED_MIN, SHED_SPEED_MAX = 18, 46
 local SHED_SPEC = {
-    x = 0, y = 0, vx = 0, vy = 0, gravity = 48,
-    lifetime = SHED_LIFETIME, w = 2, h = 2, colour = nil, fade = true,
+    x = 0, y = 0, vx = 0, vy = 0, gravity = 0,
+    lifetime = SHED_LIFETIME, w = SHED_SIZE, h = SHED_SIZE,
+    colour = nil, colours = nil, fade = false, grow = true,
 }
-
-local function shed_random()
-    if love and love.math and love.math.random then return love.math.random() end
-    return 0.5
-end
 
 --- Shed shards from a rectangle for one frame of a dissolve.
 ---
@@ -257,8 +282,9 @@ end
 ---@param cy number rect centre y
 ---@param w number rect width
 ---@param h number rect height
----@param colour table shard tint
-function Particles.shed_dissolve(state, dt, cx, cy, w, h, colour)
+---@param colours table a list of shard tints, one picked per shard, or a single colour
+---@return table|nil particle the shard emitted this frame, if the timer came due
+function Particles.shed_dissolve(state, dt, cx, cy, w, h, colours)
     if type(state) ~= "table" then return end
     local t = (state.shed or SHED_INTERVAL) + (tonumber(dt) or 0)
     -- One shard a frame at most: a long frame must not dump the pool into a single card.
@@ -267,12 +293,20 @@ function Particles.shed_dissolve(state, dt, cx, cy, w, h, colour)
         return
     end
     state.shed = t - SHED_INTERVAL
-    SHED_SPEC.colour = colour
-    SHED_SPEC.x = cx + (shed_random() - 0.5) * (w or 0)
-    SHED_SPEC.y = cy + (shed_random() - 0.5) * (h or 0)
-    SHED_SPEC.vx = (shed_random() - 0.5) * 88
-    SHED_SPEC.vy = -16 - shed_random() * 58
-    Particles.emit(SHED_SPEC)
+    -- A caller with one colour and a caller with a palette both land here; `emit` picks per
+    -- shard when it is given a list.
+    if colours and type(colours[1]) == "table" then
+        SHED_SPEC.colours, SHED_SPEC.colour = colours, nil
+    else
+        SHED_SPEC.colours, SHED_SPEC.colour = nil, colours
+    end
+    SHED_SPEC.x = cx + (pick_random() - 0.5) * (w or 0)
+    SHED_SPEC.y = cy + (pick_random() - 0.5) * (h or 0)
+    local angle = pick_random() * math.pi * 2
+    local speed = SHED_SPEED_MIN + pick_random() * (SHED_SPEED_MAX - SHED_SPEED_MIN)
+    SHED_SPEC.vx = math.cos(angle) * speed
+    SHED_SPEC.vy = math.sin(angle) * speed
+    return Particles.emit(SHED_SPEC)
 end
 
 --- Advance every active particle without allocating or removing table entries.
@@ -294,6 +328,16 @@ function Particles.update(dt)
             particle.vy = particle.vy + particle.gravity * dt
             particle.x = particle.x + particle.vx * dt
             particle.y = particle.y + particle.vy * dt
+            if particle.grow then
+                -- The reference's particle scale is a triangle that peaks at half life and
+                -- is clamped there (`engine/particles.lua:117`), so a shard swells in and
+                -- shrinks out rather than blinking on at full size and fading.
+                local p = particle.age / particle.lifetime
+                local e = 2 * (p < 1 - p and p or 1 - p)
+                if e > 1 then e = 1 end
+                particle.w = particle.base_w * e
+                particle.h = particle.base_h * e
+            end
             i = i - 1
         end
     end
@@ -327,7 +371,8 @@ function Particles.draw()
         if particle.point and love.graphics.points then
             love.graphics.points(particle.x, particle.y)
         else
-            love.graphics.rectangle("fill", particle.x, particle.y, particle.w, particle.h)
+            love.graphics.rectangle("fill", particle.x - particle.w * 0.5,
+                particle.y - particle.h * 0.5, particle.w, particle.h)
         end
     end
     love.graphics.setColor(1, 1, 1, 1)

@@ -12297,7 +12297,15 @@ end
 --- (`card.lua:1610` sells a joker in gold). The port used to treat a missing colour as
 --- "no burst", which meant a joker eaten by Gros Michel came apart in silence while a sold
 --- one threw shards - the same event with and without feedback depending on the call site.
-local DISSOLVE_SHARD_COLOUR = { 0.992, 0.635, 0.000, 1 } -- G.C.ORANGE
+--- All five, not just the first: the reference picks each shard's colour out of the whole
+--- list (`engine/particles.lua:92`), which is what stops a burst reading as one flat puff.
+local DISSOLVE_SHARD_COLOURS = {
+    { 0.216, 0.259, 0.267, 1 }, -- G.C.BLACK,      HEX("374244")
+    { 0.992, 0.635, 0.000, 1 }, -- G.C.ORANGE,     HEX("fda200")
+    { 0.996, 0.373, 0.333, 1 }, -- G.C.RED,        HEX("FE5F55")
+    { 0.918, 0.753, 0.345, 1 }, -- G.C.GOLD,       HEX("eac058")
+    { 0.749, 0.780, 0.835, 1 }, -- G.C.JOKER_GREY, HEX("bfc7d5")
+}
 
 ---@param node Moveable|nil already unlinked from run state, still in `self.nodes`
 ---@param colour table|nil shard tint; defaults to the reference's orange
@@ -12324,7 +12332,7 @@ function Game:retain_dissolving_node(node, colour)
     end
 
     -- Shed for the whole tween rather than in one salvo; `_update_dissolving_nodes` drives it.
-    node._dissolve_tint = colour or DISSOLVE_SHARD_COLOUR
+    node._dissolve_tint = colour or DISSOLVE_SHARD_COLOURS
 
     self._dissolving_nodes = self._dissolving_nodes or {}
     self._dissolving_nodes[#self._dissolving_nodes + 1] = node
@@ -12343,7 +12351,7 @@ function Game:_update_dissolving_nodes(dt)
             local w, h = (vt.w or 0) * scale, (vt.h or 0) * scale
             Particles.shed_dissolve(node._card_lifecycle, dt,
                 (vt.x or 0) + w * 0.5, (vt.y or 0) + h * 0.5, w, h,
-                node._dissolve_tint or DISSOLVE_SHARD_COLOUR)
+                node._dissolve_tint or DISSOLVE_SHARD_COLOURS)
         end
         if not node or not node._card_lifecycle or node:advance_lifecycle(dt) then
             if node then self:remove(node) end
@@ -12371,7 +12379,7 @@ local MATERIALIZE_SHARD_COUNT = 10
 local MATERIALIZE_SHARD_SPREAD = 1.35
 local MATERIALIZE_SHARD_SPEC = {
     x = 0, y = 0, vx = 0, vy = 0, gravity = 0,
-    lifetime = 0, w = 2, h = 2, colour = nil, fade = true,
+    lifetime = 0, w = 3, h = 3, colour = nil, colours = nil, fade = false, grow = true,
 }
 
 --- Tints by set, the way the reference colours a creation by what was created (`G.C.SET`).
@@ -12429,7 +12437,14 @@ function Game:begin_materialize_burst(node, colour)
     -- Shards land as the tween finishes, so the burst and the fade-in end together rather than
     -- the shards outliving the thing they were assembling.
     local lifetime = Moveable.MATERIALIZE_DURATION
-    MATERIALIZE_SHARD_SPEC.colour = colour or self:materialize_colour_for(node)
+    -- The hand hands its dissolve palette straight through here, so a list has to be taken
+    -- as a list; `emit` then picks one per shard the way the reference does.
+    local tint = colour or self:materialize_colour_for(node)
+    if type(tint[1]) == "table" then
+        MATERIALIZE_SHARD_SPEC.colours, MATERIALIZE_SHARD_SPEC.colour = tint, nil
+    else
+        MATERIALIZE_SHARD_SPEC.colours, MATERIALIZE_SHARD_SPEC.colour = nil, tint
+    end
     MATERIALIZE_SHARD_SPEC.lifetime = lifetime
     for i = 1, MATERIALIZE_SHARD_COUNT do
         -- Evenly spaced around the ring with a jittered radius: an even angle reads as a

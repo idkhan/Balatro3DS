@@ -98,6 +98,79 @@ local function record_colour_sequence()
     return seq
 end
 
+--- The reference's particle scale is a triangle peaking at half life, clamped there
+--- (`reference/Balatro/engine/particles.lua:117`), so a shard swells in and shrinks out. The
+--- port used to blink every shard on at full size and fade it, which is why a dissolve read
+--- as dots appearing rather than as something coming off the card.
+suite.test("a growing particle swells to full size at half life and back", function()
+    Particles.reset(1)
+    local p = Particles.emit({ x = 0, y = 0, w = 4, h = 4, lifetime = 1, grow = true, fade = false })
+    T.assert_eq(p.w, 0, "it starts at nothing")
+
+    Particles.update(0.25)
+    T.assert_near(p.w, 2, 0.001, "half way up")
+    Particles.update(0.25)
+    T.assert_near(p.w, 4, 0.001, "full size at half life")
+    Particles.update(0.25)
+    T.assert_near(p.w, 2, 0.001, "and back down")
+    T.assert_eq(p.h, p.w, "both axes move together")
+end)
+
+--- Without `grow` a particle is full size on the frame it is emitted; the flag must not
+--- become a tax on the bursts that do not want it.
+suite.test("a particle without grow is full size from the start", function()
+    Particles.reset(1)
+    local p = Particles.emit({ x = 0, y = 0, w = 4, h = 4, lifetime = 1 })
+    T.assert_eq(p.w, 4)
+    Particles.update(0.5)
+    T.assert_eq(p.w, 4, "and stays there")
+end)
+
+--- The reference picks each particle's colour out of the emitter's whole list
+--- (`engine/particles.lua:92`). One flat colour per burst is what made a destruction read as
+--- a puff of the same dot rather than as paper catching.
+suite.test("a colour list is sampled per particle", function()
+    Particles.reset(32)
+    local palette = { { 1, 0, 0, 1 }, { 0, 1, 0, 1 }, { 0, 0, 1, 1 } }
+    local seen = {}
+    for _ = 1, 32 do
+        local p = Particles.emit({ lifetime = 1, colours = palette })
+        seen[p.colour] = true
+        -- Whatever it picked has to have come out of the list, not been built from it.
+        local found = false
+        for _, c in ipairs(palette) do if c == p.colour then found = true end end
+        T.assert_true(found, "the shard carries a palette entry by reference")
+    end
+    local count = 0
+    for _ in pairs(seen) do count = count + 1 end
+    T.assert_true(count > 1, "32 shards do not all land on the same colour")
+end)
+
+--- A single colour is still the common case and must keep working unchanged.
+suite.test("a single colour is used as-is", function()
+    Particles.reset(2)
+    local one = { 0.5, 0.25, 0.125, 1 }
+    T.assert_eq(Particles.emit({ lifetime = 1, colour = one }).colour, one)
+    T.assert_eq(Particles.emit({ lifetime = 1, colours = {} }).colour[1], 1, "an empty list falls back to white")
+end)
+
+--- The reference's shards set off in a random direction and bleed speed; they do not fall
+--- (`engine/particles.lua:84`). Gravity is what made the port's dissolve read as debris
+--- dropping out of a card rather than embers hanging around it.
+suite.test("shed shards drift in every direction rather than falling", function()
+    Particles.reset(64)
+    local state = {}
+    local up, down = 0, 0
+    for _ = 1, 60 do
+        local shard = Particles.shed_dissolve(state, 0.05, 100, 100, 40, 60, { { 1, 1, 1, 1 } })
+        if shard then
+            T.assert_eq(shard.gravity, 0, "nothing pulls a shard down")
+            if shard.vy < 0 then up = up + 1 elseif shard.vy > 0 then down = down + 1 end
+        end
+    end
+    T.assert_true(up > 0 and down > 0, "shards go both up and down")
+end)
+
 suite.test("particles sharing a colour push it once", function()
     Particles.reset(8)
     local red = { 1, 0, 0, 1 }
@@ -248,7 +321,9 @@ suite.test("a shrinking pool does not leave stale quads in the mesh", function()
 
     T.assert_true(mesh ~= nil, "still drew")
     local verts = mesh._vertices
-    T.assert_eq(verts[1][1], keep.x, "the survivor is still quad one")
+    -- Particles draw about their position, not from it, so the quad's left edge is half a
+    -- width in from `keep.x`.
+    T.assert_eq(verts[1][1], keep.x - keep.w * 0.5, "the survivor is still quad one")
     for i = 7, 36 do
         T.assert_eq(verts[i][1], 0, "vertex " .. i .. " collapsed to the origin")
         T.assert_eq(verts[i][8], 0, "vertex " .. i .. " alpha zeroed")

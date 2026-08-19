@@ -240,9 +240,16 @@ function Consumable:draw()
     -- A used consumable keeps its size and comes apart inside the sprite, the way the
     -- reference's dissolve shader does it (`reference/Balatro/card.lua:2130`).
     local dissolve = self._card_lifecycle and self:lifecycle_dissolve() or nil
+    -- The pop the reference fires at both ends of a lifecycle (`card.lua:2135`, `:2196`).
+    -- `Moveable:update_juice` has always been driving these fields on a consumable; nothing
+    -- read them, so a used tarot was the one thing on screen that came apart without
+    -- flinching first. This transform is already centre-anchored, so the pop needs no
+    -- re-centring the way `Card:draw` does.
+    local scale = self.VT.scale * (self.juice_scale or 1)
+    local rot = self.VT.r + (self.juice_r or 0)
     love.graphics.translate(cx, cy)
-    love.graphics.rotate(self.VT.r)
-    love.graphics.scale(self.VT.scale, self.VT.scale)
+    love.graphics.rotate(rot)
+    love.graphics.scale(scale, scale)
     love.graphics.translate(-cx, -cy)
 
     if self.atlas and self.atlas.image and self.quad then
