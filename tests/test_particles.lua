@@ -38,7 +38,9 @@ suite.test("particles integrate velocity and gravity before they expire", functi
     T.assert_eq(particle.vy, 3)
 end)
 
-suite.test("card lifecycle retains a dissolving ghost and stays within the particle pool", function()
+--- The reference attaches an emitter to the dissolving card rather than firing one salvo
+--- (`reference/Balatro/card.lua:2136-2145`), so the card sheds for the length of the tween.
+suite.test("a dissolving ghost sheds shards for its whole tween, inside the pool", function()
     local game = bootstrap.new_game(555)
     game.hand = Hand(game)
     Particles.reset(12)
@@ -48,22 +50,30 @@ suite.test("card lifecycle retains a dissolving ghost and stays within the parti
     T.assert_true(game.hand:destroy_card_at_index(1, true))
     T.assert_eq(#game.hand.cards, 1, "destroyed card leaves the logical hand immediately")
     T.assert_eq(#game.hand._destroying_nodes, 1, "ghost stays retained for its visual lifetime")
-    T.assert_eq(Particles.count(), 8, "one dissolve emits its fixed shard burst")
+    T.assert_eq(Particles.count(), 0, "nothing is thrown on the frame it starts")
+
+    game.hand:update_card_lifecycles(1 / 60)
+    local after_one = Particles.count()
+    T.assert_true(after_one > 0, "the first frame of the tween sheds")
+    -- The rate is slower than the frame rate, so shedding is checked over a few frames
+    -- rather than one; what matters is that it is still going, not that it is every frame.
+    for _ = 1, 4 do game.hand:update_card_lifecycles(1 / 60) end
+    T.assert_true(Particles.count() > after_one, "and it keeps shedding")
 
     -- The hand keeps its nodes in sort order, so take whichever survived rather than
     -- assuming creation order.
     T.assert_true(game.hand:destroy_card_node(game.hand.card_nodes[1], true))
-    T.assert_eq(Particles.count(), 12, "a concurrent dissolve sheds excess shards at pool capacity")
-
-    -- The reference's dissolve is 0.7 s (`card.lua:2131`).
-    game.hand:update_card_lifecycles(0.69)
-    T.assert_eq(#game.hand._destroying_nodes, 2, "ghosts remain visible before 0.7 seconds")
-    game.hand:update_card_lifecycles(0.02)
+    -- The reference's dissolve is 0.7 s (`card.lua:2131`); two cards shedding across it
+    -- must never take the pool past its ceiling.
+    for _ = 1, 50 do
+        game.hand:update_card_lifecycles(1 / 60)
+        T.assert_true(Particles.count() <= 12, "a concurrent dissolve stays inside the pool")
+    end
     T.assert_eq(#game.hand._destroying_nodes, 0, "ghosts are removed after the dissolve lifetime")
 
     -- Shards age on the particle clock, which Game:update drives independently of the
-    -- card lifecycle bookkeeping. They live for 0.7 of the dissolve, as in the reference.
-    Particles.update(0.5)
+    -- card lifecycle bookkeeping.
+    Particles.update(1)
     T.assert_eq(Particles.count(), 0, "expired shards return to the bounded pool")
     Particles.reset(96)
 end)

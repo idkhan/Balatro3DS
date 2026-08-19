@@ -71,21 +71,11 @@ local DRAW_DELAY = 0.1
 --- Pause before the first card of a deal leaves the deck; the reference sits on `delay(0.3)`
 --- ahead of every `draw_card` loop (`state_events.lua:369`).
 local DEAL_LEAD_IN = 0.3
---- Shards outlive most of the dissolve they came from; the tween itself is timed by
---- `Moveable.DISSOLVE_DURATION`, which destroyed Jokers and used consumables share.
-local DISSOLVE_DURATION = Moveable.DISSOLVE_DURATION
-local DISSOLVE_PARTICLE_COUNT = 8
 --- The reference tints the dissolve burst per card - black/orange/red/gold/joker-grey by
 --- default, and callers override it (a Gold seal being destroyed passes gold, `card.lua:1609`).
 --- Falling back to one hard-coded orange made every destruction look the same regardless of
 --- what was destroyed.
 local DISSOLVE_PARTICLE_COLOUR = { 1, 0.34, 0.16, 1 }
-local DISSOLVE_PARTICLE_SPEC = {
-    x = 0, y = 0, vx = 0, vy = 0, gravity = 48,
-    lifetime = DISSOLVE_DURATION * 0.7, w = 2, h = 2,
-    colour = DISSOLVE_PARTICLE_COLOUR, fade = true,
-}
-
 --- Dissolve tints keyed by what the card is, so the burst reads as a Gold card breaking
 --- rather than a generic puff. Values are the port's palette entries where they exist.
 --- Held by reference on every emitted shard, so these are shared constants rather than
@@ -2002,11 +1992,6 @@ function Hand:apply_idle_sway()
     end
 end
 
-local function visual_random()
-    if love and love.math and love.math.random then return love.math.random() end
-    return 0.5
-end
-
 --- Keep destruction feedback shader-free: the 3DS backend cannot run the reference's
 --- dissolve fragment shader, so retained card ghosts and bounded primitive shards preserve
 --- the timing without allocating in frame paths (reference/Balatro/card.lua:2130-2180).
@@ -2019,19 +2004,10 @@ function Hand:start_card_dissolve(node)
     node.states.hover.can = false
     node.states.click.can = false
     node.states.drag.can = false
+    -- Shards come off the card for the whole tween rather than in one salvo at t = 0; the
+    -- rate and the tint follow the node from `update_card_lifecycles`.
+    node._dissolve_tint = dissolve_colour_for(node)
     self._destroying_nodes[#self._destroying_nodes + 1] = node
-
-    local vt = node.VT
-    local cx = vt.x + vt.w * vt.scale * 0.5
-    local cy = vt.y + vt.h * vt.scale * 0.5
-    DISSOLVE_PARTICLE_SPEC.colour = dissolve_colour_for(node)
-    for _ = 1, DISSOLVE_PARTICLE_COUNT do
-        DISSOLVE_PARTICLE_SPEC.x = cx + (visual_random() - 0.5) * vt.w * vt.scale
-        DISSOLVE_PARTICLE_SPEC.y = cy + (visual_random() - 0.5) * vt.h * vt.scale
-        DISSOLVE_PARTICLE_SPEC.vx = (visual_random() - 0.5) * 88
-        DISSOLVE_PARTICLE_SPEC.vy = -16 - visual_random() * 58
-        Particles.emit(DISSOLVE_PARTICLE_SPEC)
-    end
 end
 
 --- The inverse of `start_card_dissolve`: a newly created hand card scales and fades in over
@@ -2057,6 +2033,13 @@ function Hand:update_card_lifecycles(dt)
     if dt <= 0 then return end
     for i = #self._destroying_nodes, 1, -1 do
         local node = self._destroying_nodes[i]
+        if node and node._card_lifecycle then
+            local vt = node.VT
+            Particles.shed_dissolve(node._card_lifecycle, dt,
+                vt.x + vt.w * vt.scale * 0.5, vt.y + vt.h * vt.scale * 0.5,
+                vt.w * vt.scale, vt.h * vt.scale,
+                node._dissolve_tint or DISSOLVE_PARTICLE_COLOUR)
+        end
         if not node or not node._card_lifecycle or node:advance_lifecycle(dt) then
             if node then self.game:remove(node) end
             table.remove(self._destroying_nodes, i)

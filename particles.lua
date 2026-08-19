@@ -219,6 +219,62 @@ function Particles.emit(spec)
     return particle
 end
 
+--------------------------------------------------------------------------------
+-- Dissolve shedding
+--
+-- The reference does not fire one salvo when a card is destroyed. `Card:start_dissolve`
+-- attaches a `Particles` emitter to the card with `fill = true` and a 7 ms timer
+-- (`reference/Balatro/card.lua:2136-2145`), so shards keep coming from random points
+-- across the card's whole area for as long as the tween runs and the card sheds rather
+-- than puffs. The rate here is much slower than the reference's: this pool is 96 slots
+-- for the whole game, and five cards can be destroyed at once (Immolate, a discard of
+-- five glass cards), where the reference allocates an emitter per card.
+--------------------------------------------------------------------------------
+
+local SHED_INTERVAL = 0.045
+--- Shards outlive most of the tween they came from, which is what stops a dissolve
+--- ending on an empty screen.
+local SHED_LIFETIME = 0.49
+local SHED_SPEC = {
+    x = 0, y = 0, vx = 0, vy = 0, gravity = 48,
+    lifetime = SHED_LIFETIME, w = 2, h = 2, colour = nil, fade = true,
+}
+
+local function shed_random()
+    if love and love.math and love.math.random then return love.math.random() end
+    return 0.5
+end
+
+--- Shed shards from a rectangle for one frame of a dissolve.
+---
+--- `state` is any table the caller already keeps per dissolving node - the lifecycle table
+--- itself, in practice - and only its `shed` field is touched. Passing it in rather than
+--- reading a node keeps this module ignorant of Moveable, which is what lets both the
+--- hand's ghost list and Game's use it.
+---@param state table accumulates into `state.shed`
+---@param dt number
+---@param cx number rect centre x
+---@param cy number rect centre y
+---@param w number rect width
+---@param h number rect height
+---@param colour table shard tint
+function Particles.shed_dissolve(state, dt, cx, cy, w, h, colour)
+    if type(state) ~= "table" then return end
+    local t = (state.shed or SHED_INTERVAL) + (tonumber(dt) or 0)
+    -- One shard a frame at most: a long frame must not dump the pool into a single card.
+    if t < SHED_INTERVAL then
+        state.shed = t
+        return
+    end
+    state.shed = t - SHED_INTERVAL
+    SHED_SPEC.colour = colour
+    SHED_SPEC.x = cx + (shed_random() - 0.5) * (w or 0)
+    SHED_SPEC.y = cy + (shed_random() - 0.5) * (h or 0)
+    SHED_SPEC.vx = (shed_random() - 0.5) * 88
+    SHED_SPEC.vy = -16 - shed_random() * 58
+    Particles.emit(SHED_SPEC)
+end
+
 --- Advance every active particle without allocating or removing table entries.
 function Particles.update(dt)
     dt = tonumber(dt) or 0

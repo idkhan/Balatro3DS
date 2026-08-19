@@ -12291,16 +12291,16 @@ end
 --- equivalent for everything that is not a hand card. Jokers eaten by Gros Michel and used
 --- consumables used to be unlinked on the frame they fired, so the only feedback was a crumple
 --- cue over a card that had already gone.
----@param node Moveable|nil already unlinked from run state, still in `self.nodes`
-local DISSOLVE_SHARD_COUNT = 8
-local DISSOLVE_SHARD_SPEC = {
-    x = 0, y = 0, vx = 0, vy = 0, gravity = 48,
-    lifetime = 0.49, w = 2, h = 2, colour = nil, fade = true,
-}
+
+--- The reference's default `dissolve_colours` are black/orange/red/gold/joker-grey
+--- (`card.lua:2133`) and it always emits; only the tint is ever a caller's choice
+--- (`card.lua:1610` sells a joker in gold). The port used to treat a missing colour as
+--- "no burst", which meant a joker eaten by Gros Michel came apart in silence while a sold
+--- one threw shards - the same event with and without feedback depending on the call site.
+local DISSOLVE_SHARD_COLOUR = { 0.992, 0.635, 0.000, 1 } -- G.C.ORANGE
 
 ---@param node Moveable|nil already unlinked from run state, still in `self.nodes`
----@param colour table|nil shard tint; the reference passes one per destruction
----        (`card.lua:1610` sells in gold), and nil means no burst
+---@param colour table|nil shard tint; defaults to the reference's orange
 function Game:retain_dissolving_node(node, colour)
     if not node or not node.begin_lifecycle then
         if node then self:remove(node) end
@@ -12323,20 +12323,8 @@ function Game:retain_dissolving_node(node, colour)
         node.states.drag.can = false
     end
 
-    if colour and Particles and Particles.emit and node.VT then
-        local vt = node.VT
-        local scale = vt.scale or 1
-        local cx = (vt.x or 0) + (vt.w or 0) * scale * 0.5
-        local cy = (vt.y or 0) + (vt.h or 0) * scale * 0.5
-        DISSOLVE_SHARD_SPEC.colour = colour
-        for _ = 1, DISSOLVE_SHARD_COUNT do
-            DISSOLVE_SHARD_SPEC.x = cx + (love.math.random() - 0.5) * (vt.w or 0) * scale
-            DISSOLVE_SHARD_SPEC.y = cy + (love.math.random() - 0.5) * (vt.h or 0) * scale
-            DISSOLVE_SHARD_SPEC.vx = (love.math.random() - 0.5) * 88
-            DISSOLVE_SHARD_SPEC.vy = -16 - love.math.random() * 58
-            Particles.emit(DISSOLVE_SHARD_SPEC)
-        end
-    end
+    -- Shed for the whole tween rather than in one salvo; `_update_dissolving_nodes` drives it.
+    node._dissolve_tint = colour or DISSOLVE_SHARD_COLOUR
 
     self._dissolving_nodes = self._dissolving_nodes or {}
     self._dissolving_nodes[#self._dissolving_nodes + 1] = node
@@ -12349,6 +12337,14 @@ function Game:_update_dissolving_nodes(dt)
     if not list then return end
     for i = #list, 1, -1 do
         local node = list[i]
+        if node and node._card_lifecycle and node.VT and Particles and Particles.shed_dissolve then
+            local vt = node.VT
+            local scale = vt.scale or 1
+            local w, h = (vt.w or 0) * scale, (vt.h or 0) * scale
+            Particles.shed_dissolve(node._card_lifecycle, dt,
+                (vt.x or 0) + w * 0.5, (vt.y or 0) + h * 0.5, w, h,
+                node._dissolve_tint or DISSOLVE_SHARD_COLOUR)
+        end
         if not node or not node._card_lifecycle or node:advance_lifecycle(dt) then
             if node then self:remove(node) end
             table.remove(list, i)
