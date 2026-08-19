@@ -1057,6 +1057,9 @@ function Game:notify_boss_effect_triggered(meta)
     -- without it a card scoring zero is illegible. The port's blind chip lives on the top
     -- readout, so the playfield rattle carries the beat.
     self:shake(1)
+    -- Mirrors `G.GAME.blind.triggered` (`reference/Balatro/blind.lua:484`): set when a boss
+    -- ability fires, cleared when the next hand is played. Matador reads it at `joker_main`.
+    self.blind_triggered_this_hand = true
     self:emit_joker_event("on_boss_effect_triggered", {
         boss_id = boss_id,
         reason = meta and meta.reason or "",

@@ -1355,14 +1355,35 @@ function Hand:_update_play_sequence(dt)
             Sfx.play("cardSlide1", 0.85 + fan_percent(i, 5) * 0.2)
         end
         if i >= #hl and seq.timer >= PLAY_HIGHLIGHT_LEAD + #hl * PLAY_HIGHLIGHT_INTERVAL then
-            seq.phase = "trigger"
+            -- The reference runs its `before` joker pass here: after the scoring cards are
+            -- lifted and the hand text is set, before any card is scored
+            -- (`reference/Balatro/functions/state_events.lua:600-637`).
+            seq.phase = "before_jokers"
             seq.timer = 0
-            seq.idx = 0
-            seq.trigger_wait = PLAY_ANTICIPATION
-            seq.play_rep = nil
-            seq.play_rep_total = nil
             seq.highlight_cards = nil
         end
+    elseif seq.phase == "before_jokers" then
+        -- `before_ctx` is consumed on the first visit; a visit with no context means the
+        -- staggered batch has finished (or there was nothing to run) and scoring may start.
+        local bctx = seq.before_ctx
+        seq.before_ctx = nil
+        if bctx then
+            if G and G.begin_joker_emit then
+                if G:begin_joker_emit("on_hand_played", bctx) then
+                    seq.phase = "wait_jokers"
+                    seq.joker_wait_resume = { phase = "before_jokers" }
+                    return
+                end
+            elseif G and G.emit_joker_event then
+                G:emit_joker_event("on_hand_played", bctx)
+            end
+        end
+        seq.phase = "trigger"
+        seq.timer = 0
+        seq.idx = 0
+        seq.trigger_wait = PLAY_ANTICIPATION
+        seq.play_rep = nil
+        seq.play_rep_total = nil
     elseif seq.phase == "trigger" then
         seq.trigger_wait = (seq.trigger_wait or 0) - dt
         if seq.trigger_wait <= 0 then
@@ -1551,6 +1572,9 @@ function Hand:_update_play_sequence(dt)
                 if r.advance_play_repeat then
                     hand_advance_play_trigger(seq, r.delay_next_trigger == true)
                 end
+            elseif r and r.phase == "before_jokers" then
+                seq.phase = "before_jokers"
+                seq.timer = 0
             elseif r and r.phase == "finalize" then
                 seq.phase = "finalize"
                 seq.finalize_step = r.finalize_step
@@ -1828,6 +1852,33 @@ function Hand:_update_play_sequence(dt)
                 G:record_career_best("c_best_hand_chips", final_score)
                 G:check_unlock("chip_score", { chips = final_score })
             end
+            seq.finalize_step = 4
+            seq.timer = 0
+        end
+
+        -- Step 4: the reference's `after` pass, which runs once the score has landed
+        -- (`state_events.lua:1063-1070`). Ice Cream melts and Seltzer drains here, not
+        -- during scoring.
+        if seq.finalize_step == 4 then
+            if not seq.voided and G and G.begin_joker_emit then
+                local actx = {
+                    event = "on_hand_after",
+                    event_name = "on_hand_after",
+                    cards = seq.cards,
+                    full_hand = seq.cards,
+                    hand_index = G.selectedHand,
+                }
+                if G:begin_joker_emit("on_hand_after", actx) then
+                    seq.phase = "wait_jokers"
+                    seq.joker_wait_resume = { phase = "finalize", finalize_step = 5 }
+                    seq.timer = 0
+                    return
+                end
+            end
+            seq.finalize_step = 5
+        end
+
+        if seq.finalize_step == 5 then
             seq.phase = "discard_wait"
             seq.timer = 0
         end
@@ -2217,6 +2268,10 @@ function Hand:play_selected()
         cards = self:ordered_selected_nodes()
     end
 
+    -- Cleared the moment the hand is played, so Matador only sees abilities that fired
+    -- during this hand (`reference/Balatro/functions/state_events.lua:454`).
+    if self.game then self.game.blind_triggered_this_hand = false end
+
     -- Debuff boss ability: one notify per played hand (not per selection / per card).
     if self._pending_boss_debuff_notify and self.game and self.game.notify_boss_effect_triggered then
         self.game:notify_boss_effect_triggered({ reason = "card_debuffed_for_scoring" })
@@ -2266,8 +2321,12 @@ function Hand:play_selected()
         G.selectedHandChips = 0
         G.selectedHandMult = 0
     end
-    if not voided and self.game and self.game.emit_joker_event then
-        self.game:emit_joker_event("on_hand_played", {
+    -- The `before` pass is not run here: it is handed to the play sequence and dispatched
+    -- after the scoring cards lift, so each triggering joker gets its own blocking beat the
+    -- way the reference's status events do (`state_events.lua:600-637`).
+    local before_ctx = nil
+    if not voided then
+        before_ctx = {
             event = "on_hand_played",
             event_name = "on_hand_played",
             cards = cards,
@@ -2275,7 +2334,7 @@ function Hand:play_selected()
             hand_index = G and G.selectedHand,
             hand_level = G and G.selectedHandLevel,
             hand_type = (G and G.handlist and G.selectedHand and G.handlist[G.selectedHand]) or nil,
-        })
+        }
     end
     if not voided and self.game and self.game.increment_hand_play_count then
         self.game:increment_hand_play_count(G and G.selectedHand)
@@ -2330,6 +2389,7 @@ function Hand:play_selected()
         voided = voided,
         photograph_first_face_node = photograph_first_face,
         photograph_pareidolia = photograph_pareidolia and true or false,
+        before_ctx = before_ctx,
     }
     for i, node in ipairs(cards) do
         node._play_release_percent = fan_percent(i, #cards)
