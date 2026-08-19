@@ -9880,17 +9880,6 @@ function Game:advance_after_shop()
         if self.current_boss_blind_id then
             self:mark_boss_used(self.current_boss_blind_id)
         end
-        self.ante = (tonumber(self.ante) or 1) + 1
-        self:check_unlock("ante_up", { ante = self.ante })
-        local mods = self.challenge_modifiers or {}
-        if tonumber(mods.set_eternal_ante) == self.ante then
-            for _, joker in ipairs(self.jokers or {}) do
-                if joker then joker.eternal = true end
-            end
-        end
-        if tonumber(mods.set_joker_slots_ante) == self.ante then
-            self.challenge_joker_slots_disabled = true
-        end
         self._ante_played_card_uids = {}
         self.current_boss_blind_id = nil
         self.current_blind_index = 1
@@ -11998,6 +11987,23 @@ function Game:enter_round_win_after_blind()
     if tonumber(self.current_blind_index) == 3 then
         self.boss_runtime = self.boss_runtime or {}
         self.boss_runtime.clear_card_debuffs_after_win = true
+        -- The ante rises the moment the Boss falls, not when the shop is left
+        -- (`state_events.lua:248`: the eternal/joker-slot modifiers, then `ease_ante(1)`,
+        -- all inside `end_round` before ROUND_EVAL). `ease_ante` is what rings the
+        -- highlight2/generic1 pair, so the cue belongs to the win, not to the shop exit.
+        -- The challenge modifiers compare against the ante that just ended, so they run
+        -- before the increment.
+        local mods = self.challenge_modifiers or {}
+        if tonumber(mods.set_eternal_ante) == (tonumber(self.ante) or 1) then
+            for _, joker in ipairs(self.jokers or {}) do
+                if joker then joker.eternal = true end
+            end
+        end
+        if tonumber(mods.set_joker_slots_ante) == (tonumber(self.ante) or 1) then
+            self.challenge_joker_slots_disabled = true
+        end
+        self.ante = (tonumber(self.ante) or 1) + 1
+        self:check_unlock("ante_up", { ante = self.ante })
         -- The Ox's target is re-fixed only here, as a Boss blind falls
         -- (`state_events.lua:132-138`).
         self:freeze_most_played_hand()
@@ -12880,7 +12886,8 @@ function Game:continue_from_round_win()
     self._round_win_line_timer = nil
     self._round_win_row_tick = nil
     -- Ante 8 boss beaten: show You Win before the shop (Endless continues into shop).
-    if self._last_completed_blind_was_boss and (tonumber(self.ante) or 1) == 8 and not self._endless_mode then
+    -- Ante already stepped when the Boss fell, so the winning run sits on 9 here.
+    if self._last_completed_blind_was_boss and (tonumber(self.ante) or 1) > 8 and not self._endless_mode then
         self:enter_you_win()
         return
     end
