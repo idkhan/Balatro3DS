@@ -214,5 +214,33 @@ fi
 elf="$(find_lovepotion_elf || true)"
 [[ -n "$elf" ]] || die "build finished but no lovepotion.elf was produced"
 
+# Say out loud what the runtime was actually built as. Neither route states a build type in a
+# way that is visible from here -- the cmake fallback passes -DCMAKE_BUILD_TYPE=Release, and
+# catnip picks its own preset -- and an unoptimised LövePotion is several times slower with
+# nothing else in a benchmark report to show it. So the cache is read back rather than assumed.
+# (love.graphics.getRuntimeInfo reports the same thing from the console, for benchmark.txt.)
+report_build_type() {
+    local cache
+    cache="$(find "$LOVEPOTION_DIR/build" "$LOVEPOTION_BUILD" -name CMakeCache.txt -maxdepth 3 \
+        2>/dev/null | head -1)"
+    if [[ -z "$cache" ]]; then
+        info "build type: unknown (no CMakeCache.txt found)"
+        return
+    fi
+
+    local type flags
+    type="$(sed -n 's/^CMAKE_BUILD_TYPE:STRING=//p' "$cache")"
+    type="${type:-<unset>}"
+    flags="$(sed -n "s/^CMAKE_CXX_FLAGS_$(echo "$type" | tr '[:lower:]' '[:upper:]'):STRING=//p" "$cache")"
+
+    info "build type: $type ${flags:+($flags)}"
+
+    case "$type" in
+        Release|RelWithDebInfo|MinSizeRel) ;;
+        *) info "WARNING: the runtime is not an optimised build; benchmark numbers from it mean nothing" ;;
+    esac
+}
+report_build_type
+
 info "runtime ready: $elf"
 info "next: ./dev/build.sh cia"
