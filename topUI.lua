@@ -404,14 +404,17 @@ function TopUI:draw(screen)
             local effect = G.get_boss_effect_text and G:get_boss_effect_text() or ""
             love.graphics.setFont(G.FONTS.PIXEL.MICRO or G.FONTS.PIXEL.SMALL)
             love.graphics.setColor(G.C.WHITE)
-            love.graphics.printf(effect, score_box_ix + 34 - sysDepth * textHeight, score_box_iy + 2, score_box_iw - 36, "left")
+            -- Shaped once: a boss's debuff text is fixed for the whole blind, and a wrapped
+            -- printf is 265 us against 16 for a batch that was shaped already.
+            TextCache.printf(effect, score_box_ix + 34 - sysDepth * textHeight, score_box_iy + 2, score_box_iw - 36, "left")
             love.graphics.setFont(G.FONTS.PIXEL.SMALL)
             love.graphics.setColor(G.C.WHITE)
             TextCache.print("Score", score_box_ix + 34 - sysDepth * textHeight, score_box_iy + score_box_ih - 21)
             local bossReq = NumberFormat.format(math.floor(blind_target))
             love.graphics.setFont(Fonts.fit(G, G.FONTS.PIXEL.MEDIUM, bossReq, score_box_iw - 36))
             love.graphics.setColor(G.C.RED)
-            love.graphics.printf(bossReq, score_box_ix + 34 - sysDepth * textHeight,
+            -- The blind's target does not change while the blind is being played.
+            TextCache.printf(bossReq, score_box_ix + 34 - sysDepth * textHeight,
                 score_box_iy + score_box_ih - 14, score_box_iw - 36, "center")
         else
             love.graphics.setColor(G.C.WHITE)
@@ -422,7 +425,7 @@ function TopUI:draw(screen)
             local scoreReq = NumberFormat.format(math.floor(blind_target))
             love.graphics.setFont(Fonts.fit(G, G.FONTS.PIXEL.MEDIUM, scoreReq, iw))
             local scoreReqY = iy + math.floor(G.FONTS.PIXEL.SMALL_HEIGHT/2) + 5
-            love.graphics.printf(scoreReq, ix - sysDepth * textHeight, scoreReqY, iw, "center")
+            TextCache.printf(scoreReq, ix - sysDepth * textHeight, scoreReqY, iw, "center")
 
             love.graphics.setColor(G.C.WHITE)
             love.graphics.setFont(G.FONTS.PIXEL.SMALL)
@@ -432,7 +435,7 @@ function TopUI:draw(screen)
             love.graphics.setColor(G.C.MONEY)
             local moneyText = self:cached_reward_pips(blind_reward)
             local rewardLabelW = love.graphics.getFont():getWidth(rewardText)
-            love.graphics.print(moneyText, ix + rewardLabelW - sysDepth * textHeight, rewardY)
+            TextCache.print(moneyText, ix + rewardLabelW - sysDepth * textHeight, rewardY)
         end
     end
 
@@ -604,7 +607,9 @@ function TopUI:draw(screen)
     if G.seeded == true then
         love.graphics.setFont(G.FONTS.PIXEL.MICRO or G.FONTS.PIXEL.SMALL)
         love.graphics.setColor(G.C.DARK_WHITE or G.C.GREY)
-        love.graphics.printf(self:cached_label("seed", G.SEED or "", "Seed "), 250 - sysDepth * textHeight, 96, 146, "center")
+        -- The seed is fixed for the whole run, so this is the most cacheable string on the
+        -- screen; it was the only one still being re-shaped sixty times a second.
+        TextCache.printf(self:cached_label("seed", G.SEED or "", "Seed "), 250 - sysDepth * textHeight, 96, 146, "center")
     end
 
     -- Joker panel (left 2/3 of top screen).
@@ -648,7 +653,8 @@ function TopUI:draw(screen)
     love.graphics.setFont(G.FONTS.PIXEL.MICRO or G.FONTS.PIXEL.SMALL)
     love.graphics.setColor(G.C.DARK_WHITE or G.C.GREY)
     local joker_cap = math.max(0, math.floor(tonumber(G.joker_capacity) or 5))
-    love.graphics.printf(self:cached_ratio_label("joker_slots", n, joker_cap),
+    -- "2/5" changes when a joker is bought or sold, which is a handful of times a round.
+    TextCache.printf(self:cached_ratio_label("joker_slots", n, joker_cap),
         joker_panel_x + 4 - sysDepth * textHeight, counter_y, joker_panel_w - 8, "left")
 
     -- Consumable panel (right 1/3 of top screen).
@@ -656,7 +662,7 @@ function TopUI:draw(screen)
     local consumable_cap = math.max(0, math.floor(
         (G.get_effective_consumable_capacity and G:get_effective_consumable_capacity()) or 2))
     if G.consumables_on_bottom ~= true then
-        love.graphics.printf(self:cached_ratio_label("consumable_slots", cn, consumable_cap),
+        TextCache.printf(self:cached_ratio_label("consumable_slots", cn, consumable_cap),
             dims.consumable_panel_x + 4 - sysDepth * textHeight, counter_y,
             dims.consumable_panel_w - 8, "right")
     end

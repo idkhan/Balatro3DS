@@ -43,11 +43,56 @@ function DynaText.new(config)
         pop_rise = 0.12,
         animated = float_amount ~= 0 or rotation_amount ~= 0 or bump_amount ~= 0
             or config.rainbow == true or config.pop_on_change == true,
+        -- Float and rotation are two amplitudes on the same sine whenever their speed and
+        -- phase agree, which is the default and every call site in this port. Sampling it once
+        -- halves the trig in the glyph loop; a caller that sets them apart still gets two
+        -- independent waves.
+        shared_wave = tonumber(config.float_speed or 2.666) == tonumber(config.rotation_speed or 2.666)
+            and tonumber(config.float_phase or 1.7) == tonumber(config.rotation_phase or 1.7),
         value = nil,
         bump_start = nil,
         pop_start = nil,
         pop_played = 0,
+        -- Glyph decomposition for the current value; see `glyph_layout`.
+        layout = nil,
     }
+end
+
+--- The per-glyph decomposition of `text` in `font`, cached until either changes.
+---
+--- The glyph loop used to call `text:sub(i, i)` and `font:getWidth(glyph)` for every character
+--- of every frame. Both are constant for as long as the string is -- and a DynaText string is
+--- a headline that changes a few times a round, not a few times a second. `getWidth` in
+--- particular is a call across the Lua boundary into the font's glyph table.
+---
+--- Byte slices, exactly as before: `sub(i, i)` is what the old loop did, and switching to
+--- codepoints here would change which characters get their own transform.
+local function glyph_layout(state, text, font)
+    local cache = state.layout
+    if cache and cache.text == text and cache.font == font then return cache end
+
+    local glyphs, widths = {}, {}
+    local count = #text
+    for i = 1, count do
+        local glyph = text:sub(i, i)
+        glyphs[i] = glyph
+        widths[i] = font:getWidth(glyph)
+    end
+
+    cache = {
+        text = text,
+        font = font,
+        glyphs = glyphs,
+        widths = widths,
+        count = count,
+        -- The whole string's width, which is what alignment uses. Deliberately not the sum of
+        -- the per-glyph widths: the font may kern, the two can disagree, and the old code
+        -- aligned by this one.
+        measured = font:getWidth(text),
+        height = font:getHeight(),
+    }
+    state.layout = cache
+    return cache
 end
 
 --- Start (or restart) the letter-by-letter reveal.
@@ -86,9 +131,28 @@ end
 function DynaText.letter_transform(state, index, time)
     time = time or now()
     local phase = index - 1
-    local y = state.float_amount * math.sin(state.float_speed * time + phase * state.float_phase)
-    local rotation = state.rotation_amount
-        * math.sin(state.rotation_speed * time + phase * state.rotation_phase)
+    local float_amount = state.float_amount
+    local rotation_amount = state.rotation_amount
+    local y, rotation = 0, 0
+
+    if state.shared_wave then
+        -- One sample, two amplitudes. `math.sin` is 2.56 us on hardware and this runs per
+        -- glyph per frame, so the second call was a real cost for an identical answer.
+        if float_amount ~= 0 or rotation_amount ~= 0 then
+            local wave = math.sin(state.float_speed * time + phase * state.float_phase)
+            y = float_amount * wave
+            rotation = rotation_amount * wave
+        end
+    else
+        if float_amount ~= 0 then
+            y = float_amount * math.sin(state.float_speed * time + phase * state.float_phase)
+        end
+        if rotation_amount ~= 0 then
+            rotation = rotation_amount
+                * math.sin(state.rotation_speed * time + phase * state.rotation_phase)
+        end
+    end
+
     local scale = 1
     local bump_start = state.bump_start
     if bump_start then
@@ -125,19 +189,22 @@ function DynaText.draw(state, value, x, y, width, align, time)
     end
 
     local font = love.graphics.getFont()
-    local text_width = font:getWidth(text)
+    local layout = glyph_layout(state, text, font)
+    local count = layout.count
+    local glyphs, widths = layout.glyphs, layout.widths
+
     local pen_x = x
     if align == "center" then
-        pen_x = x + (width - text_width) * 0.5
+        pen_x = x + (width - layout.measured) * 0.5
     elseif align == "right" then
-        pen_x = x + width - text_width
+        pen_x = x + width - layout.measured
     end
 
     local old_r, old_g, old_b, old_a = love.graphics.getColor()
-    local glyph_height = font:getHeight()
-    for i = 1, #text do
-        local glyph = text:sub(i, i)
-        local glyph_width = font:getWidth(glyph)
+    local glyph_height = layout.height
+    for i = 1, count do
+        local glyph = glyphs[i]
+        local glyph_width = widths[i]
         local offset_y, rotation, scale = DynaText.letter_transform(state, i, time)
         if state.pop_start then
             local p = DynaText.pop_scale(state, i, time)
@@ -146,11 +213,11 @@ function DynaText.draw(state, value, x, y, width, align, time)
                 state.pop_played = i
                 -- Rising chirp per appearing letter (`text.lua:195-203`); long strings
                 -- chirp every other letter so a sentence doesn't buzz.
-                if Sfx and Sfx.play and (#text < 10 or i % 2 == 0) then
-                    Sfx.play("paper1", 0.5 + 0.4 * (i / #text), 0.3)
+                if Sfx and Sfx.play and (count < 10 or i % 2 == 0) then
+                    Sfx.play("paper1", 0.5 + 0.4 * (i / count), 0.3)
                 end
             end
-            if i == #text and p >= 1 then
+            if i == count and p >= 1 then
                 state.pop_start = nil
             end
         end
