@@ -268,15 +268,39 @@ build_smdh "$SMDH" nosavebackups,visible
 
 # --- targets ---------------------------------------------------------------
 
+# The commit the artifact was cut from, for benchmark.txt. A benchmark report that cannot be
+# tied back to a tree is not comparable with any other report, which is the whole point of
+# running one. "-dirty" is appended when the working tree has uncommitted changes, because a
+# clean hash on a dirty tree is worse than no hash.
+build_commit() {
+    local hash
+    hash="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null)" || { printf 'unknown'; return; }
+    if ! git -C "$REPO_ROOT" diff --quiet HEAD -- 2>/dev/null; then
+        hash="$hash-dirty"
+    fi
+    printf '%s' "$hash"
+}
+
 prepare_build_info() {
+    local commit
+    commit="$(build_commit)"
     if [[ "$RELEASE" == "1" ]]; then
-        printf 'return { release = true }\n' > "$STAGE_DIR/build_info.lua"
-    elif [[ "$1" == "cia" ]]; then
+        printf 'return { release = true, commit = "%s", target = "%s" }\n' \
+            "$commit" "$1" > "$STAGE_DIR/build_info.lua"
+    else
         local cia_build_timestamp
         cia_build_timestamp="$(LC_ALL=C TZ=CST6 date '+%m/%d, %-I:%M%p CST')"
-        printf 'return { timestamp = "%s" }\n' "$cia_build_timestamp" > "$STAGE_DIR/build_info.lua"
-    else
-        rm -f "$STAGE_DIR/build_info.lua"
+        if [[ "$1" == "cia" ]]; then
+            printf 'return { timestamp = "%s", commit = "%s", target = "%s" }\n' \
+                "$cia_build_timestamp" "$commit" "$1" > "$STAGE_DIR/build_info.lua"
+        else
+            # The .3dsx path used to ship no build_info at all. It now carries the commit and
+            # nothing else: `timestamp` is what the in-game build stamp keys off, and a .3dsx
+            # showing one would be a behaviour change, but a benchmark run off a .3dsx that
+            # cannot name its tree is useless.
+            printf 'return { commit = "%s", target = "%s" }\n' \
+                "$commit" "$1" > "$STAGE_DIR/build_info.lua"
+        fi
     fi
 }
 

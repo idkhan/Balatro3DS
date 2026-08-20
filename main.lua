@@ -15,6 +15,9 @@ end)
 local Loading = require "loading"
 Loading.step(0)
 
+-- Read before the game is built, applied in love.load once graphics exists.
+local PerfFlags = require "perf_flags"
+
 require "engine.object"
 require "engine.node"
 require "engine.moveable"
@@ -93,6 +96,11 @@ function love.load()
     if InputBindings.detect_console_capabilities then
         InputBindings.detect_console_capabilities()
     end
+
+    -- Before anything draws: the renderer's coalescing flush and the New 3DS backdrop worker
+    -- both default off, and this is what turns them on when perf_flags.txt asks. See
+    -- perf_flags.lua for why they are not simply on.
+    PerfFlags.apply()
 
     G = Game()
     Loading.step(0.6)

@@ -163,4 +163,77 @@ suite.test("a throwing binding is contained", function()
     if not ok then error(err, 0) end
 end)
 
+--- The New 3DS field worker's Lua-side seams.
+---
+--- The worker itself lives in the runtime patch and needs a second ARM11 core to observe, so
+--- what is testable here is what every non-3DS build has to do with it: degrade quietly. A
+--- desktop LOVE, `nest` and this stub all lack the binding, and neither the status readout nor
+--- the A/B toggle may raise on them -- the status ends up in `benchmark.txt` and the toggle in
+--- a benchmark teardown, and an error in either would take out a whole run.
+
+suite.test("the worker status reads back without a binding", function()
+    local Backdrop = fresh()
+    local original = love.graphics.getRuntimeInfo
+    love.graphics.getRuntimeInfo = nil
+
+    local ok, status = pcall(Backdrop.worker_status)
+
+    love.graphics.getRuntimeInfo = original
+    T.assert_true(ok, "the status must never raise: " .. tostring(status))
+    T.assert_eq(status, "unavailable", "and must say so rather than guessing")
+end)
+
+suite.test("the worker status reports what the runtime says", function()
+    local Backdrop = fresh()
+    local original = love.graphics.getRuntimeInfo
+    love.graphics.getRuntimeInfo = function()
+        return { backdrop_worker = "core 2" }
+    end
+
+    local ok, status = pcall(Backdrop.worker_status)
+
+    love.graphics.getRuntimeInfo = original
+    T.assert_true(ok, "reading the status should not raise")
+    T.assert_eq(status, "core 2", "the runtime's own answer, verbatim")
+end)
+
+suite.test("a runtime that has no worker still answers, rather than erroring", function()
+    local Backdrop = fresh()
+    local original = love.graphics.getRuntimeInfo
+    love.graphics.getRuntimeInfo = function() return {} end
+
+    local ok, status = pcall(Backdrop.worker_status)
+
+    love.graphics.getRuntimeInfo = original
+    T.assert_true(ok, "an empty info table must not raise")
+    T.assert_eq(status, "?", "and must be visibly unknown in the report")
+end)
+
+suite.test("the A/B toggle is a no-op without the binding", function()
+    local Backdrop = fresh()
+    local original = love.graphics.setBackdropWorker
+    love.graphics.setBackdropWorker = nil
+
+    local ok, applied = pcall(Backdrop.set_worker, false)
+
+    love.graphics.setBackdropWorker = original
+    T.assert_true(ok, "the toggle must never raise")
+    T.assert_false(applied, "and must report that it did nothing")
+end)
+
+suite.test("the A/B toggle passes a real boolean through", function()
+    local Backdrop = fresh()
+    local original = love.graphics.setBackdropWorker
+    local seen = {}
+    love.graphics.setBackdropWorker = function(enabled) seen[#seen + 1] = enabled end
+
+    Backdrop.set_worker(false)
+    Backdrop.set_worker(true)
+    Backdrop.set_worker(nil)
+
+    love.graphics.setBackdropWorker = original
+    T.assert_deep_eq(seen, { false, true, false },
+        "the binding takes a boolean; nil is off, not a type error on the console")
+end)
+
 return suite

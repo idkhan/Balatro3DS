@@ -322,6 +322,31 @@ function Backdrop.draw(width)
     return true
 end
 
+--- Where the field is being calculated, for `benchmark.txt`.
+---
+--- On a New 3DS the ~200-float-op-per-vertex field runs on core 2, the additional application
+--- core every title in New3DS mode is given; the main thread only promotes the finished buffer
+--- and draws it. Anything else means the synchronous banded path is running, and the answer
+--- says which and why -- "old 3ds: synchronous", "thread creation failed: synchronous",
+--- "disabled". A report that does not say which of those was in force cannot be compared with
+--- one that had the other.
+--- @return string
+function Backdrop.worker_status()
+    if not (love.graphics and love.graphics.getRuntimeInfo) then return "unavailable" end
+    local ok, info = pcall(love.graphics.getRuntimeInfo)
+    if not ok or type(info) ~= "table" then return "unavailable" end
+    return tostring(info.backdrop_worker or "?")
+end
+
+--- Turn the New 3DS field worker off or on, for an A/B on the console. No-op on a runtime
+--- without the binding.
+--- @param enabled boolean
+--- @return boolean applied
+function Backdrop.set_worker(enabled)
+    if not (love.graphics and love.graphics.setBackdropWorker) then return false end
+    return pcall(love.graphics.setBackdropWorker, enabled and true or false)
+end
+
 --- Current parameters, for the tests to assert easing without reaching into the module.
 function Backdrop.debug_state() return state end
 
