@@ -894,16 +894,21 @@ namespace
     constexpr int GRID_H = 36;
 
     /* The field is refreshed in this many row bands, one band per frame, so a frame pays a
-       fraction of the grid rather than all of it. The warp's phase moves about 0.3 rad/s, so
-       the oldest band in an eight-band rotation trails the newest by seven frames, about
-       0.035 rad. The seams that produces sit on single rows of a 48-row grid and are not
-       resolvable against a field this soft; the whole point of the band split is that the
-       thing being sampled barely moves.
+       fraction of the grid rather than all of it. This is what lets a grid this dense be
+       carried at all: the first hardware measurement of a whole-grid-per-frame version was
+       14.8 ms on a New 3DS -- 30 fps -- and even after the libm calls came out of the sine, a
+       static shop frame was spending 3.7 ms of a 16.7 ms budget here across both screens.
+       Eight bands halve that again.
 
-       This is what lets a grid this dense be carried at all. The first hardware measurement of
-       a whole-grid-per-frame version was 14.8 ms on a New 3DS -- 30 fps -- and even after the
-       libm calls came out of the sine, a static shop frame was spending 3.7 ms of a 16.7 ms
-       budget here across both screens. Eight bands halve that again. */
+       The bands refresh an OFF-SCREEN buffer, and the drawn buffer only ever changes when a
+       sweep completes (see the flip in DrawBackdrop). An earlier revision refreshed the drawn
+       buffer in place, on the theory that the warp moves ~0.3 rad/s and a seven-frame-stale
+       seam would be unresolvable -- but `sp` advances inside the warp iterations at ~2 rad/s,
+       sixty times that estimate, and on hardware the fresh/stale boundary read as a slow CRT
+       scan marching down the screen (observed on a New 3DS, Aug 2026). Double-buffering trades
+       that for the field animating in whole steps at 60/FIELD_BANDS fps, which against smoke
+       this slow is quantisation nobody sees; fewer bands buy a higher step rate at
+       proportionally more CPU per frame. */
     constexpr int FIELD_BANDS = 8;
     constexpr int VERTS  = (GRID_W + 1) * (GRID_H + 1);
     constexpr int INDICES = GRID_W * GRID_H * 6;
@@ -932,12 +937,21 @@ namespace
 
     struct Grid
     {
-        float* vbo    = nullptr;   /* interleaved, GPU-visible */
+        /* Two buffers: [front] is what the GPU draws, the other is refilled band by band and
+           shown only once every band of it is from the same sweep. Refilling the drawn buffer
+           in place put a fresh/stale seam on screen that scanned downward like a slow CRT --
+           see the FIELD_BANDS comment. 65 KB of linear heap per copy. */
+        float* vbo[2] = { nullptr, nullptr };   /* interleaved, GPU-visible */
         float* angle  = nullptr;   /* atan2(uv.y, uv.x) per vertex, CPU only */
         float* radius = nullptr;   /* length(uv) per vertex, CPU only */
-        C3D_BufInfo buf {};
+        C3D_BufInfo buf[2] {};
         bool built = false;
-        int band = 0;      /* which row band refreshes next */
+        int front = 0;     /* which vbo the GPU draws; the other is being refilled */
+        int band = 0;      /* which row band of the back buffer refreshes next */
+        /* Field parameters frozen at the start of the sweep now filling the back buffer, so
+           every band of a shown buffer samples the same instant. */
+        float sp = 0.0f, A = 0.0f, B = 0.0f, K = 0.0f;
+        float lastTime = 0.0f;   /* re-prime after a long gap rather than show a stale field */
         bool primed = false;
     };
 
@@ -1085,14 +1099,16 @@ namespace
         const float w = (float)width, h = 240.0f;
         const float diag = std::sqrt(w * w + h * h);
 
-        grid.vbo    = (float*)linearAlloc(sizeof(float) * FLOATS_PER_VERT * VERTS);
+        grid.vbo[0] = (float*)linearAlloc(sizeof(float) * FLOATS_PER_VERT * VERTS);
+        grid.vbo[1] = (float*)linearAlloc(sizeof(float) * FLOATS_PER_VERT * VERTS);
         grid.angle  = (float*)std::malloc(sizeof(float) * VERTS);
         grid.radius = (float*)std::malloc(sizeof(float) * VERTS);
 
-        if (grid.vbo == nullptr || grid.angle == nullptr || grid.radius == nullptr)
+        if (grid.vbo[0] == nullptr || grid.vbo[1] == nullptr || grid.angle == nullptr ||
+            grid.radius == nullptr)
             return false;
 
-        float* v = grid.vbo;
+        float* v = grid.vbo[0];
         for (int gy = 0, i = 0; gy <= GRID_H; gy++)
         {
             for (int gx = 0; gx <= GRID_W; gx++, i++)
@@ -1119,9 +1135,15 @@ namespace
             }
         }
 
-        BufInfo_Init(&grid.buf);
-        if (BufInfo_Add(&grid.buf, grid.vbo, sizeof(float) * FLOATS_PER_VERT, 3, 0x210) < 0)
-            return false;
+        std::memcpy(grid.vbo[1], grid.vbo[0], sizeof(float) * FLOATS_PER_VERT * VERTS);
+
+        for (int side = 0; side < 2; side++)
+        {
+            BufInfo_Init(&grid.buf[side]);
+            if (BufInfo_Add(&grid.buf[side], grid.vbo[side], sizeof(float) * FLOATS_PER_VERT,
+                            3, 0x210) < 0)
+                return false;
+        }
 
         grid.built = true;
         return true;
@@ -1132,11 +1154,11 @@ namespace
        This is splash.fs line for line: the radius-dependent swirl, five domain-warp iterations,
        and the smoke term with its soft knee below 0.2. Only the ramp coordinate is written
        back; positions never move. */
-    void UpdateField(Grid& grid, int mode, float sp, float A, float B, float K)
+    void UpdateField(Grid& grid, float* vbo, int mode, float sp, float A, float B, float K)
     {
-        /* One band per frame. Rows rather than scattered vertices deliberately: a spatially
-           interleaved update would put neighbouring vertices one frame apart and shimmer,
-           where a contiguous band confines the discontinuity to a single row. */
+        /* One band per call, into whichever buffer the caller says -- the back buffer during
+           a sweep, the front one when priming. The banding is purely a way to spread the work
+           across frames; nothing partial is ever shown. */
         const int rows = GRID_H + 1;
         const int first = (rows * grid.band) / FIELD_BANDS;
         const int last  = (rows * (grid.band + 1)) / FIELD_BANDS;
@@ -1144,7 +1166,7 @@ namespace
 
         const int stride = GRID_W + 1;
         int i = first * stride;
-        float* v = grid.vbo + TC_OFFSET + (size_t)i * FLOATS_PER_VERT;
+        float* v = vbo + TC_OFFSET + (size_t)i * FLOATS_PER_VERT;
 
         for (int row = first; row < last; row++)
         {
@@ -1257,7 +1279,7 @@ namespace
         g_bd.ready  = true;
         std::snprintf(g_bd.report, sizeof(g_bd.report),
                       "cpu-field ok: grid %dx%d, %d verts in %d bands (%d/frame), "
-                      "%d indices, ramp %dx%d, stock shader",
+                      "double-buffered sweep flip, %d indices, ramp %dx%d, stock shader",
                       GRID_W, GRID_H, VERTS, FIELD_BANDS, VERTS / FIELD_BANDS,
                       INDICES, RAMP_W, RAMP_H);
         return true;
@@ -1371,18 +1393,42 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
     }
     Grid& grid = *gridPtr;
 
-    /* The banded refresh leaves the other bands holding whatever was there before, so the
-       first frame on each grid has to fill all of them -- otherwise half the screen renders
-       from the flat 0.5 the buffer was built with. */
+    /* Writing the back buffer is safe against the GPU: the renderer reuses ONE shared vertex
+       buffer whose offset resets at Present, which is only sound if a frame's command list has
+       fully executed before the next frame's writes begin -- so by the time a buffer that was
+       front is written as back, the GPU is done reading it.
+
+       A grid that has not been drawn for a while (menu grid during a run, and vice versa)
+       still holds a field from minutes ago; easing through it looks like a glitch, so a gap
+       re-primes instead. The 0.5 s threshold is far above any frame-to-frame delta and far
+       below any real state dwell. */
+    if (grid.primed && std::fabs(time - grid.lastTime) > 0.5f)
+        grid.primed = false;
+    grid.lastTime = time;
+
     if (!grid.primed)
     {
+        /* Fill the FRONT buffer whole so the first shown frame is coherent -- otherwise the
+           screen renders from the flat 0.5 the buffer was built with. The back buffer starts
+           its first sweep, with fresh parameters, on the next call. */
+        grid.sp = sp; grid.A = A; grid.B = B; grid.K = K;
+        grid.band = 0;
         for (int i = 0; i < FIELD_BANDS; i++)
-            UpdateField(grid, mode, sp, A, B, K);
+            UpdateField(grid, grid.vbo[grid.front], mode, sp, A, B, K);
         grid.primed = true;
     }
     else
     {
-        UpdateField(grid, mode, sp, A, B, K);
+        /* One band of the back buffer per frame, under parameters frozen when its sweep
+           started; the flip below is the only moment the drawn field ever changes, so no
+           fresh/stale seam can exist on screen. */
+        if (grid.band == 0)
+        {
+            grid.sp = sp; grid.A = A; grid.B = B; grid.K = K;
+        }
+        UpdateField(grid, grid.vbo[grid.front ^ 1], mode, grid.sp, grid.A, grid.B, grid.K);
+        if (grid.band == 0)   /* wrapped: the sweep is complete and the buffer coherent */
+            grid.front ^= 1;
     }
 
     auto& renderer = Renderer<Console::CTR>::Instance();
@@ -1397,7 +1443,7 @@ int Wrap_Graphics::DrawBackdrop(lua_State* L)
     /* Anything the 2D path has queued must be submitted while its buffer is still bound. */
     Renderer<Console::CTR>::FlushVertices();
 
-    C3D_SetBufInfo(&grid.buf);
+    C3D_SetBufInfo(&grid.buf[grid.front]);
     C3D_TexBind(0, &g_bd.ramp);
 
     /* ret_col = c1*c1p + c2*c2p + BLACK*cb, then lerped toward white by the bloom in alpha.
