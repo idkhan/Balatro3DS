@@ -254,6 +254,9 @@ end)
 
 suite.test("write then read reports a saved run, and clearing removes it", function()
     love._test.reset_files()
+    -- The filesystem just changed by a route the game cannot see, which is the one case the
+    -- memo in has_saved_run has to be told about.
+    game:forget_saved_run()
     T.assert_false(game:has_saved_run(), "no run should be saved on a clean filesystem")
 
     T.assert_true(game:write_run_snapshot({ seed = 9 }), "write should succeed")
@@ -286,6 +289,7 @@ suite.test("a save that decodes to a non-table is rejected", function()
     love._test.reset_files()
     love.filesystem.createDirectory("sdmc")
     love.filesystem.write(game:run_save_path(), "return 42")
+    game:forget_saved_run()
     local decoded, err = game:read_run_snapshot()
     T.assert_nil(decoded, "a save decoding to a number must be rejected")
     T.assert_eq(err, "decode_failed")
@@ -463,6 +467,72 @@ suite.test("two profiles' run saves do not overwrite each other", function()
     local two = love.filesystem.load(game:run_save_path_for_profile(2))()
     T.assert_eq(one.seed, 111, "profile 1's run save")
     T.assert_eq(two.seed, 222, "profile 2's run save")
+end)
+
+--- The memo behind `has_saved_run`.
+---
+--- `MainMenuUI.draw_main` filters the Play page every frame, and Continue's visibility
+--- predicate is a stat on the run save. On hardware `love.filesystem.getInfo` is 8.37 ms --
+--- half a frame -- so while that page was open the game spent half of every frame asking the
+--- SD card the same question about the same file. It is answered from memory now, which is
+--- only safe as long as everything that changes the file says so.
+
+suite.test("a repeated query does not re-stat the filesystem", function()
+    love._test.reset_files()
+    game:forget_saved_run()
+
+    local stats = 0
+    local original = love.filesystem.getInfo
+    love.filesystem.getInfo = function(...) stats = stats + 1 return original(...) end
+
+    local ok, err = pcall(function()
+        game:has_saved_run()
+        local first = stats
+        for _ = 1, 60 do game:has_saved_run() end
+        T.assert_eq(stats, first, "sixty more queries must not touch the filesystem again")
+    end)
+
+    love.filesystem.getInfo = original
+    if not ok then error(err, 0) end
+end)
+
+suite.test("writing and clearing a run keep the memo honest", function()
+    love._test.reset_files()
+    game:forget_saved_run()
+    T.assert_false(game:has_saved_run(), "nothing saved yet")
+
+    game:write_run_snapshot({ seed = 3 })
+    T.assert_true(game:has_saved_run(), "a write must be reflected without a re-stat")
+
+    game:clear_run_snapshot()
+    T.assert_false(game:has_saved_run(), "and so must a clear")
+end)
+
+suite.test("the memo is per profile", function()
+    love._test.reset_files()
+    game:forget_saved_run()
+
+    local original = game.get_profile_id
+    game.get_profile_id = function() return 1 end
+    game:write_run_snapshot({ seed = 1 })
+    T.assert_true(game:has_saved_run(), "profile 1 has a run")
+
+    game.get_profile_id = function() return 2 end
+    T.assert_false(game:has_saved_run(),
+        "profile 2 must be asked about separately, not inherit profile 1's answer")
+
+    game.get_profile_id = original
+end)
+
+suite.test("deleting a profile drops the memo", function()
+    love._test.reset_files()
+    game:forget_saved_run()
+    game:write_run_snapshot({ seed = 5 })
+    T.assert_true(game:has_saved_run(), "the run is there to begin with")
+
+    game:delete_profile(game:get_profile_id())
+    T.assert_false(game:has_saved_run(),
+        "delete_profile removes the file by a route clear_run_snapshot never sees")
 end)
 
 return suite

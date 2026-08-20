@@ -259,8 +259,16 @@ function Game:init(seed)
     self.boss_runtime = {}
     self._next_card_uid = 1
     self._collidables_buf = {}
-    self._gc_timer = 0
+    -- Nodes currently shoved out of place by a drag, so the idle path can slide them home
+    -- without walking the whole scene. See `Game:check_collisions`.
+    self._collision_nudged = {}
+    self._collision_active = false
     self._gc_discarded_nodes = 0
+    self._gc_boost_frames = 0
+    self._gc_heap_frames = 0
+    self._gc_step_frames = 0
+    self._gc_heap_kb = 0
+    self._gc_heap_peak = 0
     --- Screen shake accumulator; see Game:shake.
     self.jiggle = 0
     self._jiggle_t = 0
@@ -3078,6 +3086,8 @@ function Game:delete_profile(profile_id)
     if love and love.filesystem and love.filesystem.remove then
         love.filesystem.remove(self:settings_path_for_profile(id))
         love.filesystem.remove(self:run_save_path_for_profile(id))
+        -- The run save just went away by a route `clear_run_snapshot` never saw.
+        self:forget_saved_run()
     end
     self._profile_delete_confirm = false
     return true
@@ -3744,15 +3754,47 @@ function Game:current_resume_state()
     return s
 end
 
+--- Whether the active profile has a run to resume.
+---
+--- Memoised per path, because this is asked once a frame and answering it costs a stat.
+--- `MainMenuUI.draw_main` filters the Play page's entries every frame, and Continue's
+--- visibility predicate is this call -- so while that page was open the game spent 8.37 ms a
+--- frame, half of the frame budget, asking the SD card the same question about the same file.
+---
+--- The answer only changes when this port itself writes or removes the file, and both of those
+--- go through the two functions below, so the cache cannot go stale behind our back. The path
+--- is part of the key so switching profiles re-reads rather than inheriting.
 function Game:has_saved_run()
+    if not (love and love.filesystem and love.filesystem.getInfo) then return false end
+
     local path = self:run_save_path()
-    return love and love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(path, "file") ~= nil
+    if self._saved_run_path == path and self._saved_run_present ~= nil then
+        return self._saved_run_present
+    end
+
+    local present = love.filesystem.getInfo(path, "file") ~= nil
+    self._saved_run_path, self._saved_run_present = path, present
+    return present
+end
+
+--- Record what the filesystem now holds for `path`, so the next query costs nothing.
+function Game:note_saved_run(path, present)
+    self._saved_run_path, self._saved_run_present = path, present
+end
+
+--- Drop the memo, for when the save file changed by some route other than this port's own
+--- write and remove -- deleting a profile, or a test rebuilding the filesystem underneath.
+function Game:forget_saved_run()
+    self._saved_run_path, self._saved_run_present = nil, nil
 end
 
 function Game:clear_run_snapshot()
     if not (love and love.filesystem and love.filesystem.remove) then return false end
     if not self:has_saved_run() then return true end
-    return love.filesystem.remove(self:run_save_path()) and true or false
+    local path = self:run_save_path()
+    local removed = love.filesystem.remove(path) and true or false
+    self:note_saved_run(path, not removed)
+    return removed
 end
 
 function Game:build_run_snapshot()
@@ -3908,10 +3950,12 @@ function Game:write_run_snapshot(snapshot)
     end
     love.filesystem.createDirectory(RUN_SAVE_DIR)
     local encoded = "return " .. serialize_lua_value(snapshot)
-    local ok, err = love.filesystem.write(self:run_save_path(), encoded)
+    local path = self:run_save_path()
+    local ok, err = love.filesystem.write(path, encoded)
     if not ok then
         return false, tostring(err or "write_failed")
     end
+    self:note_saved_run(path, true)
     return true
 end
 
@@ -8362,28 +8406,109 @@ function Game:update(dt, real_dt)
 
     if removed_nodes > 0 then
         self._gc_discarded_nodes = self._gc_discarded_nodes + removed_nodes
-        if self._gc_discarded_nodes >= 24 then
+        if self._gc_discarded_nodes >= Game.GC.DISCARD_NODES then
             self._gc_discarded_nodes = 0
-            -- A full collect here walked the ~2.3 MB live heap in one frame, which
-            -- landed as a visible hitch right as a discard animation finished. Spread
-            -- the same reclamation across the next frames instead: 12 frames of
-            -- step(160) covers well over a full cycle of this heap, without the spike.
-            self._gc_boost_frames = 12
+            self._gc_boost_frames = Game.GC.BOOST_FRAMES
         end
     end
 
-    -- Small periodic incremental GC step to smooth frame spikes on 3DS, raised to a
-    -- burst while a discard wave's garbage is being worked off.
-    if (self._gc_boost_frames or 0) > 0 then
-        self._gc_boost_frames = self._gc_boost_frames - 1
-        collectgarbage("step", 160)
-    else
-        self._gc_timer = self._gc_timer + real_dt
-        if self._gc_timer >= 0.2 then
-            self._gc_timer = 0
-            collectgarbage("step", 96)
+    self:step_gc()
+end
+
+--- Constants for the incremental collector, in one place so they can be A/B'd on hardware
+--- against `benchmark.lua`'s `gc_step_*` ladder without hunting through the update loop.
+---
+--- That ladder, measured on a New 3DS:
+---
+---     step(8)   276 us      step(48)   757 us      step(160)  2424 us
+---     step(16)  282 us      step(64)  1020 us
+---     step(32)  514 us      step(96)  1486 us
+---
+--- The shape that matters is the intercept: a step costs about 270 us before it does any work
+--- at all, and roughly 13.5 us per unit above 16. So calling it every frame is the wrong
+--- cadence -- sixty small steps a second pay the fixed cost sixty times. The work a step does
+--- is proportional to its argument, so the same reclamation rate can be bought at any cadence,
+--- and the cheapest one that still keeps the spike small is the largest step that disappears
+--- into a frame, called as rarely as that allows.
+Game.GC = {
+    --- Step size and cadence during ordinary play: 16 units every other frame. That is 480
+    --- units a second, exactly what the schedule this replaced did with step(96) five times a
+    --- second -- same reclamation, same 8.5 ms of collector time per second, and a worst frame
+    --- of 282 us instead of 1486 us.
+    STEP = 16,
+    STEP_FRAMES = 2,
+
+    --- While working off a garbage wave: 32 units every frame. Still under 514 us, which
+    --- disappears into a frame; the boost is longer rather than heavier.
+    BOOST_STEP = 32,
+
+    --- How long a boost runs. 60 frames of step(32) is 1920 units, exactly what 12 frames of
+    --- step(160) reclaimed -- the schedule this replaced -- at a fifth of the per-frame cost.
+    BOOST_FRAMES = 60,
+
+    --- Discarded nodes that add up to "a wave went past". A hand of discards plus its
+    --- particles and popups lands around here.
+    DISCARD_NODES = 24,
+
+    --- Sample the heap this often. `collectgarbage("count")` is cheap, but it is not free and
+    --- nothing about the heap changes meaningfully inside half a second.
+    HEAP_SAMPLE_FRAMES = 30,
+
+    --- Heap size, in KB, above which the collector goes to the boost rate on its own. The live
+    --- heap in a normal run sits around 2.3 MB; this is well clear of it, so it fires when
+    --- something is genuinely accumulating rather than during ordinary play.
+    HEAP_BOOST_KB = 4096,
+}
+
+--- One frame of garbage collection.
+---
+--- Deliberately never `collectgarbage("collect")`: a full cycle is 23.8 ms on a New 3DS, which
+--- is a dropped frame and a half, and there is no point in gameplay where dropping one and a
+--- half frames is better than spreading the same work. The only full collect left in the
+--- codebase is in `fonts.lua`, on the font-downgrade path, which only runs when a face has
+--- failed to load and is already a hitch.
+---
+--- Nothing here stops the automatic collector. Lua 5.1's `step` leaves the threshold one
+--- allocation-quantum above the current heap, so the interpreter keeps stepping on its own
+--- between calls; what this schedule does is guarantee a floor of progress every frame so the
+--- automatic stepping never has to catch up in a burst.
+function Game:step_gc()
+    local gc = Game.GC
+    local boost = self._gc_boost_frames or 0
+
+    local sampled = (self._gc_heap_frames or 0) + 1
+    if sampled >= gc.HEAP_SAMPLE_FRAMES then
+        sampled = 0
+        local kb = collectgarbage("count")
+        self._gc_heap_kb = kb
+        if kb > (self._gc_heap_peak or 0) then self._gc_heap_peak = kb end
+        -- Growth the discard counter never saw -- a collection page, a long shop, a leak --
+        -- gets the same treatment a discard wave does rather than waiting for one.
+        if kb > gc.HEAP_BOOST_KB and boost <= 0 then
+            boost = gc.BOOST_FRAMES
         end
     end
+    self._gc_heap_frames = sampled
+
+    if boost > 0 then
+        self._gc_boost_frames = boost - 1
+        collectgarbage("step", gc.BOOST_STEP)
+        self._gc_step_frames = 0
+        return
+    end
+
+    self._gc_boost_frames = 0
+
+    -- Every STEP_FRAMES frames rather than every frame: see the ladder above. A step's fixed
+    -- cost is most of a small step, so paying it sixty times a second buys nothing.
+    local due = (self._gc_step_frames or 0) + 1
+    if due < gc.STEP_FRAMES then
+        self._gc_step_frames = due
+        return
+    end
+
+    self._gc_step_frames = 0
+    collectgarbage("step", gc.STEP)
 end
 
 function Game:rects_overlap(a, b)
@@ -8399,40 +8524,129 @@ function Game:get_overlap(a, b)
     return ox, oy
 end
 
+--- How fast a nudged node slides back to where it belongs, per second. Unchanged from the
+--- in-drag decay this shares with, so the return looks the same whether the finger is still
+--- down or not.
+local COLLISION_DECAY_RATE = 5
+
+--- Below this a node is close enough to home to be snapped there and dropped from the tail
+--- list. A twentieth of a pixel is well under what a 240p panel can show, and without a floor
+--- the exponential decay never reaches zero and the tail never ends.
+local COLLISION_SETTLED = 0.05
+
+--- Push a node onto the list of things that have been shoved out of place. The flag on the
+--- node is what keeps this O(1): a node being nudged every frame of a drag must not be added
+--- to the list every frame of that drag.
+local function mark_nudged(self, node)
+    if node._collision_nudged then return end
+    node._collision_nudged = true
+    local list = self._collision_nudged
+    list[#list + 1] = node
+end
+
+--- Slide every displaced node back toward its layout position, dropping the ones that have
+--- arrived. Returns how many are still moving.
+---
+--- This is the release tail, and it is why the idle path is not simply "return". The offsets
+--- have to go somewhere: before this, nothing decayed them once the finger came up, so a card
+--- shoved aside during a drag stayed shoved for the rest of the run, and the displacement
+--- accumulated across drags. The decay loop existed but only ever ran inside the dragging
+--- branch.
+local function decay_nudged(self, dt)
+    local list = self._collision_nudged
+    local count = #list
+    if count == 0 then return 0 end
+
+    local keep = 1 - COLLISION_DECAY_RATE * dt
+    if keep < 0 then keep = 0 end
+
+    local live = 0
+    for i = 1, count do
+        local node = list[i]
+        local offset = node.collision_offset
+        local x = offset.x * keep
+        local y = offset.y * keep
+
+        if (x < 0 and -x or x) < COLLISION_SETTLED
+            and (y < 0 and -y or y) < COLLISION_SETTLED then
+            offset.x, offset.y = 0, 0
+            node._collision_nudged = nil
+        else
+            offset.x, offset.y = x, y
+            live = live + 1
+            list[live] = node
+        end
+    end
+
+    for i = count, live + 1, -1 do
+        list[i] = nil
+    end
+
+    return live
+end
+
+--- Nudge collidable nodes out from under whatever is being dragged.
+---
+--- The idle path is the one that matters for frametime: nothing is being dragged on the
+--- overwhelming majority of frames, and this used to walk every node in the scene on each of
+--- them to clear a flag that the first such frame had already cleared. It is now a transition
+--- -- one sweep when the finger comes up -- followed by a short tail while the displaced nodes
+--- slide home, and then nothing at all.
 function Game:check_collisions(dt)
-    if not self.dragging then
-        for _, node in ipairs(self.nodes) do
-            if node.states then
-                node.states.collide.is = false
+    local held = self.dragging
+
+    if not held then
+        if self._collision_active then
+            -- The one-time release sweep. Every node, not just the collidables, because that
+            -- is what the per-frame version cleared and a node can stop being collidable
+            -- while it is still flagged.
+            self._collision_active = false
+            for _, node in ipairs(self.nodes) do
+                if node.states then
+                    node.states.collide.is = false
+                end
             end
         end
+
+        decay_nudged(self, dt)
         return
     end
-    
+
+    self._collision_active = true
+
     local collidables = self._collidables_buf
     for i = #collidables, 1, -1 do
         collidables[i] = nil
     end
-    for _, node in ipairs(self.nodes) do
+    local nodes = self.nodes
+    local count = 0
+    for i = 1, #nodes do
+        local node = nodes[i]
         if node.states and node.states.collide.can then
-            table.insert(collidables, node)
+            count = count + 1
+            collidables[count] = node
         end
     end
-    
+
     local nudge_strength = 200 * dt
     local deadzone = 3
     local max_overlap = 40
 
-    local held = self.dragging
-    local rect_held = held:get_collision_rect()
+    -- Scalars rather than two rectangle tables per node per frame. The overlap test and the
+    -- centre difference are the same arithmetic either way; the tables were pure garbage.
+    local hx1, hy1, hx2, hy2 = held:get_collision_bounds()
+    local held_cx = (hx1 + hx2) * 0.5
+    local held_cy = (hy1 + hy2) * 0.5
 
-    for _, other in ipairs(collidables) do
+    for i = 1, count do
+        local other = collidables[i]
         if other ~= held then
-            local rect_other = other:get_collision_rect()
+            local ox1, oy1, ox2, oy2 = other:get_collision_bounds()
 
-            if self:rects_overlap(rect_held, rect_other) then
-                local ox, oy = self:get_overlap(rect_held, rect_other)
-                local min_overlap = math.min(ox, oy)
+            if hx1 < ox2 and hx2 > ox1 and hy1 < oy2 and hy2 > oy1 then
+                local ox = (hx2 < ox2 and hx2 or ox2) - (hx1 > ox1 and hx1 or ox1)
+                local oy = (hy2 < oy2 and hy2 or oy2) - (hy1 > oy1 and hy1 or oy1)
+                local min_overlap = ox < oy and ox or oy
 
                 if min_overlap > max_overlap then
                     other.states.collide.is = false
@@ -8441,21 +8655,15 @@ function Game:check_collisions(dt)
                 else
                     other.states.collide.is = true
 
-                    local center_hx = rect_held.x + rect_held.w / 2
-                    local center_hy = rect_held.y + rect_held.h / 2
-                    local center_ox = rect_other.x + rect_other.w / 2
-                    local center_oy = rect_other.y + rect_other.h / 2
-
-                    local dx = center_ox - center_hx
-                    local dy = center_oy - center_hy
-
+                    local offset = other.collision_offset
                     if ox < oy then
-                        local nudge = (dx > 0 and 1 or -1) * nudge_strength
-                        other.collision_offset.x = other.collision_offset.x + nudge
+                        local dx = (ox1 + ox2) * 0.5 - held_cx
+                        offset.x = offset.x + (dx > 0 and 1 or -1) * nudge_strength
                     else
-                        local nudge = (dy > 0 and 1 or -1) * nudge_strength
-                        other.collision_offset.y = other.collision_offset.y + nudge
+                        local dy = (oy1 + oy2) * 0.5 - held_cy
+                        offset.y = offset.y + (dy > 0 and 1 or -1) * nudge_strength
                     end
+                    mark_nudged(self, other)
                 end
             else
                 other.states.collide.is = false
@@ -8463,12 +8671,7 @@ function Game:check_collisions(dt)
         end
     end
 
-    -- Decay offset so cards return to original position when collision ends
-    for _, node in ipairs(collidables) do
-        local decay = 5 * dt
-        node.collision_offset.x = node.collision_offset.x * (1 - decay)
-        node.collision_offset.y = node.collision_offset.y * (1 - decay)
-    end
+    decay_nudged(self, dt)
 end
 
 function Game:point_in_rect(px, py, node)

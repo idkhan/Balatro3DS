@@ -29,22 +29,33 @@ local function new_particle()
     }
 end
 
---- Optional batched draw.
+--- Experimental batched draw. **This is slower on hardware. Do not turn it on.**
 ---
---- Every particle is an axis-aligned filled rectangle, and each `love.graphics.rectangle`
---- becomes its own DrawCommand in the runtime -- a heap allocation plus a vertex copy per
---- particle. On a saturated pool that is 70 of the roughly 150 draw commands the whole frame
---- issues, all on the burst frames most likely to drop one.
+--- The idea was sound and the measurement settled it against us. Every particle is an
+--- axis-aligned filled rectangle, and an untextured Mesh collapses seventy of them into one
+--- draw -- the same PRIMITIVE path a rectangle takes (`drawcommand.tcc` defaults the format,
+--- and Mesh only switches to TEXTURE when it has a texture, `mesh.cpp:212`), with the
+--- per-vertex colour particles need. What it costs is marshalling 420 vertices out of Lua
+--- tables across the C boundary every frame, and on a New 3DS that is the more expensive half
+--- by a wide margin:
 ---
---- An untextured Mesh collapses them into one. It is the same PRIMITIVE draw path a
---- rectangle takes (`drawcommand.tcc:33` defaults the format, and Mesh only switches to
---- TEXTURE when it has a texture, `mesh.cpp:212`), and per-vertex colour is exactly what
---- particles need -- Mesh ignores `setColor`, which is why the fallback path cannot be
---- expressed this way round.
+---     70 ordinary rectangles     1.027 ms
+---     this mesh path             2.733 ms
+---     Mesh:setVertices alone     0.871 ms
+---     drawing an already-built mesh   0.161 ms
 ---
---- Off by default: the reduction in draw commands is certain, but it is paid for by
---- marshalling six vertices per particle out of Lua tables, and which side wins is a
---- question only a hardware profile can answer. `Particles.set_batched(true)` flips it.
+--- The draw itself is nearly free; building it is 2.5 ms. So this stays off, and it is kept
+--- only as the thing the number above refers to -- `benchmark.lua`'s `particles_mesh_70`
+--- against `particles_rect_70` is the whole argument, and deleting the path would delete the
+--- ability to re-run it after a runtime change.
+---
+--- The rectangle path is also no longer what it was when this was written. The coalescing
+--- flush in the ctr renderer merges adjacent compatible commands, and seventy untextured
+--- rectangles with nothing between them are one run -- so they now cost seventy cheap
+--- DrawCommands and ONE GPU submission, natively, with no Lua vertex tables at all. That is
+--- the shape this was reaching for, arrived at from the other end.
+---
+--- `Particles.set_batched(true)` still flips it, for measurement.
 local batch_mesh, batch_verts, batch_submit
 local batch_supported = nil
 local batch_submit_len = 0
@@ -165,6 +176,9 @@ function Particles.reset_batch_probe()
 end
 
 --- Turn the batched draw on or off. Off by default; see `draw_batched`.
+--- Turn the experimental mesh path on. It is slower on hardware -- see the note above the
+--- batch state -- so this exists for `benchmark.lua` and for re-measuring after a runtime
+--- change, not for shipping.
 function Particles.set_batched(enabled)
     batching = enabled and true or false
 end
