@@ -1036,14 +1036,6 @@ function Card:draw()
         or (self.selected == true and not self.scoring_center)
         or (self.scoring_center == true and self.counts_for_play_score == true and not self._score_lift_y)
     local shadow_x, shadow_y, shadow_alpha = Card.shadow_draw_params(draw_x, w, lifted)
-    love.graphics.push()
-    love.graphics.translate(draw_x + shadow_x, draw_y + shadow_y)
-    love.graphics.scale(s, s)
-    love.graphics.translate(w * 0.5, h * 0.5)
-    love.graphics.rotate(r)
-    love.graphics.scale(flip_sx, 1)
-    love.graphics.translate(-w * 0.5, -h * 0.5)
-    love.graphics.setColor(0, 0, 0, shadow_alpha * lifecycle_alpha)
     local shadow_atlas, shadow_quad, shadow_w, shadow_h
     if shown_up and self.face_quad then
         shadow_atlas, shadow_quad, shadow_w, shadow_h =
@@ -1052,27 +1044,30 @@ function Card:draw()
         shadow_atlas, shadow_quad, shadow_w, shadow_h =
             self.back_atlas, self.back_quad, self.back_w, self.back_h
     end
+    love.graphics.setColor(0, 0, 0, shadow_alpha * lifecycle_alpha)
+
     -- The shadow comes apart on the same holes as the card above it. Fading it flat instead
     -- left a solid card-shaped silhouette under a card that was two thirds gone, which at
     -- 240p is the most visible thing on screen.
-    local shadow_masked = false
     if dissolve and shadow_atlas and shadow_atlas.image and shadow_quad then
+        Moveable.push_sprite_transform(draw_x + shadow_x, draw_y + shadow_y, w, h, s, r, flip_sx)
         local qx, qy, qw, qh = shadow_quad:getViewport()
-        shadow_masked = Fx.draw_dissolve_shadow(shadow_atlas.image, qx, qy, qw, qh, 0, 0,
+        local shadow_masked = Fx.draw_dissolve_shadow(shadow_atlas.image, qx, qy, qw, qh, 0, 0,
             shadow_w, shadow_h, dissolve, shadow_alpha, self:lifecycle_seed())
+        if not shadow_masked then
+            self:draw_layer(shadow_atlas, shadow_quad, shadow_w, shadow_h, 0, 0)
+        end
+        love.graphics.pop()
+    elseif shadow_atlas and shadow_atlas.image and shadow_quad then
+        -- One quad, so the transform does not have to go on the stack at all: the same matrix
+        -- is exactly what love.graphics.draw's own x/y/r/sx/sy/ox/oy arguments express, and
+        -- that is a push, six transform calls and a pop the shadow no longer pays for.
+        love.graphics.draw(shadow_atlas.image, shadow_quad,
+            draw_x + shadow_x + s * w * 0.5, draw_y + shadow_y + s * h * 0.5,
+            r, s * flip_sx, s, w * 0.5, h * 0.5)
     end
-    if not shadow_masked then
-        self:draw_layer(shadow_atlas, shadow_quad, shadow_w, shadow_h, 0, 0)
-    end
-    love.graphics.pop()
 
-    love.graphics.push()
-    love.graphics.translate(draw_x, draw_y)
-    love.graphics.scale(s, s)
-    love.graphics.translate(w * 0.5, h * 0.5)
-    love.graphics.rotate(r)
-    love.graphics.scale(flip_sx, 1)
-    love.graphics.translate(-w * 0.5, -h * 0.5)
+    Moveable.push_sprite_transform(draw_x, draw_y, w, h, s, r, flip_sx)
 
     love.graphics.setColor(1, 1, 1, lifecycle_alpha)
 

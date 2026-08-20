@@ -276,8 +276,6 @@ function Consumable:draw()
     local draw_w = (self.VT and self.VT.w) or (self.T and self.T.w) or 72
     local draw_h = (self.VT and self.VT.h) or (self.T and self.T.h) or 95
 
-    love.graphics.push()
-
     local cx = draw_x + (self.VT.w * self.VT.scale) / 2
     local cy = draw_y + (self.VT.h * self.VT.scale) / 2
     -- A used consumable keeps its size and comes apart inside the sprite, the way the
@@ -290,10 +288,22 @@ function Consumable:draw()
     -- re-centring the way `Card:draw` does.
     local scale = self.VT.scale * (self.juice_scale or 1)
     local rot = self.VT.r + (self.juice_r or 0)
-    love.graphics.translate(cx, cy)
-    love.graphics.rotate(rot)
-    love.graphics.scale(scale, scale)
-    love.graphics.translate(-cx, -cy)
+
+    -- The plain path draws exactly one quad, so the pivot transform goes into that draw's own
+    -- arguments instead of onto the stack: translate/rotate/scale/translate about (cx, cy) and
+    -- then a quad at (draw_x, draw_y) is the same matrix as a draw at (cx, cy) with the origin
+    -- offset back to the quad's corner. Six graphics calls become none.
+    local plain = self.atlas and self.atlas.image and self.quad
+        and not (dissolve and Fx and Fx.draw_dissolve_cell)
+
+    if plain then
+        love.graphics.setColor(1, 1, 1, dissolve and (1 - dissolve) or 1)
+        love.graphics.draw(self.atlas.image, self.quad, cx, cy, rot, scale, scale,
+            cx - draw_x, cy - draw_y)
+        return self:draw_focus_outline()
+    end
+
+    Moveable.push_pivot_transform(cx, cy, rot, scale, scale)
 
     if self.atlas and self.atlas.image and self.quad then
         love.graphics.setColor(1, 1, 1, dissolve and (1 - dissolve) or 1)
@@ -318,6 +328,12 @@ function Consumable:draw()
 
     love.graphics.pop()
 
+    return self:draw_focus_outline()
+end
+
+--- The gamepad focus ring, drawn outside the sprite transform. Its own function only so the
+--- plain draw path above can return straight into it.
+function Consumable:draw_focus_outline()
     if G and G.draw_node_gamepad_focus_outline then
         G:draw_node_gamepad_focus_outline(self)
     end

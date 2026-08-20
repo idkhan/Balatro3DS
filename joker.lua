@@ -1088,8 +1088,8 @@ function Joker:draw()
 
     local draw_x, draw_y = self:get_layout_draw_xy()
 
-    love.graphics.push()
-
+    -- The push moved into `Moveable.push_pivot_transform` below, which is the only thing that
+    -- needed one; nothing between here and there draws.
     local base_scale = self.VT.scale or 1
     local render_scale = self:get_render_scale()
     local rot = self.VT.r
@@ -1120,10 +1120,7 @@ function Joker:draw()
     local shown_up = self.sprite_face_up
     if shown_up == nil then shown_up = self.face_up end
     local flip_sx = self.flip_sx and self:flip_sx() or 1
-    love.graphics.translate(cx, cy)
-    love.graphics.rotate(rot)
-    love.graphics.scale(render_scale * flip_sx, render_scale)
-    love.graphics.translate(-cx, -cy)
+    Moveable.push_pivot_transform(cx, cy, rot, render_scale * flip_sx, render_scale)
 
     love.graphics.setColor(1, 1, 1, lifecycle_alpha)
 

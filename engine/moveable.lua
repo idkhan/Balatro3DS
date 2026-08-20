@@ -449,7 +449,50 @@ function Moveable:move_r(dt, vel)
     end
 end
 
+--- Is this node completely at rest?
+---
+--- Most nodes on most frames are, and the individual helpers below already early-out for
+--- them -- but a settled node still made four method calls and around thirty table reads to
+--- learn that there was nothing to do. On hardware a method call is 0.65 us and a table field
+--- read is a few tenths, so fifty settled nodes were costing a millisecond of the frame to
+--- confirm that nothing had moved.
+---
+--- Every condition mirrors the early-out of the helper it stands in for, so this can only
+--- skip work those helpers would themselves have skipped:
+---
+---   `move_xy`     returns when VT is exactly on T -- zeroing velocity on the way, which is
+---                 why velocity has to be zero here rather than merely small.
+---   `move_scale`  returns when VT.scale is on its target and |velocity.scale| is within
+---                 EPS_SCALE; the target is T.scale only while the node is not being dragged.
+---   `move_r`      returns when there is no sideways velocity, no rotational velocity and VT.r
+---                 is on T.r.
+---   `update_juice`/`update_flip` return when their animation table is absent.
+---
+--- `update_coefficients` is deliberately not run: it is a cache shared by every node in the
+--- frame, and every path that reads it -- the three movers, `clamp_velocity`, and
+--- `update_juice` for the callers that drive it directly -- refreshes it first.
+---
+--- The order is chosen for the moving case: a node in flight fails on velocity or position
+--- within the first few reads and never pays for the rest.
+local function at_rest(self)
+    local v = self.velocity
+    if v.x ~= 0 or v.y ~= 0 or v.r ~= 0 then return false end
+    if self.juice or self._flip then return false end
+
+    local VT, T = self.VT, self.T
+    if VT.x ~= T.x or VT.y ~= T.y or VT.r ~= T.r or VT.scale ~= T.scale then return false end
+
+    local vs = v.scale
+    if vs > EPS_SCALE or vs < -EPS_SCALE then return false end
+
+    -- Last, because it is three reads deep and a dragged node has almost always failed one of
+    -- the position tests already.
+    return not self.states.drag.is
+end
+
 function Moveable:update(dt)
+    if at_rest(self) then return end
+
     -- Motion runs on real time, never on the game-speed-scaled `dt` the caller passes for
     -- logic. The original is explicit about this: its event queue reads a clock that game
     -- speed stretches, but `move()` always gets `real_dt` and `move_juice` reads
@@ -481,6 +524,78 @@ function Moveable:update(dt)
 
     self:move_scale(move_dt)
     self:move_r(move_dt, v)
+end
+
+--- Push the transform a card-shaped sprite is drawn under, flattened.
+---
+--- The chain every card draw used to build by hand was
+---
+---     translate(x, y) scale(s, s) translate(w/2, h/2) rotate(r) scale(f, 1) translate(-w/2, -h/2)
+---
+--- which is eight graphics calls with the push and pop, measured at 17.1 us on a New 3DS --
+--- and `Card:draw` builds it twice, once for the shadow and once for the card. Six of those
+--- calls are avoidable arithmetic:
+---
+---     scale(s,s) after translate(w/2,h/2) is translate(s*w/2, s*h/2) before it, and a uniform
+---     scale commutes with a rotation, so the whole thing is
+---
+---       translate(x + s*w/2, y + s*h/2) rotate(r) scale(s*f, s) translate(-w/2, -h/2)
+---
+--- and when there is no rotation the two centring translates cancel outright, leaving
+---
+---       translate(x + s*w*(1-f)/2, y) scale(s*f, s)
+---
+--- which is what an unrotated card -- almost every card, almost every frame -- actually needs.
+--- The result is the same matrix to the bit in both cases; this is algebra, not an
+--- approximation.
+---
+--- Caller pops.
+---@param x number top-left of the sprite, before scaling
+---@param y number
+---@param w number unscaled sprite width; the rotation and flip pivot is its centre
+---@param h number
+---@param s number uniform scale about the top-left
+---@param r number rotation about the sprite centre
+---@param flip_sx number horizontal pinch about the sprite centre, 1 when not flipping
+function Moveable.push_sprite_transform(x, y, w, h, s, r, flip_sx)
+    local g = love.graphics
+    g.push()
+
+    if r == 0 then
+        local sx = s * flip_sx
+        g.translate(x + s * w * (1 - flip_sx) * 0.5, y)
+        if sx ~= 1 or s ~= 1 then g.scale(sx, s) end
+        return
+    end
+
+    g.translate(x + s * w * 0.5, y + s * h * 0.5)
+    g.rotate(r)
+    g.scale(s * flip_sx, s)
+    g.translate(-w * 0.5, -h * 0.5)
+end
+
+--- Push `translate(px, py) rotate(r) scale(sx, sy) translate(-px, -py)`, flattened.
+---
+--- The rotate-and-scale-about-a-point shape jokers and consumables use. Without a rotation it
+--- collapses to `translate(px*(1-sx), py*(1-sy)) scale(sx, sy)`, and with no scale either it
+--- collapses to nothing at all -- which is the common case for a joker sitting in its slot.
+---
+--- Caller pops.
+function Moveable.push_pivot_transform(px, py, r, sx, sy)
+    local g = love.graphics
+    g.push()
+
+    if r == 0 then
+        if sx == 1 and sy == 1 then return end
+        g.translate(px * (1 - sx), py * (1 - sy))
+        g.scale(sx, sy)
+        return
+    end
+
+    g.translate(px, py)
+    g.rotate(r)
+    g.scale(sx, sy)
+    g.translate(-px, -py)
 end
 
 function Moveable:draw_boundingrect()
