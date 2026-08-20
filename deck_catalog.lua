@@ -618,12 +618,12 @@ function Game:deck_select_button(btn)
         self._deck_select_idx = math.max(1, idx - 1)
     elseif btn == "dpleft" then
         self._deck_select_idx = math.min(#list, idx + 1)
-    elseif btn == "a" or btn == "y" then
+    elseif self:is_menu_activate(btn) then
         local def = list[idx]
         if def and def.unlocked then
             self:_confirm_deck_selection()
         end
-    elseif btn == "b" then
+    elseif self:is_role(btn, "cancel") then
         self:set_state(self.STATES.MENU)
         self._menu_sub_state = "main"
     end
@@ -637,9 +637,9 @@ function Game:stake_select_button(btn)
         self._stake_select_idx = math.max(1, idx - 1)
     elseif btn == "down" then
         self._stake_select_idx = math.min(#list, idx + 1)
-    elseif btn == "a" or btn == "y" then
+    elseif self:is_menu_activate(btn) then
         self:_confirm_run_selection()
-    elseif btn == "b" then
+    elseif self:is_role(btn, "cancel") then
         self._menu_sub_state = "deck_select"
     end
 end

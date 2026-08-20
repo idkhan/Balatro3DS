@@ -3,8 +3,7 @@ Joker = Moveable:extend()
 require "joker_effects"
 local TooltipDraw = require("tooltip_draw")
 
--- Basic 2-layer joker: back sprite and front sprite.
--- Rendering logic is similar to `Card:draw()` but uses atlas cell indices instead of rank/suit.
+-- Basic 2-layer joker: back sprite (centers atlas) and front sprite (individual PNG).
 
 local SHAKE_MAGNITUDE = 10
 local SHAKE_MAX_DURATION = (JokerEffects and JokerEffects.SHAKE_MAX_DURATION) or 0.22
@@ -13,6 +12,25 @@ local JOKER_STICKER_INDICES = {
     eternal = 0,
     rental = 11,
     perishable = 10,
+}
+
+Joker.SPRITE_W = 70
+Joker.SPRITE_H = 94
+Joker.WEE_JOKER_ID = "j_wee"
+Joker.WEE_DISPLAY_SCALE = 0.75
+local JOKER_SPRITE_W = Joker.SPRITE_W
+local JOKER_SPRITE_H = Joker.SPRITE_H
+
+local JOKER_PAGE_OFFSETS = {
+    Joker1 = 0,
+    Joker1_p1 = 0,
+    Joker1_p2 = 24,
+    Joker1_p3 = 48,
+    Joker1_p4 = 72,
+    Joker2 = 0,
+    Joker2_p1 = 0,
+    Joker2_p2 = 24,
+    Joker2_p3 = 48,
 }
 
 local function lower(s)
@@ -42,7 +60,6 @@ local function capture_joker_runtime_snapshot(joker)
         stored_xmult = tonumber(joker and joker.stored_xmult) or 1,
         runtime_counter = tonumber(joker and joker.runtime_counter) or 0,
         sell_cost = tonumber(joker and joker.sell_cost) or 0,
-        loyalty_remaining = tonumber(joker and joker.loyalty_remaining) or 0,
         free_joker_slots = tonumber(joker and joker.free_joker_slots) or 0,
         money = tonumber((G or {}).money) or 0,
         joker_count = (type((G or {}).jokers) == "table") and #G.jokers or 0,
@@ -65,7 +82,6 @@ local function runtime_snapshot_delta(before, after)
         or after.stored_xmult ~= before.stored_xmult
         or after.runtime_counter ~= before.runtime_counter
         or after.sell_cost ~= before.sell_cost
-        or after.loyalty_remaining ~= before.loyalty_remaining
         or after.free_joker_slots ~= before.free_joker_slots
         or after.money ~= before.money
         or after.joker_count ~= before.joker_count
@@ -113,29 +129,28 @@ function Joker.edition_price_deltas(ed)
     return 0
 end
 
---- Atlas key for the front sheet: Negative edition uses pre-baked `Joker1_negative` / `Joker2_negative` sheets.
----@param base_atlas string|nil e.g. `"Joker1"` from `def.pos.atlas`
----@param edition string|nil raw edition
+--- Individual sprite key under `resources/textures/1x/Jokers/` (e.g. `"Jokers1_17"` or `"Jokers1_negative_17"`).
+---@param atlas_name string|nil
+---@param index number|nil 0-based cell index from the legacy atlas layout
+---@param edition string|nil raw edition; negative loads the `_negative_` sprite variant
 ---@return string|nil
-function Joker.resolve_front_atlas_key(base_atlas, edition)
-    local base = base_atlas and tostring(base_atlas) or "Joker1_p1"
-    local ed = Joker.normalize_edition(edition)
-    if ed == "negative" then
-        if base == "Joker1" then return "Joker1_negative" end
-        if base == "Joker2" then return "Joker2_negative" end
-        local p = string.match(base, "^Joker1_p(%d+)$")
-        if p then return "Joker1_negative_p" .. p end
-        p = string.match(base, "^Joker2_p(%d+)$")
-        if p then return "Joker2_negative_p" .. p end
+function Joker.sprite_key_from_pos(atlas_name, index, edition)
+    if not atlas_name then return nil end
+    local atlas = tostring(atlas_name)
+    local set = string.find(atlas, "Joker2", 1, true) and "2" or "1"
+    local off = JOKER_PAGE_OFFSETS[atlas] or 0
+    local num = off + (tonumber(index) or 0) + 1
+    if Joker.normalize_edition(edition) == "negative" then
+        return "Jokers" .. set .. "_negative_" .. num
     end
-    return base
+    return "Jokers" .. set .. "_" .. num
 end
 
-local function joker_front_quads_signature(joker)
-    return tostring(joker.front_atlas_name) .. "\0" .. Joker.normalize_edition(joker.edition)
+local function joker_front_sprite_signature(joker)
+    return tostring(joker.front_sprite_key or joker.front_atlas_name) .. "\0" .. Joker.normalize_edition(joker.edition)
 end
 
--- Edition visuals: foil/holo/polychrome use multiply; Negative uses alternate atlas (see `resolve_front_atlas_key`).
+-- Edition visuals: foil/holo/polychrome use multiply tint; negative uses a dedicated sprite.
 
 --- Animated RGB multiply for Polychrome edition (no shader).
 local function polychrome_edition_set_color()
@@ -197,6 +212,23 @@ local function resolve_atlas(name)
     return G.ASSET_ATLAS[name]
 end
 
+local function resolve_joker_sprite(key)
+    if not key or not G or not G.ensure_joker_sprite_loaded then return nil end
+    return G:ensure_joker_sprite_loaded(key)
+end
+
+function Joker.is_wee_def(def)
+    return type(def) == "table" and def.id == Joker.WEE_JOKER_ID
+end
+
+function Joker:get_display_scale_mult()
+    return Joker.is_wee_def(self.def) and Joker.WEE_DISPLAY_SCALE or 1
+end
+
+function Joker:get_render_scale()
+    return (self.VT and self.VT.scale or 1) * self:get_display_scale_mult()
+end
+
 ---@param X number
 ---@param Y number
 ---@param W number|nil
@@ -240,56 +272,8 @@ function Joker:init(X, Y, W, H, def, params)
     self.stored_chips = tonumber(self.effect_config.chips) or 0
     self.stored_xmult = tonumber(self.effect_config.Xmult) or 1
     self.runtime_counter = 0
-    self.loyalty_remaining = nil
     self.free_joker_slots = nil
     self.perishable_counter = 5
-
-    -- Effect interpreter fields:
-    -- Supported Balatro-like effect types:
-    --   "Mult", "Suit Mult", "Type Mult", and optional chips variants.
-    self.effect_type = nil
-
-    if type(self.def.effect) == "string" then
-        self.effect_type = self.def.effect
-    elseif type(self.def.effect) == "table" then
-        -- Legacy compatibility with the earlier prototype `{type="add_mult", amount=...}`.
-        if self.def.effect.type == "add_mult" then
-            self.effect_type = "Mult"
-            self.effect_config = self.effect_config or {}
-            self.effect_config.mult = tonumber(self.def.effect.amount) or 0
-        elseif self.def.effect.type == "add_chips" then
-            self.effect_type = "Chips"
-            self.effect_config = self.effect_config or {}
-            self.effect_config.chips = tonumber(self.def.effect.amount) or 0
-        end
-    end
-
-    -- Infer effect type when missing (based on config).
-    if self.effect_type == nil then
-        if type(self.effect_config) == "table" then
-            if self.effect_config.mult ~= nil then
-                self.effect_type = "Mult"
-            elseif type(self.effect_config.extra) == "table" and self.effect_config.extra.s_mult ~= nil then
-                self.effect_type = "Suit Mult"
-            elseif self.effect_config.t_mult ~= nil then
-                self.effect_type = "Type Mult"
-            elseif type(self.effect_config.extra) == "table" and self.effect_config.extra.s_chips ~= nil then
-                self.effect_type = "Suit Chips"
-            elseif self.effect_config.t_chips ~= nil then
-                self.effect_type = "Type Chips"
-            end
-        end
-    end
-
-    if self.effect_type == "1 in 6 mult" or self.effect_type == "1 in 10 mult" then
-        local extra = type(self.effect_config.extra) == "table" and self.effect_config.extra or {}
-        local every = math.max(1, tonumber(extra.every) or 6)
-        local remaining = tonumber(extra.remaining) or every
-        if remaining < 1 or remaining > every then
-            remaining = every
-        end
-        self.loyalty_remaining = remaining
-    end
 
     self.effect_impl = JokerEffects.get(self)
 
@@ -307,11 +291,15 @@ function Joker:init(X, Y, W, H, def, params)
         elseif self.def.id == "j_rocket" then
             local ex = type(self.def.config) == "table" and self.def.config.extra
             self.running_count = math.max(1, math.floor(tonumber(ex and ex.dollars) or 1))
+        elseif self.def.id == "j_loyalty_card" then
+            local extra = type(self.effect_config.extra) == "table" and self.effect_config.extra or {}
+            local every = math.max(1, tonumber(extra.every) or 6)
+            self.runtime_counter = every
         end
     end
 
-    local cw = W or 71
-    local ch = H or 95
+    local cw = W or JOKER_SPRITE_W
+    local ch = H or JOKER_SPRITE_H
     Moveable.init(self, X or 0, Y or 0, cw, ch)
 
     -- Disable collisions between jokers/cards for now.
@@ -336,39 +324,43 @@ function Joker:init(X, Y, W, H, def, params)
 end
 
 function Joker:refresh_quads()
-    local old_front_atlas_name = self._front_atlas_ref_name
-    local base_name = self.front_atlas_name
-    local want_key = Joker.resolve_front_atlas_key(base_name, self.edition)
-    local base_atlas = resolve_atlas(base_name)
+    local old_front_sprite_key = self._front_atlas_ref_name
 
-    self.front_atlas = resolve_atlas(want_key)
-    if Joker.normalize_edition(self.edition) == "negative" and want_key ~= base_name then
-        if not self.front_atlas or not self.front_atlas.image then
-            self.front_atlas = base_atlas
+    self.front_sprite_key = Joker.sprite_key_from_pos(self.front_atlas_name, self.front_index, self.edition)
+    self.front_sprite = resolve_joker_sprite(self.front_sprite_key)
+    if Joker.normalize_edition(self.edition) == "negative" then
+        if not self.front_sprite or not self.front_sprite.image then
+            self.front_sprite_key = Joker.sprite_key_from_pos(self.front_atlas_name, self.front_index)
+            self.front_sprite = resolve_joker_sprite(self.front_sprite_key)
         end
     end
+    self.front_w = JOKER_SPRITE_W
+    self.front_h = JOKER_SPRITE_H
 
     self.back_atlas = resolve_atlas(self.back_atlas_name)
-
-    self.front_quad, self.front_w, self.front_h = compute_quad(self.front_atlas, self.front_index)
-    if Joker.normalize_edition(self.edition) == "negative" and want_key ~= base_name then
-        if not self.front_quad and base_atlas and base_atlas.image then
-            self.front_atlas = base_atlas
-            self.front_quad, self.front_w, self.front_h = compute_quad(self.front_atlas, self.front_index)
-        end
-    end
     self.back_quad, self.back_w, self.back_h = compute_quad(self.back_atlas, self.back_index)
-    self._front_atlas_ref_name = (self.front_atlas and self.front_atlas.name) or want_key or base_name
+    self._front_atlas_ref_name = self.front_sprite_key
 
     local sub = self.params.sub_pos or self.def.sub_pos
     if type(sub) == "table" and sub.atlas and sub.index ~= nil then
         self.sub_atlas_name = sub.atlas
         self.sub_index = tonumber(sub.index) or 0
-        self.sub_atlas = resolve_atlas(self.sub_atlas_name)
-        self.sub_quad = compute_quad(self.sub_atlas, self.sub_index)
+        if string.find(tostring(sub.atlas), "Joker", 1, true) then
+            self.sub_sprite_key = Joker.sprite_key_from_pos(sub.atlas, self.sub_index)
+            self.sub_sprite = resolve_joker_sprite(self.sub_sprite_key)
+            self.sub_atlas = nil
+            self.sub_quad = nil
+        else
+            self.sub_sprite_key = nil
+            self.sub_sprite = nil
+            self.sub_atlas = resolve_atlas(self.sub_atlas_name)
+            self.sub_quad = compute_quad(self.sub_atlas, self.sub_index)
+        end
     else
         self.sub_atlas_name = nil
         self.sub_index = nil
+        self.sub_sprite_key = nil
+        self.sub_sprite = nil
         self.sub_atlas = nil
         self.sub_quad = nil
     end
@@ -400,9 +392,9 @@ function Joker:refresh_quads()
         end
     end
 
-    self._quads_refresh_signature = joker_front_quads_signature(self)
+    self._quads_refresh_signature = joker_front_sprite_signature(self)
     if G and G.on_joker_front_atlas_resolved then
-        G:on_joker_front_atlas_resolved(self, old_front_atlas_name, self._front_atlas_ref_name)
+        G:on_joker_front_atlas_resolved(self, old_front_sprite_key, self._front_atlas_ref_name)
     end
 end
 
@@ -419,7 +411,7 @@ end
 -- top-left when `scale != 1`. Hit-testing should use the same effective bounds.
 function Joker:get_collision_rect()
     local t = self.VT or self.T
-    local s = t.scale or 1
+    local s = self:get_render_scale()
     local w = t.w or 0
     local h = t.h or 0
 
@@ -463,8 +455,38 @@ local function fmt_runtime_number(n, decimals)
     return s
 end
 
+local function joker_effect_kind(joker)
+    local def = type(joker) == "table" and joker.def or {}
+    local et = def.effect
+    if type(et) == "string" then return et end
+    if type(et) == "table" then
+        if et.type == "add_mult" then return "Mult" end
+        if et.type == "add_chips" then return "Chips" end
+    end
+    local cfg = joker.effect_config or {}
+    if cfg.mult ~= nil then return "Mult" end
+    if type(cfg.extra) == "table" and cfg.extra.s_mult ~= nil then return "Suit Mult" end
+    if cfg.t_mult ~= nil then return "Type Mult" end
+    if type(cfg.extra) == "table" and cfg.extra.s_chips ~= nil then return "Suit Chips" end
+    if cfg.t_chips ~= nil then return "Type Chips" end
+    return nil
+end
+
+local function rank_to_label(r)
+    if r == 14 then
+        return "Ace"
+    elseif r == 13 then
+        return "King"
+    elseif r == 12 then
+        return "Queen"
+    elseif r ~= nil then
+        return tostring(r)
+    end
+    return "-"
+end
+
 local function describe_joker_effect_lines(joker)
-    local et = joker.effect_type
+    local et = joker_effect_kind(joker)
     local cfg = joker.effect_config or {}
     if et == nil then
         return { "No effect description yet." }
@@ -543,7 +565,7 @@ local function describe_joker_effect_lines(joker)
         local extra = type(cfg.extra) == "table" and cfg.extra or {}
         local every = math.max(1, tonumber(extra.every) or 6)
         local xm = tonumber(extra.Xmult) or tonumber(cfg.Xmult) or 1
-        local remaining = tonumber(joker.loyalty_remaining) or every
+        local remaining = tonumber(joker.runtime_counter) or every
         return {
             string.format("X%d mult every %dth hand played", xm, every),
             string.format("%d remaining", remaining)
@@ -581,14 +603,18 @@ function Joker:get_live_current_tooltip_text(base_text)
             free = tonumber(free) or 0
             return string.format("(Currently X%s)", fmt_runtime_number(free + 1, 2))
         end,
-        j_steel_joker = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
+        j_steel_joker = function(_)
+            local steel = count_full_deck(function(c) return c.enhancement == "steel" end)
+            local x = 1 + (0.2 * steel)
+            return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
+        end,
         j_constellation = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
         j_madness = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
         j_vampire = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
         j_hologram = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
         j_obelisk = function(j) return "(Currently X" .. fmt_runtime_number(j.stored_xmult or 1, 2) .. " Mult)" end,
-        j_throwback = function(j)
-            local skipped = tonumber(j.runtime_counter) or 0
+        j_throwback = function(_)
+            local skipped = (G and tonumber(G.skipsTaken)) or 0
             local x = 1 + (0.25 * skipped)
             return "(Currently X" .. fmt_runtime_number(x, 2) .. " Mult)"
         end,
@@ -631,6 +657,7 @@ function Joker:get_live_current_tooltip_text(base_text)
         j_flash_card = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
         j_spare_trousers = function(j) return string.format("(Currently +%d Mult)", math.floor(tonumber(j.stored_mult) or 0)) end,
         j_fortune_teller = function() return string.format("(Currently +%d)", math.floor(tonumber(G and G.tarots_used) or 0)) end,
+        j_popcorn = function(j) return string.format("+%d Mult", math.floor(tonumber(j.stored_mult) or 0)) end,
     }
     if mults[id] then
         return mults[id](self)
@@ -661,37 +688,15 @@ function Joker:get_live_current_tooltip_text(base_text)
     end
     if id == "j_mail" then
         local r = tonumber(self.random_rank)
-        local label = "—"
-        if r == 14 then
-            label = "Ace"
-        elseif r == 13 then
-            label = "King"
-        elseif r == 12 then
-            label = "Queen"
-        elseif r == 11 then
-            label = "Jack"
-        elseif r ~= nil then
-            label = tostring(r)
-        end
+        local label = rank_to_label(r)
         return string.format("Earn *$5* for each discarded *%s*,", label)
     end
     if id == "j_idol" then
         local r = tonumber(self.random_rank)
-        local label = "—"
-        if r == 14 then
-            label = "Ace"
-        elseif r == 13 then
-            label = "King"
-        elseif r == 12 then
-            label = "Queen"
-        elseif r == 11 then
-            label = "Jack"
-        elseif r ~= nil then
-            label = tostring(r)
-        end
+        local label = rank_to_label(r)
         local s = self.random_suit
         if type(s) ~= "string" or s == "" then
-            s = "—"
+            s = "-"
         end
         return string.format("Each played *%s* of *%s* gives *X3 Mult* when scored,", label, s)
     end
@@ -703,13 +708,13 @@ function Joker:get_live_current_tooltip_text(base_text)
         return string.format("(Currently %d)", enhanced)
     end
     if id == "j_loyalty_card" then
-        local remaining = tonumber(self.loyalty_remaining) or 6
+        local remaining = tonumber(self.runtime_counter) or 6
         return string.format("%d remaining", math.floor(remaining))
     end
     if id == "j_ancient_joker" then
         local s = self.random_suit
         if type(s) ~= "string" or s == "" then
-            s = "—"
+            s = "-"
         end
         return string.format("Each played card with %s gives X1.5 Mult when scored", s)
     end
@@ -731,14 +736,14 @@ function Joker:get_live_current_tooltip_text(base_text)
         end
         local s = self.random_suit
         if type(s) ~= "string" or s == "" then
-            s = "—"
+            s = "-"
         end
         return string.format("This Joker gains +3 Chips per discarded %s", s)
     end
     if id == "j_todo_list" then
         local rh = self.random_hand
         if type(rh) ~= "string" or rh == "" then
-            rh = "—"
+            rh = "-"
         end
         return string.format("Earn *$4* if poker hand is a *%s*,", rh)
     end
@@ -852,14 +857,17 @@ end
 function Joker:draw_tooltip(draw_x, draw_y)
     local def = self.def or {}
     local title = self.name or def.name or "Joker"
+    if G and G.is_discovered and def.id and not G:is_discovered(def.id) then
+        title = "Not Discovered"
+    end
     local lines = self:get_tooltip_body_lines()
     local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
     local resolved_lines = {}
     for _, line in ipairs(lines) do
         table.insert(resolved_lines, self:resolve_tooltip_line_segments(line))
     end
-    local card_w = self.VT.w * self.VT.scale
-    local card_h = self.VT.h * self.VT.scale
+    local card_w = self.VT.w * self:get_render_scale()
+    local card_h = self.VT.h * self:get_render_scale()
     TooltipDraw.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, card_w, card_h)
 end
 
@@ -867,16 +875,17 @@ end
 function Joker:get_layout_draw_xy()
     local draw_x = self.VT.x + self.collision_offset.x
     local draw_y = self.VT.y + self.collision_offset.y
-    if G and G.active_tooltip_joker == self and self.shop_offer_slot == nil then
-        draw_y = draw_y - 8
+    if G and self.shop_offer_slot == nil and G.jokers_on_bottom then
+        local lifted = (G.active_tooltip_joker == self)
+            or (G.is_joker_swap_pick and G:is_joker_swap_pick(self))
+        if lifted then
+            draw_y = draw_y - 8
+        end
     end
 
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         local mag = SHAKE_MAGNITUDE * (self.scoring_shake_timer / SHAKE_MAX_DURATION)
-        local t = love.timer.getTime()
-        if self.scoring_shake_t0 then
-            t = t - self.scoring_shake_t0
-        end
+        local t = self.scoring_shake_phase or 0
         draw_x = draw_x + math.sin(t * 85) * mag
         draw_y = draw_y + math.cos(t * 73) * mag * 0.65
     end
@@ -885,10 +894,18 @@ end
 
 function Joker:should_draw_tooltip()
     if not self.face_up or not G then return false end
+    if G.is_hand_scoring_active and G:is_hand_scoring_active() then return false end
+    if G._collection_open and G._collection_tooltip_node == self then return true end
     if G.is_card_select_mode and G:is_card_select_mode() then return false end
     if G.STATE == G.STATES.BLIND_SELECT and G.active_tooltip_skip_blind_index then return false end
     if self._booster_choice_index and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
         return tonumber(G.booster_session.active_choice_index) == self._booster_choice_index
+    end
+    if G.should_draw_gamepad_focus_outline and G:should_draw_gamepad_focus_outline(self) then
+        return true
+    end
+    if G.is_shop_item_selected and G:is_shop_item_selected(self) then
+        return true
     end
     return G.active_tooltip_joker == self
         and (G.jokers_on_bottom == true or self.shop_offer_slot ~= nil)
@@ -902,8 +919,12 @@ end
 
 function Joker:draw_sub_pos_overlay(draw_x, draw_y)
     if not self.face_up then return end
-    if not self.sub_atlas or not self.sub_atlas.image or not self.sub_quad then return end
     love.graphics.setColor(1, 1, 1, 1)
+    if self.sub_sprite and self.sub_sprite.image then
+        love.graphics.draw(self.sub_sprite.image, draw_x, draw_y, 0, 1, 1)
+        return
+    end
+    if not self.sub_atlas or not self.sub_atlas.image or not self.sub_quad then return end
     love.graphics.draw(self.sub_atlas.image, self.sub_quad, draw_x, draw_y, 0, 1, 1)
 end
 
@@ -934,32 +955,34 @@ function Joker:draw()
 
     love.graphics.push()
 
-    local cx = draw_x + (self.VT.w * self.VT.scale) / 2
-    local cy = draw_y + (self.VT.h * self.VT.scale) / 2
+    local base_scale = self.VT.scale or 1
+    local render_scale = self:get_render_scale()
+    local cx = draw_x + (self.VT.w * base_scale) / 2
+    local cy = draw_y + (self.VT.h * base_scale) / 2
     love.graphics.translate(cx, cy)
     love.graphics.rotate(self.VT.r)
-    love.graphics.scale(self.VT.scale, self.VT.scale)
+    love.graphics.scale(render_scale, render_scale)
     love.graphics.translate(-cx, -cy)
 
     if self.face_up then
-        if self.front_atlas and self.front_atlas.image and self.front_quad then
+        if self.front_sprite and self.front_sprite.image then
             local ed = Joker.normalize_edition(self.edition)
-            local function draw_atlas_front()
-                love.graphics.draw(self.front_atlas.image, self.front_quad, draw_x, draw_y, 0, 1, 1)
+            local function draw_sprite_front()
+                love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)
             end
 
             if ed == "foil" then
                 love.graphics.setColor(0.62, 0.78, 1.12, 1)
-                draw_atlas_front()
+                draw_sprite_front()
             elseif ed == "holo" then
                 love.graphics.setColor(1.15, 0.55, 0.55, 1)
-                draw_atlas_front()
+                draw_sprite_front()
             elseif ed == "polychrome" then
                 polychrome_edition_set_color()
-                draw_atlas_front()
+                draw_sprite_front()
             else
                 love.graphics.setColor(1, 1, 1, 1)
-                draw_atlas_front()
+                draw_sprite_front()
             end
             love.graphics.setColor(1, 1, 1, 1)
         end
@@ -978,6 +1001,10 @@ function Joker:draw()
 
     love.graphics.pop()
 
+    if G and G.draw_node_gamepad_focus_outline then
+        G:draw_node_gamepad_focus_outline(self)
+    end
+
     love.graphics.setColor(prev_draw_r, prev_draw_g, prev_draw_b, prev_draw_a)
 
     -- Debug bounding box.
@@ -988,13 +1015,14 @@ end
 
 function Joker:update(dt)
     Moveable.update(self, dt)
-    if joker_front_quads_signature(self) ~= self._quads_refresh_signature then
+    if joker_front_sprite_signature(self) ~= self._quads_refresh_signature then
         self:refresh_quads()
     end
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         self.scoring_shake_timer = self.scoring_shake_timer - dt
+        self.scoring_shake_phase = (self.scoring_shake_phase or 0) + dt
         if self.scoring_shake_timer < 0 then self.scoring_shake_timer = 0 end
-        if self.scoring_shake_timer <= 0 then self.scoring_shake_t0 = nil end
+        if self.scoring_shake_timer <= 0 then self.scoring_shake_phase = nil end
     end
 end
 
@@ -1034,7 +1062,7 @@ function Joker:apply_edition_on_hand_scored(ctx)
     end
 
     self.scoring_shake_timer = SHAKE_MAX_DURATION
-    self.scoring_shake_t0 = love.timer.getTime()
+    self.scoring_shake_phase = 0
     if ed == "foil" and Sfx and Sfx.play_chips then
         Sfx.play_chips()
     elseif ed == "polychrome" and Sfx and Sfx.play_mult2 then

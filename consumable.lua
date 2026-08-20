@@ -143,6 +143,10 @@ function Consumable:draw()
     end
 
     love.graphics.pop()
+
+    if G and G.draw_node_gamepad_focus_outline then
+        G:draw_node_gamepad_focus_outline(self)
+    end
 end
 
 function Consumable:draw_tooltip_overlay()
@@ -156,6 +160,25 @@ end
 ---@return string[]
 function Consumable:get_tooltip_body_lines()
     local def = self.def or {}
+    if def.id == "tarot_fool" and G then
+        local out = {}
+        local tip = def.tooltip
+        if type(tip) == "table" then
+            for _, l in ipairs(tip) do
+                if type(l) == "string" and l ~= "" then out[#out + 1] = l end
+            end
+        elseif type(tip) == "string" and tip ~= "" then
+            for line in tip:gmatch("[^\r\n]+") do
+                if line ~= "" then out[#out + 1] = line end
+            end
+        end
+        local last_id = G.last_consumable_use_id
+        if last_id and CONSUMABLE_DEFS and CONSUMABLE_DEFS[last_id] then
+            local name = CONSUMABLE_DEFS[last_id].name or last_id
+            out[#out + 1] = "Currently: " .. tostring(name)
+        end
+        if #out > 0 then return out end
+    end
     if def.kind == "planet" and type(def.hand) == "string" and def.hand ~= "" then
         return { string.format("Increases the value of %s", def.hand) }
     end
@@ -180,14 +203,25 @@ end
 
 function Consumable:tooltip_is_active()
     if not G then return false end
+    if G.is_hand_scoring_active and G:is_hand_scoring_active() then return false end
+    if G._collection_open and G._collection_tooltip_node == self then return true end
     if G.is_card_select_mode and G:is_card_select_mode() then return false end
     if self.shop_offer_slot and G.STATE == G.STATES.SHOP and G.active_tooltip_joker == self then
+        return true
+    end
+    if G.should_draw_gamepad_focus_outline and G:should_draw_gamepad_focus_outline(self) then
+        return true
+    end
+    if G.is_shop_item_selected and G:is_shop_item_selected(self) then
         return true
     end
     if self._booster_choice_index and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
         return tonumber(G.booster_session.active_choice_index) == self._booster_choice_index
     end
-    if G.jokers_on_bottom == true then return false end
+    if G.consumables_on_bottom ~= true then
+        if self.states.drag.is then return true end
+        return false
+    end
     if self.states.drag.is then return true end
     local idx = G.active_tooltip_consumable_index
     if idx and G.consumable_nodes and G.consumable_nodes[idx] == self then
@@ -202,6 +236,9 @@ function Consumable:draw_tooltip(draw_x, draw_y)
 
     local def = self.def or {}
     local title = self.name or def.name or "Consumable"
+    if G and G.is_discovered and def.id and not G:is_discovered(def.id) then
+        title = "Not Discovered"
+    end
     local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
     local prev_font = love.graphics.getFont()
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()

@@ -525,7 +525,7 @@ JOKER_DEFS = {
 
         sell_cost = 2,
         effect = "1 in 6 mult",
-        config = { extra = { Xmult = 4, every = 6, remaining = 6 } },
+        config = { extra = { Xmult = 4, every = 6 } },
         pos = {
             atlas = "Joker1_p2",
             index = 0
@@ -3033,12 +3033,10 @@ JOKER_DEFS = {
             atlas = "Joker2_p3",
             index = 17
         }
-    },    
+    },
 
-}
--- Missing jokers that were previously injected from CSV metadata are now explicit.
-local MISSING_JOKERS = {
     j_diet_cola = {
+        id = "j_diet_cola",
         name = "Diet Cola",
         order = 94,
         unlocked = true,
@@ -3048,8 +3046,10 @@ local MISSING_JOKERS = {
         eternal_compat = false,
         rarity = 2,
         cost = 6,
-        pos = { atlas = "Joker1_p2", index = 2 },
+        sell_cost = 3,
+        pos = { atlas = "Joker2_p3", index = 10 },
     },
+
 }
 
 -- Catalog-owned tooltip text (Balatro-style; *word* used for emphasis in UI).
@@ -3529,7 +3529,7 @@ local TOOLTIP_BY_ID = {
         "(Currently +0 Mult)",
     },
     j_popcorn = {
-        "+20 Mult",
+        { kind = "current", text = "+20 Mult" },
         "-4 Mult per round played",
     },
     j_spare_trousers = {

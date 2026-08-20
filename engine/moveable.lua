@@ -56,15 +56,15 @@ function Moveable:touchreleased(id, x, y)
 end
 
 function Moveable:update(dt)
-    local lerp_speed = 10 * dt
+    local lerp_speed = math.min(1, 10 * dt)
     local dx, dy
 
     if self.states.drag.is then
         dx = self.drag_velocity.x
         dy = self.drag_velocity.y
-        -- Decay so tilt eases back when finger stops moving
-        self.drag_velocity.x = self.drag_velocity.x * 0.7
-        self.drag_velocity.y = self.drag_velocity.y * 0.7
+        local decay = math.min(1, dt * 45)
+        self.drag_velocity.x = self.drag_velocity.x * (1 - decay)
+        self.drag_velocity.y = self.drag_velocity.y * (1 - decay)
     else
         dx = self.T.x - self.VT.x
         dy = self.T.y - self.VT.y

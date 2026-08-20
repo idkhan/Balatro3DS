@@ -226,7 +226,7 @@ function Tag:Use()
         end
         return true
     elseif self.type == "boss" then
-        G:roll_boss_blind()    
+        G:roll_boss_blind({ exclude_current = true })
     end
 
     return false

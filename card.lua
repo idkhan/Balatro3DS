@@ -415,7 +415,7 @@ local function enhancement_tooltip_lines(enh)
     elseif enh == "stone" then return { "+50 chips" }
     elseif enh == "gold" then return { "+$3 while held" }
     elseif enh == "lucky" then return { "1/5: +20 mult", "1/15: +$20" }
-    elseif enh == "wild" then return { "Wild card" }
+    elseif enh == "wild" then return { "Can be any Suit" }
     end
     return {}
 end
@@ -425,9 +425,9 @@ end
 local function seal_tooltip_lines(seal)
     if not seal then return {} end
     if seal == "gold" then return { "+$3 when scored" }
-    elseif seal == "red" then return { "Retrigger" }
-    elseif seal == "blue" then return { "Planet if held" }
-    elseif seal == "purple" then return { "Creates Tarot when discarded" }
+    elseif seal == "red" then return { "Retriggers Card Once" }
+    elseif seal == "blue" then return { "Creates a Planet card for the winning Hand if held in hand" }
+    elseif seal == "purple" then return { "Creates a Tarot Card when Discarded" }
     end
     return {}
 end
@@ -673,8 +673,9 @@ function Card:update(dt)
     Moveable.update(self, dt)
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         self.scoring_shake_timer = self.scoring_shake_timer - dt
+        self.scoring_shake_phase = (self.scoring_shake_phase or 0) + dt
         if self.scoring_shake_timer < 0 then self.scoring_shake_timer = 0 end
-        if self.scoring_shake_timer <= 0 then self.scoring_shake_t0 = nil end
+        if self.scoring_shake_timer <= 0 then self.scoring_shake_phase = nil end
     end
 end
 
@@ -686,10 +687,7 @@ function Card:get_layout_draw_xy()
 
     if self.scoring_shake_timer and self.scoring_shake_timer > 0 then
         local mag = SHAKE_MAGNITUDE * (self.scoring_shake_timer / SHAKE_MAX_DURATION)
-        local t = love.timer.getTime()
-        if self.scoring_shake_t0 then
-            t = t - self.scoring_shake_t0
-        end
+        local t = self.scoring_shake_phase or 0
         draw_x = draw_x + math.sin(t * 85) * mag
         draw_y = draw_y + math.cos(t * 73) * mag * 0.65
     end
@@ -698,10 +696,18 @@ end
 
 function Card:should_draw_tooltip()
     if not self.face_up then return false end
-    if G and G.is_card_select_mode and G:is_card_select_mode() then
+    if G and G.is_hand_scoring_active and G:is_hand_scoring_active() then return false end
+    if G and G._collection_open and G._collection_tooltip_node == self then return true end
+    if G and G.is_hand_cursor_active and G:is_hand_cursor_active() then
         return G:dpad_cursor_node() == self
     end
     if self.shop_offer_slot and G and G.STATE == G.STATES.SHOP and G.active_tooltip_joker == self then
+        return true
+    end
+    if G and G.should_draw_gamepad_focus_outline and G:should_draw_gamepad_focus_outline(self) then
+        return true
+    end
+    if G and G.is_shop_item_selected and G:is_shop_item_selected(self) then
         return true
     end
     if self._booster_choice_index and G and G.STATE == G.STATES.OPEN_BOOSTER and G.booster_session then
@@ -728,47 +734,47 @@ function Card:draw()
     love.graphics.setColor(tr, tg, tb, ta)
 
     local draw_x, draw_y = self:get_layout_draw_xy()
+    local w, h = self.VT.w, self.VT.h
+    local s = self.VT.scale or 1
+    local r = self.VT.r or 0
 
     love.graphics.push()
-
-    local cx = draw_x + (self.VT.w * self.VT.scale) / 2
-    local cy = draw_y + (self.VT.h * self.VT.scale) / 2
-
-    love.graphics.translate(cx, cy)
-    love.graphics.rotate(self.VT.r)
-    love.graphics.scale(self.VT.scale, self.VT.scale)
-    love.graphics.translate(-cx, -cy)
+    love.graphics.translate(draw_x, draw_y)
+    love.graphics.scale(s, s)
+    love.graphics.translate(w * 0.5, h * 0.5)
+    love.graphics.rotate(r)
+    love.graphics.translate(-w * 0.5, -h * 0.5)
 
     -- base layer: back or face, depending on orientation
     if self.face_up then
         if self.face_quad then
-            self:draw_layer(self.face_atlas, self.face_quad, self.face_w, self.face_h, draw_x, draw_y)
+            self:draw_layer(self.face_atlas, self.face_quad, self.face_w, self.face_h, 0, 0)
         elseif self.back_quad then
-            self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, draw_x, draw_y)
+            self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, 0, 0)
         end
     else
         if self.back_quad then
-            self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, draw_x, draw_y)
+            self:draw_layer(self.back_atlas, self.back_quad, self.back_w, self.back_h, 0, 0)
         end
     end
 
     -- middle layer: rank + suit icon (only when face-up)
     if self.face_up and self.rank_quad then
-        self:draw_layer(self.rank_atlas, self.rank_quad, self.rank_w, self.rank_h, draw_x, draw_y)
+        self:draw_layer(self.rank_atlas, self.rank_quad, self.rank_w, self.rank_h, 0, 0)
     end
 
     -- top: seal overlay (`draw_layer` like rank; separate atlas + per-seal index)
     if self.face_up and self.seal_quad then
-        self:draw_layer(self.seal_atlas, self.seal_quad, self.seal_w, self.seal_h, draw_x, draw_y)
+        self:draw_layer(self.seal_atlas, self.seal_quad, self.seal_w, self.seal_h, 0, 0)
     end
 
     if card_is_debuffed_for_display(self) then
-        draw_debuff_x_overlay(draw_x, draw_y, self.VT.w, self.VT.h)
+        draw_debuff_x_overlay(0, 0, w, h)
     end
 
     love.graphics.pop()
 
-    if G and G._l_held and G.STATE == G.STATES.SELECTING_HAND and G.hand and G._dpad_cursor_index then
+    if G and G.is_hand_cursor_active and G:is_hand_cursor_active() and G.hand and G._dpad_cursor_index then
         local cursor = G.hand.card_nodes[G._dpad_cursor_index]
         if cursor == self then
             local r = self:get_collision_rect()
@@ -785,6 +791,8 @@ function Card:draw()
             love.graphics.pop()
             love.graphics.setLineWidth(lw)
         end
+    elseif G and G.draw_node_gamepad_focus_outline then
+        G:draw_node_gamepad_focus_outline(self)
     end
 
     love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
@@ -880,7 +888,7 @@ function Card:emit_hand_event(event_name, ctx)
     end
     if trigger then
         self.scoring_shake_timer = SHAKE_MAX_DURATION
-        self.scoring_shake_t0 = love.timer.getTime()
+        self.scoring_shake_phase = 0
     end
 end
 

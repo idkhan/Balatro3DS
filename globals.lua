@@ -202,6 +202,8 @@ function Game:set_globals()
         OPEN_BOOSTER = 20,
         --- In-run pause menu overlay.
         PAUSED = 21,
+        --- Run won (Ante 8 boss beaten).
+        YOU_WIN = 22,
     }
 
     self.STAGES = {
@@ -270,6 +272,7 @@ function Game:set_globals()
     }
     self.ANIMATION_ATLAS = {}
     self.ASSET_ATLAS = {}
+    self.JOKER_SPRITES = {}
     self.MOVEABLES = {}
     self.ANIMATIONS = {}
     self.DRAW_HASH = {}
@@ -310,6 +313,7 @@ function Game:set_globals()
         BLACK = HEX("374244"),--4f6367"),
         L_BLACK = HEX("4f6367"),
         GREY = HEX("5f7377"),
+        LIGHT_GREY = HEX("9aa2ab"),
         CHANCE = HEX("4BC292"),
         JOKER_GREY = HEX('bfc7d5'),
         VOUCHER = HEX("cb724c"),
@@ -400,12 +404,9 @@ function Game:set_globals()
         },
         BLIND_COLORS = {
             Small = HEX("0068ad"),
-            SmallDark = HEX("003f6f"),
             Big = HEX("a56c00"),
-            BigDark = HEX("6a4200"),
             BigSign = HEX("54451a"),
             Boss = HEX("b44430"),
-            BossDark = HEX("6a2015"),
             won = HEX("4f6367")
         },
         HAND_LEVELS = {
@@ -428,14 +429,22 @@ function Game:set_globals()
     G.C.UI_CHIPS = copy_table(G.C.BLUE)
     G.C.UI_MULT = copy_table(G.C.RED)
 
+    local function pixel_font(path, size)
+        local font = love.graphics.newFont(path, size)
+        if font and font.setFilter then
+            font:setFilter("nearest", "nearest")
+        end
+        return font
+    end
+
     self.FONTS = {
         PIXEL = {
             SMALL_HEIGHT = 11,
             MEDIUM_HEIGHT = 22,
             LARGE_HEIGHT = 33,
-            SMALL = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 11),
-            MEDIUM = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 22),
-            LARGE = love.graphics.newFont("resources/fonts/m6x11plus.ttf", 33),
+            SMALL = pixel_font("resources/fonts/m6x11plus.ttf", 11),
+            MEDIUM = pixel_font("resources/fonts/m6x11plus.ttf", 22),
+            LARGE = pixel_font("resources/fonts/m6x11plus.ttf", 33),
         }
     }
     --||||||||||||||||||||||||||||||

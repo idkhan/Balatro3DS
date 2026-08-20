@@ -141,6 +141,7 @@ function BoosterPackUI.layout_choice_nodes(game, area)
             end
             node.states.visible = true
             node.states.click.can = true
+            node.states.drag.can = true
             sess._choice_rects[i] = { x = x, y = y, w = card_w * scale, h = card_h * scale }
         end
     end
@@ -186,96 +187,8 @@ function BoosterPackUI.draw_bottom(game)
         w = 320 - 2 * padding,
         h = height - info_h - 3 * padding,
     }
+    game._booster_choice_area = choice_area
     BoosterPackUI.layout_choice_nodes(game, choice_area)
-end
-
---- Draw the Pick/Use button next to the selected choice card. Call AFTER nodes are drawn.
-function BoosterPackUI.draw_action_buttons(game)
-    local sess = game.booster_session
-    if not sess then return end
-
-    game._booster_pick_button_hit = nil
-    game._booster_use_button_hit = nil
-    local active_idx = tonumber(sess.active_choice_index)
-    if not active_idx then return end
-    local ch = sess.choices and sess.choices[active_idx]
-    if not ch or ch.taken then return end
-
-    local is_tarot = (ch.kind == "tarot" or ch.kind == "spectral")
-    local needs_hand = is_tarot and (game:booster_tarot_needs_hand(ch.consumable_def) or game:booster_spectral_needs_hand(ch.consumable_def))
-    if needs_hand then
-        BoosterPackUI._draw_action_button(game, sess, active_idx, "Use", true)
-    else
-        BoosterPackUI._draw_action_button(game, sess, active_idx, "Pick", false)
-    end
-end
-
---- Draw Pick or Use button next to the currently selected choice card.
-function BoosterPackUI._draw_action_button(game, sess, idx, label, is_use)
-    local rect = sess._choice_rects and sess._choice_rects[idx]
-    if not rect then return end
-
-    local font = (game.FONTS and game.FONTS.PIXEL and game.FONTS.PIXEL.SMALL) or love.graphics.getFont()
-    local prev_font = love.graphics.getFont()
-    local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
-    love.graphics.setFont(font)
-
-    local btn_w = math.max(36, font:getWidth(label) + 14)
-    local btn_h = math.max(14, font:getHeight() + 4)
-    local gap = 4
-    local margin = 2
-    local sw = 320
-    if love.graphics.getWidth then
-        sw = love.graphics.getWidth("bottom")
-        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
-    end
-    if not sw or sw <= 0 then sw = 320 end
-
-    local bx = rect.x + rect.w + gap
-    if bx + btn_w > (sw - margin) then
-        bx = rect.x - btn_w - gap
-    end
-    if bx < margin then bx = margin end
-    local by = rect.y + math.floor((rect.h - btn_h) * 0.5 + 0.5)
-    if by < margin then by = margin end
-
-    local enabled
-    if is_use then
-        local c = sess.choices[idx] and sess.choices[idx].consumable_def
-        enabled = c and game:pack_consumable_can_apply(c)
-    else
-        local ch = sess.choices[idx]
-        if ch and ch.kind == "joker" then
-            enabled = game:joker_has_room_for_new("base")
-        else
-            enabled = true
-        end
-    end
-
-    local fill_c = enabled and game.C.GREEN or game.C.GREY
-    local shadow_c = game.C and game.C.BLOCK and game.C.BLOCK.SHADOW
-
-    if _G.draw_rect_with_shadow and fill_c and shadow_c then
-        draw_rect_with_shadow(bx, by, btn_w, btn_h, 3, 2, fill_c, shadow_c, 1)
-    else
-        love.graphics.setColor(fill_c)
-        love.graphics.rectangle("fill", bx, by, btn_w, btn_h, 3, 3)
-    end
-    love.graphics.setColor(game.C.WHITE)
-    local text_y = by + math.floor((btn_h - font:getHeight()) * 0.5 + 0.5)
-    love.graphics.printf(label, bx, text_y, btn_w, "center")
-
-    if enabled then
-        local hit = { x = bx, y = by, w = btn_w, h = btn_h, choice_index = idx }
-        if is_use then
-            game._booster_use_button_hit = hit
-        else
-            game._booster_pick_button_hit = hit
-        end
-    end
-
-    love.graphics.setFont(prev_font)
-    love.graphics.setColor(prev_r, prev_g, prev_b, prev_a)
 end
 
 function BoosterPackUI._draw_small_button(game, param)
@@ -303,48 +216,23 @@ function BoosterPackUI.try_skip_press(game, x, y)
     return true
 end
 
-function BoosterPackUI.try_pick_button_press(game, x, y)
-    local hit = game._booster_pick_button_hit
-    if not hit or not game:_point_in_rect_simple(x, y, hit) then return false end
-    if game.pick_booster_choice then
-        game:pick_booster_choice(hit.choice_index)
-    end
-    return true
-end
-
-function BoosterPackUI.try_use_button_press(game, x, y)
-    local hit = game._booster_use_button_hit
-    if not hit or not game:_point_in_rect_simple(x, y, hit) then return false end
-    if game.use_booster_tarot_choice then
-        game:use_booster_tarot_choice(hit.choice_index)
-    end
-    return true
-end
-
 ---@return boolean True if the touch was consumed.
 function BoosterPackUI.handle_touch_pressed(game, id, x, y)
     if BoosterPackUI.try_skip_press(game, x, y) then return true end
-    if BoosterPackUI.try_pick_button_press(game, x, y) then return true end
-    if BoosterPackUI.try_use_button_press(game, x, y) then return true end
 
     local sess = game.booster_session
     if not sess then return false end
 
     local node = game:get_node_at(x, y)
-    if node and node._booster_choice_index then
-        local idx = node._booster_choice_index
-        if sess.active_choice_index == idx then
-            sess.active_choice_index = nil
-        else
-            sess.active_choice_index = idx
-        end
-        game.active_tooltip_card = nil
-        game.active_tooltip_joker = nil
-        game.active_tooltip_consumable_index = nil
+    if node and node._booster_choice_index and node.touchpressed then
+        game.touch_start_x = x
+        game.touch_start_y = y
+        node:touchpressed(id, x, y)
+        game.dragging = node
+        game:move_to_front(node)
         return true
     end
 
-    -- Tap outside pack choices / chrome: dismiss selection tooltip (tarot / standard / etc.).
     sess.active_choice_index = nil
     game.active_tooltip_card = nil
     game.active_tooltip_joker = nil

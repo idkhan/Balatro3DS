@@ -1,5 +1,48 @@
 
 local MainMenuUI = {}
+local CollectionUI = require("collection_ui")
+
+MainMenuUI.KONAMI_CODE = {
+    "up", "up", "down", "down", "left", "right", "left", "right", "b", "a", "start",
+}
+
+local KONAMI_ALIASES = {
+    dpup = "up",
+    dpdown = "down",
+    dpleft = "left",
+    dpright = "right",
+    b = "b",
+    ["return"] = "start",
+    enter = "start",
+}
+
+function MainMenuUI.normalize_konami_input(btn)
+    if type(btn) ~= "string" then return nil end
+    return KONAMI_ALIASES[btn] or btn
+end
+
+function MainMenuUI.try_konami_cheat(game, btn)
+    if not game or not game.STATES or game.STATE ~= game.STATES.MENU then return false end
+    local input = MainMenuUI.normalize_konami_input(btn)
+    if not input then return false end
+
+    local seq = MainMenuUI.KONAMI_CODE
+    local progress = (tonumber(game._konami_progress) or 0) + 1
+    if seq[progress] == input then
+        if progress >= #seq then
+            game._konami_progress = 0
+            if game.unlock_everything then
+                game:unlock_everything()
+            end
+            return true
+        end
+        game._konami_progress = progress
+        return false
+    end
+
+    game._konami_progress = (input == seq[1]) and 1 or 0
+    return false
+end
 
 MainMenuUI.HOW_TO_PLAY_PAGES = {
     {
@@ -19,36 +62,66 @@ MainMenuUI.HOW_TO_PLAY_PAGES = {
     {
         title = "Gamepad - Hand",
         lines = {
-            "Quick tap L or X: Discard Selection",
-            "R or Y: Play hand",
-            "B: Back, Close, Skip Booster",
-            "D-pad L/R alone: Sort by Rank or Suit",
+            "D-pad Left/Right: Move cursor",
+            "A: Toggle card selection",
+            "Hold A + Left/Right: Reorder cards",
+            "Hold Y + Left/Right: Sweep select",
+            "B: Discard selected cards",
+            "X: Play selected cards",
+            "Y (tap): Toggle rank/suit sort",
+            "L: Toggle jokers down / back up",
+            "R: Toggle consumables down / back up",
+        },
+    },
+    {
+        title = "Gamepad - Jokers & Consumables",
+        lines = {
+            "Pull jokers (L) or consumables (R) to the",
+            "bottom screen to interact with them.",
             "",
-            "   Card select mode (hold L)",
-            "D-pad Left/Right moves the cursor.",
-            "D-pad Up/Down toggles selection.",
-            "The cursor card gets a black outline and shows its tooltip",
+            "While pulled:",
+            "D-pad Left/Right: Cycle items",
+            "A: Select joker (pick two to swap)",
+            "Hold A + Left/Right: Reorder",
+            "B: Sell",
+            "X: Use consumable",
+        },
+    },
+    {
+        title = "Gamepad - Shop",
+        lines = {
+            "D-Pad Left/Right: Move shop cursor",
+            "A: Buy     X: Buy and Use",
+            "Y: Reroll Shop",
+            "Hold B: Continue / exit shop",
             "",
-            "   Sweep select (hold L + R)",
-            "With both shoulders held, D-pad Left/Right selects each card as you move.",
+            "Booster pack:",
+            "D-pad Left/Right: Cycle pack cards",
+            "A: Pick / Confirm card",
+            "B: Skip Booster",
         },
     },
     {
         title = "Gamepad - Other",
         lines = {
-            "D-pad Up/Down: Move the Joker Row",
-            "between the top and bottom of the screen.",
-            "",
             "Select: Open Deck View",
+            "Press Right on Deck View to see Poker Hands",
             "Start: Pause Menu",
             "",
-            "   Main menu",
-            "A/Y or tap: Start or Continue a Run",
-            "X or How to Play: This screen",
+            "Rebind A/B/X/Y/L/R/ZL/ZR under",
+            "Pause > Settings > Controls.",
+        },
+    },
+    {
+        title = "Gamepad - Other (2)",
+        lines = {
+            "Blind select:",
+            "Confirm: Start blind   Cancel: Skip",
+            "Sort: Reroll boss (with voucher)",
             "",
-            "   Deck select",
-            "Left/Right: Pick deck   Up/Down: Pick Stake",
-            "A/Y or PLAY: Begin   B/X: Back",
+            "Deck select:",
+            "Left/Right: Pick deck   Up/Down: Stake",
+            "Confirm: Begin   Cancel/Use: Back",
         },
     },
 }
@@ -58,28 +131,87 @@ function MainMenuUI.open_how_to_play(game)
     game._how_to_play_page = game._how_to_play_page or 1
 end
 
+local MENU_ANIM_FPS = 12
+
+local function menu_ping_pong_frame(frame_count, fps, time)
+    frame_count = math.max(1, tonumber(frame_count) or 1)
+    if frame_count == 1 then return 0 end
+    local cycle = (frame_count - 1) * 2
+    local step = math.floor((time or love.timer.getTime()) * (fps or MENU_ANIM_FPS)) % cycle
+    if step < frame_count then
+        return step
+    end
+    return cycle - step
+end
+
 function MainMenuUI.draw_background(game, screen)
     local w = (screen == "bottom") and 320 or 400
     local h = 240
-    local top = G.C.MULT
-    local bottom = G.C.BOOSTER
-    local steps = 48
 
-    love.graphics.setColor(top)
-    love.graphics.rectangle("fill", 0, 0, w, h)
-    for i = 0, steps - 1 do
-        local t = i / (steps - 1)
-        local r = top[1] + (bottom[1] - top[1]) * t
-        local g = top[2] + (bottom[2] - top[2]) * t
-        local b = top[3] + (bottom[3] - top[3]) * t
-        love.graphics.setColor(r, g, b, 1.0)
-        local y = math.floor((i / steps) * h + 0.5)
-        local seg_h = math.ceil(h / steps)
-        love.graphics.rectangle("fill", 0, y, w, seg_h)
+    if game._collection_open then
+        love.graphics.setColor(game.C.PANEL)
+        love.graphics.rectangle("fill", 0, 0, w, h)
+        return
     end
+
+    local atlas = nil
+    if game.ensure_animation_atlas_loaded then
+        atlas = game:ensure_animation_atlas_loaded("menu")
+    else
+        atlas = game.ANIMATION_ATLAS and game.ANIMATION_ATLAS.menu
+    end
+    if not atlas or not atlas.image then
+        local top = G.C.MULT
+        local bottom = G.C.BOOSTER
+        local steps = 48
+        love.graphics.setColor(top)
+        love.graphics.rectangle("fill", 0, 0, w, h)
+        for i = 0, steps - 1 do
+            local t = i / (steps - 1)
+            local r = top[1] + (bottom[1] - top[1]) * t
+            local g = top[2] + (bottom[2] - top[2]) * t
+            local b = top[3] + (bottom[3] - top[3]) * t
+            love.graphics.setColor(r, g, b, 1.0)
+            local y = math.floor((i / steps) * h + 0.5)
+            local seg_h = math.ceil(h / steps)
+            love.graphics.rectangle("fill", 0, y, w, seg_h)
+        end
+        return
+    end
+
+    local cell_w = tonumber(atlas.px) or 256
+    local cell_h = tonumber(atlas.py) or 256
+    local frame_count = tonumber(atlas.frames) or 16
+    local frame = menu_ping_pong_frame(frame_count, MENU_ANIM_FPS)
+
+    local iw, ih = atlas.image:getDimensions()
+    local cols = math.max(1, math.floor(iw / cell_w))
+    local col = frame % cols
+    local row = math.floor(frame / cols)
+    local quad = love.graphics.newQuad(col * cell_w, row * cell_h, cell_w, cell_h, iw, ih)
+
+    local s = math.max(w / cell_w, h / cell_h)
+    local draw_w = cell_w * s
+    local draw_h = cell_h * s
+    local dx = math.floor((w - draw_w) * 0.5 + 0.5)
+    local dy = math.floor((h - draw_h) * 0.5 + 0.5)
+
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(atlas.image, quad, dx, dy, 0, s, s)
 end
 
-function MainMenuUI.draw_top(game)
+function MainMenuUI.draw_top(screen, game)
+    if game._menu_sub_state == "collection_menu" or game._menu_sub_state == "collection_grid" then
+        CollectionUI.draw_top(screen,game)
+        return
+    end
+
+    local sysDepth = -love.graphics.getDepth()
+    if screen == "right" then
+        sysDepth = -sysDepth
+    end
+    local titleDepth = 5
+
     local panel_x, panel_y, panel_w = 24, 10, 352
 
     local atlas = nil
@@ -97,7 +229,7 @@ function MainMenuUI.draw_top(game)
         local dx = panel_x + math.floor((panel_w - draw_w) * 0.5 + 0.5)
         local dy = panel_y 
         love.graphics.setColor(game.C.WHITE)
-        love.graphics.draw(atlas.image, dx, dy, 0, s, s)
+        love.graphics.draw(atlas.image, dx - titleDepth * sysDepth, dy, 0, s, s)
     end
 end
 
@@ -112,13 +244,18 @@ function MainMenuUI.draw_bottom(game)
         MainMenuUI.draw_deck_select(game)
     elseif game._menu_sub_state == "how_to_play" then
         MainMenuUI.draw_how_to_play(game)
+    elseif game._menu_sub_state == "collection_menu" or game._menu_sub_state == "collection_grid" then
+        CollectionUI.draw_bottom(game)
     else
         MainMenuUI.draw_main(game)
     end
 end
 
 function MainMenuUI.draw_main(game)
-    local panel_x, panel_y, panel_w, panel_h = 8, 12, 304, 168
+    local has_save = game.has_saved_run and game:has_saved_run() == true
+    local panel_w, panel_h = 220, (has_save and 168) or 138
+    local panel_y = 240/2 - panel_h/2 - 22
+    local panel_x = 320/2 - panel_w/2
 
     if _G.draw_rect_with_shadow then
         draw_rect_with_shadow(panel_x, panel_y, panel_w, panel_h, 6, 3,
@@ -131,17 +268,17 @@ function MainMenuUI.draw_main(game)
     love.graphics.setColor(game.C.WHITE)
     love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
 
-    local has_save = game.has_saved_run and game:has_saved_run() == true
     local btn_w, btn_h = 160, 28
     local btn_gap = 6
     local btn_x = panel_x + math.floor((panel_w - btn_w) * 0.5 + 0.5)
     game._main_menu_how_to_play_rect = nil
 
     if has_save then
-        local y0 = panel_y + 44
+        local y0 = panel_y + 20
         game._main_menu_continue_rect = { x = btn_x, y = y0, w = btn_w, h = btn_h }
         game._main_menu_start_rect    = { x = btn_x, y = y0 + btn_h + btn_gap, w = btn_w, h = btn_h }
         game._main_menu_how_to_play_rect = { x = btn_x, y = y0 + (btn_h + btn_gap) * 2, w = btn_w, h = btn_h }
+        game._main_menu_collection_rect = { x = btn_x, y = y0 + (btn_h + btn_gap) * 3, w = btn_w, h = btn_h }
 
         draw_rect_with_shadow(
             game._main_menu_continue_rect.x, game._main_menu_continue_rect.y,
@@ -157,6 +294,11 @@ function MainMenuUI.draw_main(game)
             game._main_menu_how_to_play_rect.x, game._main_menu_how_to_play_rect.y,
             game._main_menu_how_to_play_rect.w, game._main_menu_how_to_play_rect.h, 4, 4,
             game.C.MULT, game.C.BLOCK.SHADOW, 2)
+
+        draw_rect_with_shadow(
+            game._main_menu_collection_rect.x, game._main_menu_collection_rect.y,
+            game._main_menu_collection_rect.w, game._main_menu_collection_rect.h, 4, 4,
+            game.C.ORANGE or game.C.BLUE, game.C.BLOCK.SHADOW, 2)
 
         love.graphics.setColor(game.C.WHITE)
         love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
@@ -177,11 +319,16 @@ function MainMenuUI.draw_main(game)
         love.graphics.printf("How to Play",
             game._main_menu_how_to_play_rect.x, btn_label_y(game._main_menu_how_to_play_rect),
             game._main_menu_how_to_play_rect.w, "center")
+
+        love.graphics.printf("Collection",
+            game._main_menu_collection_rect.x, btn_label_y(game._main_menu_collection_rect),
+            game._main_menu_collection_rect.w, "center")
     else
         game._main_menu_continue_rect = nil
-        local y0 = panel_y + 56
+        local y0 = panel_y + 20
         game._main_menu_start_rect = { x = btn_x, y = y0, w = btn_w, h = btn_h }
         game._main_menu_how_to_play_rect = { x = btn_x, y = y0 + btn_h + btn_gap, w = btn_w, h = btn_h }
+        game._main_menu_collection_rect = { x = btn_x, y = y0 + (btn_h + btn_gap) * 2, w = btn_w, h = btn_h }
 
         draw_rect_with_shadow(
             game._main_menu_start_rect.x, game._main_menu_start_rect.y,
@@ -192,6 +339,11 @@ function MainMenuUI.draw_main(game)
             game._main_menu_how_to_play_rect.x, game._main_menu_how_to_play_rect.y,
             game._main_menu_how_to_play_rect.w, game._main_menu_how_to_play_rect.h, 4, 4,
             game.C.MULT, game.C.BLOCK.SHADOW, 2)
+
+        draw_rect_with_shadow(
+            game._main_menu_collection_rect.x, game._main_menu_collection_rect.y,
+            game._main_menu_collection_rect.w, game._main_menu_collection_rect.h, 4, 4,
+            game.C.ORANGE or game.C.BLUE, game.C.BLOCK.SHADOW, 2)
 
         love.graphics.setColor(game.C.WHITE)
         love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
@@ -207,15 +359,134 @@ function MainMenuUI.draw_main(game)
             game._main_menu_how_to_play_rect.x, btn_label_y(game._main_menu_how_to_play_rect),
             game._main_menu_how_to_play_rect.w, "center")
 
+        love.graphics.printf("Collection",
+            game._main_menu_collection_rect.x, btn_label_y(game._main_menu_collection_rect),
+            game._main_menu_collection_rect.w, "center")
+
         if game.SEED then
             love.graphics.setFont(game.FONTS.PIXEL.SMALL)
             love.graphics.setColor(game.C.DARK_WHITE or game.C.GREY)
             love.graphics.printf(
                 "Seed " .. tostring(math.floor(tonumber(game.SEED) or 0)),
-                panel_x, panel_y + 204, panel_w, "center"
+                panel_x, 240 - 50, panel_w, "center"
             )
         end
     end
+
+    -- Profile Buttons
+    local profile_count = game.get_profile_count and game:get_profile_count() or 3
+    local profile_padding = 4
+    local profile_btn_w = ((320 - profile_padding * 2) - (profile_padding * (profile_count))) / (profile_count + 1)
+    local profile_btn_h = 28
+    local profile_btn_x = profile_padding
+    local profile_btn_y = 240 - profile_btn_h - profile_padding
+    local active_profile = game.get_profile_id and game:get_profile_id() or 1
+    game._main_menu_profile_rects = {}
+    for i = 1, profile_count do
+        local is_active = (i == active_profile)
+        local color = is_active and game.C.GREEN or game.C.MULT
+        draw_rect_with_shadow(profile_btn_x, profile_btn_y, profile_btn_w, profile_btn_h, 4, 4, color, game.C.BLOCK.SHADOW, 2)
+        love.graphics.setColor(game.C.WHITE)
+        love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
+        local label_y = profile_btn_y + math.floor((profile_btn_h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
+        love.graphics.printf("P" .. i, profile_btn_x, label_y, profile_btn_w, "center")
+        game._main_menu_profile_rects[i] = { x = profile_btn_x, y = profile_btn_y, w = profile_btn_w, h = profile_btn_h }
+        profile_btn_x = profile_btn_x + profile_btn_w + profile_padding
+    end
+
+    -- Delete Save (confirm on second tap)
+    local delete_confirm = game._delete_save_confirm == true
+    local delete_color = delete_confirm and game.C.RED or game.C.BOOSTER
+    draw_rect_with_shadow(profile_btn_x, profile_btn_y, profile_btn_w, profile_btn_h, 4, 4, delete_color, game.C.BLOCK.SHADOW, 2)
+    love.graphics.setColor(game.C.WHITE)
+    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    local delete_label = delete_confirm and "Confirm?" or "Delete Save"
+    love.graphics.printf(delete_label, profile_btn_x, profile_btn_y + math.floor((profile_btn_h - love.graphics.getFont():getHeight()) * 0.5 + 0.5), profile_btn_w, "center")
+    game._main_menu_delete_save_rect = { x = profile_btn_x, y = profile_btn_y, w = profile_btn_w, h = profile_btn_h }
+
+    local targets = MainMenuUI.build_main_menu_focus_targets(game)
+    local focus_idx = tonumber(game._menu_focus_index) or 1
+    focus_idx = math.max(1, math.min(#targets, focus_idx))
+    game._menu_focus_index = focus_idx
+    local focused = targets[focus_idx]
+    if focused and focused.rect then
+        local r = focused.rect
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.setLineWidth(2)
+        love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+    end
+end
+
+function MainMenuUI.build_main_menu_focus_targets(game)
+    local targets = {}
+    if game._main_menu_continue_rect then
+        targets[#targets + 1] = { kind = "continue", rect = game._main_menu_continue_rect }
+    end
+    if game._main_menu_start_rect then
+        targets[#targets + 1] = { kind = "start", rect = game._main_menu_start_rect }
+    end
+    if game._main_menu_how_to_play_rect then
+        targets[#targets + 1] = { kind = "how_to_play", rect = game._main_menu_how_to_play_rect }
+    end
+    if game._main_menu_collection_rect then
+        targets[#targets + 1] = { kind = "collection", rect = game._main_menu_collection_rect }
+    end
+    for i, pr in ipairs(game._main_menu_profile_rects or {}) do
+        if pr then
+            targets[#targets + 1] = { kind = "profile", index = i, rect = pr }
+        end
+    end
+    if game._main_menu_delete_save_rect then
+        targets[#targets + 1] = { kind = "delete", rect = game._main_menu_delete_save_rect }
+    end
+    return targets
+end
+
+function MainMenuUI.main_menu_focus_move(game, delta)
+    local targets = MainMenuUI.build_main_menu_focus_targets(game)
+    if #targets == 0 then return nil end
+    delta = math.floor(tonumber(delta) or 0)
+    local idx = tonumber(game._menu_focus_index) or 1
+    idx = idx + delta
+    if idx < 1 then idx = #targets elseif idx > #targets then idx = 1 end
+    game._menu_focus_index = idx
+    return targets[idx]
+end
+
+function MainMenuUI.activate_main_menu_focus(game)
+    local targets = MainMenuUI.build_main_menu_focus_targets(game)
+    local idx = tonumber(game._menu_focus_index) or 1
+    idx = math.max(1, math.min(#targets, idx))
+    local t = targets[idx]
+    if not t then return false end
+    if t.kind == "continue" then
+        if game.continue_saved_run_from_main_menu then
+            game:continue_saved_run_from_main_menu()
+        end
+        return true
+    elseif t.kind == "start" then
+        MainMenuUI.open_deck_select(game)
+        return true
+    elseif t.kind == "how_to_play" then
+        MainMenuUI.open_how_to_play(game)
+        return true
+    elseif t.kind == "collection" then
+        CollectionUI.open(game)
+        return true
+    elseif t.kind == "profile" and t.index and game.switch_profile then
+        game:switch_profile(t.index)
+        return true
+    elseif t.kind == "delete" then
+        if game._delete_save_confirm then
+            if game.delete_profile_progress then
+                game:delete_profile_progress()
+            end
+        else
+            game._delete_save_confirm = true
+        end
+        return true
+    end
+    return false
 end
 
 function MainMenuUI.draw_how_to_play(game)
@@ -401,8 +672,8 @@ function MainMenuUI._start_run(game)
     local stake_idx = tonumber(game._stake_select_idx) or 1
     local deck_def = deck_list[deck_idx]
     local stake_def = stake_list[stake_idx]
-    if not deck_def or not deck_def.unlocked then return false end
-    if not stake_def or not stake_def.unlocked then return false end
+    if not deck_def or not game:is_deck_unlocked(deck_def.id) then return false end
+    if not stake_def or not game:is_stake_unlocked(deck_def.id, stake_def.id) then return false end
 
     game._pending_deck_id = deck_def.id
     game._pending_stake_id = stake_def.id
@@ -438,6 +709,7 @@ function MainMenuUI.draw_deck_select(game)
     stake_idx = math.max(1, math.min(#stake_list, stake_idx))
     local stake_def = stake_list[stake_idx]
     if not stake_def then return end
+    local stake_unlocked = game:is_stake_unlocked(def.id, stake_def.id)
 
     local startX, startY = 24, 4
     local endX, endY = W - 24, H - 128
@@ -506,7 +778,18 @@ function MainMenuUI.draw_deck_select(game)
     local markerY = card_y + padding
     local markerY2 = card_y + card_h - padding - space
     for i = 1,#stake_list do
-        love.graphics.setColor(stake_list[i].colour or C.WHITE)
+        if game:is_stake_unlocked(def.id, stake_list[i] and stake_list[i].id) and game:is_deck_unlocked(def.id) then
+            if game:is_stake_defeated(def.id, stake_list[i] and stake_list[i].id) then
+                love.graphics.setColor(stake_list[i].colour or C.WHITE)
+            else 
+                local color = stake_list[i].colour or C.WHITE
+                local factor = 0.8
+                color = {color[1] * factor, color[2] * factor, color[3] * factor, 1}
+                love.graphics.setColor(color)
+            end
+        else
+            love.graphics.setColor(C.GREY)
+        end
         local markerH = (math.floor((markerY2 - markerY - (#stake_list + 1) * space) / #stake_list + 1))
         love.graphics.rectangle("fill", markerX, markerY2 - math.floor(markerH/2) - space - (markerH + space) * (i - 1), 20, markerH, 4, 4)
         if stake_idx == i then
@@ -562,7 +845,7 @@ function MainMenuUI.draw_deck_select(game)
     love.graphics.rectangle("fill", stake_info_x, stake_info_y, stake_info_w, stake_info_h, 4, 4)
 
     love.graphics.setFont(font_m)
-    love.graphics.setColor(stake_def.unlocked and C.WHITE or C.GREY)
+    love.graphics.setColor(stake_unlocked and C.WHITE or C.GREY)
     if love.graphics.getFont():getWidth(stake_def.name) > stake_info_w then
         love.graphics.setFont(font_s)
         love.graphics.printf(stake_def.name, stake_info_x, stake_info_y + 6, stake_info_w, "center")
@@ -577,7 +860,7 @@ function MainMenuUI.draw_deck_select(game)
     love.graphics.setFont(font_s)
     love.graphics.setColor(C.PANEL)
     love.graphics.printf(
-        stake_def.unlocked and (stake_def.description or "") or "Clear the previous stake first.",
+        stake_unlocked and (stake_def.description or "") or "Clear the previous stake first.",
         stake_info_x + 2 * padding, stake_info_y + padding + stake_name_h, stake_info_w - 4 * padding, "center"
     )
 
@@ -605,10 +888,37 @@ function MainMenuUI.handle_touch(game, x, y)
     if game._menu_sub_state == "how_to_play" then
         return MainMenuUI._touch_how_to_play(game, x, y)
     end
+    if game._menu_sub_state == "collection_menu" then
+        return CollectionUI.handle_touch_menu(game, x, y)
+    end
     return MainMenuUI._touch_main(game, x, y)
 end
 
 function MainMenuUI._touch_main(game, x, y)
+    local profile_rects = game._main_menu_profile_rects or {}
+    for i, pr in ipairs(profile_rects) do
+        if pr and game:_point_in_rect_simple(x, y, pr) then
+            if game.switch_profile then
+                game:switch_profile(i)
+            end
+            return true
+        end
+    end
+
+    local del = game._main_menu_delete_save_rect
+    if del and game:_point_in_rect_simple(x, y, del) then
+        if game._delete_save_confirm then
+            if game.delete_profile_progress then
+                game:delete_profile_progress()
+            end
+        else
+            game._delete_save_confirm = true
+        end
+        return true
+    end
+    -- Any other main-menu tap cancels delete confirm.
+    game._delete_save_confirm = false
+
     local cr = game._main_menu_continue_rect
     if cr and game:_point_in_rect_simple(x, y, cr) then
         if game.continue_saved_run_from_main_menu then
@@ -626,6 +936,12 @@ function MainMenuUI._touch_main(game, x, y)
     local hr = game._main_menu_how_to_play_rect
     if hr and game:_point_in_rect_simple(x, y, hr) then
         MainMenuUI.open_how_to_play(game)
+        return true
+    end
+
+    local colr = game._main_menu_collection_rect
+    if colr and game:_point_in_rect_simple(x, y, colr) then
+        CollectionUI.open(game)
         return true
     end
 
@@ -693,10 +1009,13 @@ function MainMenuUI._touch_deck_select(game, x, y)
 end
 
 function MainMenuUI.handle_button(game, btn)
+    MainMenuUI.try_konami_cheat(game, btn)
     if game._menu_sub_state == "deck_select" then
         MainMenuUI._button_deck_select(game, btn)
     elseif game._menu_sub_state == "how_to_play" then
         MainMenuUI._button_how_to_play(game, btn)
+    elseif game._menu_sub_state == "collection_menu" or game._menu_sub_state == "collection_grid" then
+        CollectionUI.handle_button(game, btn)
     else
         MainMenuUI._button_main(game, btn)
     end
@@ -714,16 +1033,34 @@ function MainMenuUI._button_how_to_play(game, btn)
         if page_idx < page_count then
             game._how_to_play_page = page_idx + 1
         end
-    elseif btn == "b" or btn == "x" then
+    elseif game.is_menu_back and game:is_menu_back(btn) then
         game._menu_sub_state = "main"
     end
 end
 
 function MainMenuUI._button_main(game, btn)
-    if btn == "x" then
+    if btn == "dpup" or btn == "up" then
+        MainMenuUI.main_menu_focus_move(game, -1)
+        return
+    end
+    if btn == "dpdown" or btn == "down" then
+        MainMenuUI.main_menu_focus_move(game, 1)
+        return
+    end
+    if btn == "dpleft" or btn == "left" then
+        MainMenuUI.main_menu_focus_move(game, -1)
+        return
+    end
+    if btn == "dpright" or btn == "right" then
+        MainMenuUI.main_menu_focus_move(game, 1)
+        return
+    end
+    if game.is_menu_activate and game:is_menu_activate(btn) then
+        MainMenuUI.activate_main_menu_focus(game)
+        return
+    end
+    if game.is_role and game:is_role(btn, "use") then
         MainMenuUI.open_how_to_play(game)
-    elseif btn == "a" or btn == "y" then
-        MainMenuUI.open_deck_select(game)
     end
 end
 
@@ -741,9 +1078,9 @@ function MainMenuUI._button_deck_select(game, btn)
         game._stake_select_idx = math.max(1, stake_idx + 1)
     elseif btn == "dpdown" or btn == "down" then
         game._stake_select_idx = math.min(#stake_list, stake_idx - 1)
-    elseif btn == "a" or btn == "y" then
+    elseif game.is_menu_activate and game:is_menu_activate(btn) then
         MainMenuUI._start_run(game)
-    elseif btn == "b" or btn == "x" then
+    elseif game.is_menu_back and game:is_menu_back(btn) then
         game._menu_sub_state = "main"
     end
 end

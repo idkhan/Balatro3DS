@@ -19,32 +19,16 @@ Balatro3DS is a fan-made port/implementation of the game Balatro targeting the N
 
 #### Running on the 3DS
 
-You can either download a release or package it yourself.
+You can download a release.
 
 ##### Packaged Builds
-1. Copy the Balatro3DS.3dsx file into the 3ds folder on the root of your SD Card
-2. Open Homebrew launcher
-3. Play the game
+1. Download a release from the Releases page
+2. Copy the Balatro3DS.3dsx file into the 3ds folder on the root of your SD Card
+3. Open Homebrew launcher
+4. Play the game
 
-##### Using the Bundler
-1. Clone this repository
-```bash
-   git clone https://github.com/idkhan/Balatro3DS.git
-   ```
-2. Create a directory called <strong>game</strong> and copy all files except <strong>lovepotion.toml</strong> into it
-3. Ensure this file structure
-```
-|-game
-|  |-engine
-|  |-resources
-|  ...
-|-lovepotion.toml
-```
-4. Compress all files into a zip file
-5. Go to the [LÖVE Bundler](https://bundle.lovebrew.org/) and upload the zip file
-6. Download the bundled files and extract them
-7. Copy the files into the 3ds folder on the root of your 3DS
-8. Open Homebrew Launcher and play the game
+##### Manual Build
+Instructions on building the files manually can be found in [BUILD.md](BUILD.md)
 
 ### License
 

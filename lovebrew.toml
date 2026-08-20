@@ -2,7 +2,7 @@
 title = "Balatro3DS" # title of the game
 author = "Gazpacho" # author(s) of the game
 description = "A Remake of Balatro for the 3DS" # description of the game
-version = "1.0.1" # current version, obeying semver
+version = "1.3.2" # current version, obeying semver
 icons = { ctr = "game/resources/textures/1x/icon.png"} # custom icon paths
 
 [build]

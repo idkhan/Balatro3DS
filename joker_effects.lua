@@ -106,6 +106,21 @@ local function rank_is_odd(rank)
     end
     return rank and (rank == 14 or rank % 2 == 1) 
 end
+
+--- Suit match; with Smeared Joker, Hearts↔Diamonds and Spades↔Clubs count as the same.
+local function is_suit(suit, check)
+    if suit == nil or check == nil then return false end
+    local smeared = G and G.hasJoker and G:hasJoker("j_smeared")
+    if smeared then
+        if check == "Hearts" or check == "Diamonds" then
+            return suit == "Hearts" or suit == "Diamonds"
+        elseif check == "Spades" or check == "Clubs" then
+            return suit == "Spades" or suit == "Clubs"
+        end
+    end
+    return suit == check
+end
+
 local function count_full_deck(pred)
     if G and G.count_cards_in_full_deck then return G:count_cards_in_full_deck(pred) end
     return 0
@@ -167,230 +182,6 @@ local function lowest_rank_among_held_not_played(ctx)
     end
     return lowest
 end
-
---- Default trigger matching for catalog-driven `effect_type` jokers (non-SPECIAL ids).
-local function legacy_matches_trigger(self, event_name, ctx)
-    if self.effect_type == "Hand card double"
-        or self.effect_type == "Low Card double"
-        or self.effect_type == "Face card double" then
-        return false
-    end
-
-    if self.effect_type == nil then
-        return false
-    end
-
-    local default_event = nil
-    if self.effect_type == "Mult" or self.effect_type == "Chips" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Suit Mult" or self.effect_type == "Suit Chips" then
-        default_event = "card_played"
-    elseif self.effect_type == "Type Mult" or self.effect_type == "Type Chips" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Hand Size Mult" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Stencil Mult" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Discard Chips" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "No Discard Mult" then
-        default_event = "on_hand_scored"
-    elseif self.effect_type == "Stone card hands" then
-        default_event = "on_blind_selected"
-    elseif self.effect_type == "1 in 6 mult" or self.effect_type == "1 in 10 mult" then
-        default_event = "on_hand_scored"
-    end
-
-    local expected_event = default_event
-    if expected_event and expected_event ~= event_name then
-        return false
-    end
-
-    local cfg = self.effect_config or {}
-    if self.effect_type == "Suit Mult" or self.effect_type == "Suit Chips" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        if extra.suit ~= nil then
-            if ctx == nil or ctx.suit ~= extra.suit then return false end
-        end
-    elseif self.effect_type == "Type Mult" or self.effect_type == "Type Chips" then
-        if ctx == nil then return false end
-
-        if ctx.hand_type ~= cfg.type then
-            local contains = ctx.contains_hand_types
-            if type(contains) ~= "table" or contains[cfg.type] ~= true then
-                return false
-            end
-        end
-    elseif self.effect_type == "Hand Size Mult" then
-        if ctx == nil then return false end
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local max_size = tonumber(extra.size) or 3
-        local cards = ctx.cards
-        if type(cards) ~= "table" or #cards > max_size then
-            return false
-        end
-    elseif self.effect_type == "Stencil Mult" then
-        if ctx == nil then return false end
-        if tonumber(ctx.free_joker_slots) == nil then
-            return false
-        end
-        self.free_joker_slots = tonumber(ctx.free_joker_slots)
-    elseif self.effect_type == "No Discard Mult" then
-        local d_remaining = tonumber((type(cfg.extra) == "table" and cfg.extra.d_remaining)) or 0
-        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
-        if discards_left ~= d_remaining then
-            return false
-        end
-    elseif self.effect_type == "Destroy Joker" then
-        if event_name == "on_blind_selected" then
-            local joker_list = G and type(G.jokers) == "table" and G.jokers
-            if not joker_list then
-                return false
-            end
-            local self_index = nil
-            for i, joker in ipairs(joker_list) do
-                if joker == self then
-                    self_index = i
-                    break
-                end
-            end
-            local target_index = self_index and (self_index + 1) or nil
-            if not (target_index and joker_list[target_index]) then
-                return false
-            end
-        elseif event_name == "on_hand_scored" then
-            if (tonumber(self.stored_mult) or 0) <= 0 then
-                return false
-            end
-        else
-            return false
-        end
-    elseif self.effect_type == "1 in 6 mult" or self.effect_type == "1 in 10 mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local every = math.max(1, tonumber(extra.every) or 6)
-        local remaining = tonumber(self.loyalty_remaining)
-        if remaining == nil then
-            remaining = tonumber(extra.remaining) or every
-        end
-        if remaining < 1 or remaining > every then
-            remaining = every
-        end
-        remaining = remaining - 1
-        if remaining <= 0 then
-            self.loyalty_remaining = every
-            return true
-        end
-        self.loyalty_remaining = remaining
-        return false
-    end
-
-    return true
-end
-
---- Default apply for catalog-driven `effect_type` jokers (non-SPECIAL ids).
-local function legacy_apply_effect(self, ctx)
-    ctx = ctx or {}
-    local cfg = self.effect_config or {}
-
-    if self.effect_type == "Mult" then
-        add_mult(ctx, tonumber(cfg.mult) or 0)
-    elseif self.effect_type == "Chips" then
-        add_chips(ctx, tonumber(cfg.chips) or 0)
-    elseif self.effect_type == "Suit Mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        add_mult(ctx, tonumber(extra.s_mult) or 0)
-    elseif self.effect_type == "Suit Chips" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        add_chips(ctx, tonumber(extra.s_chips) or 0)
-    elseif self.effect_type == "Type Mult" then
-        add_mult(ctx, tonumber(cfg.t_mult) or 0)
-    elseif self.effect_type == "Type Chips" then
-        add_chips(ctx, tonumber(cfg.t_chips) or 0)
-    elseif self.effect_type == "Hand Size Mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        add_mult(ctx, tonumber(extra.mult) or tonumber(cfg.mult) or 0)
-    elseif self.effect_type == "Stencil Mult" then
-        local free_slots = tonumber(ctx.free_joker_slots) or 0
-        local factor = free_slots + 1
-        mul_mult(ctx, factor)
-    elseif self.effect_type == "Discard Chips" then
-        local extra = tonumber(cfg.extra) or 0
-        local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
-        add_chips(ctx, extra * math.max(0, discards_left))
-    elseif self.effect_type == "No Discard Mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        add_mult(ctx, tonumber(extra.mult) or tonumber(cfg.mult) or 0)
-    elseif self.effect_type == "Stone card hands" then
-        local deck = (ctx and ctx.deck) or (G and G.deck)
-        if not (deck and deck.cards) then
-            return
-        end
-        local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
-        local MIN_RANK = 2
-        local MAX_RANK = 14
-        local suit = suits[math.random(1, #suits)]
-        local rank = math.random(MIN_RANK, MAX_RANK)
-        table.insert(deck.cards, { rank = rank, suit = suit, enhancement = "stone" })
-        mark_effect_applied(ctx)
-        mark_created_item(ctx)
-    elseif self.effect_type == "1 in 6 mult" or self.effect_type == "1 in 10 mult" then
-        local extra = type(cfg.extra) == "table" and cfg.extra or {}
-        local factor = tonumber(extra.Xmult) or tonumber(cfg.Xmult) or 1
-        mul_mult(ctx, factor)
-
-    elseif self.effect_type == "Destroy Joker" then
-        if ctx.event_name == "on_hand_scored" then
-            local amount = tonumber(self.stored_mult) or 0
-            if amount > 0 then
-                add_mult(ctx, amount)
-            end
-            return
-        end
-
-        local joker_list = G and type(G.jokers) == "table" and G.jokers
-        if not joker_list then
-            return
-        end
-
-        local self_index = nil
-        for i, joker in ipairs(joker_list) do
-            if joker == self then
-                self_index = i
-                break
-            end
-        end
-
-        local target_index = self_index and (self_index + 1) or nil
-        if target_index and joker_list[target_index] then
-            local victim = joker_list[target_index]
-            local gained = tonumber(victim and victim.sell_cost) or 0
-            self.stored_mult = (tonumber(self.stored_mult) or 0) + (gained * 2)
-            mark_effect_applied(ctx)
-            if G and G.remove_owned_joker_at then
-                G:remove_owned_joker_at(target_index)
-            else
-                victim = table.remove(joker_list, target_index)
-                if victim and G and G.remove then
-                    G:remove(victim)
-                end
-            end
-            Sfx.play("resources/sounds/slice1.ogg")
-
-        end
-    end
-end
-
-local DEFAULT_IMPL = {
-    matches_trigger = function(joker, event_name, ctx)
-        return legacy_matches_trigger(joker, event_name, ctx) == true
-    end,
-    apply_effect = function(joker, ctx)
-        legacy_apply_effect(joker, ctx)
-    end,
-    query_retrigger = function()
-        return 0
-    end,
-}
 
 --- Blueprint / Brainstorm: only copy when `src` would fire; shake the copycat, not `src`.
 local function is_blueprint_copy_target(src)
@@ -473,13 +264,165 @@ local function first_scoring_play_node(played_cards)
 end
 
 local SPECIAL = {
+    j_joker = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) add_mult(ctx, 4) end,
+    },
+    j_greedy_joker = {
+        matches_trigger = function(_, e) return e == "card_played" end,
+        apply_effect = function(_, ctx) if is_suit(ctx.suit, "Diamonds") then add_mult(ctx, 3) end end,
+    },
+    j_lusty_joker = {
+        matches_trigger = function(_, e) return e == "card_played" end,
+        apply_effect = function(_, ctx) if is_suit(ctx.suit, "Hearts") then add_mult(ctx, 3) end end,
+    },
+    j_wrathful_joker = {
+        matches_trigger = function(_, e) return e == "card_played" end,
+        apply_effect = function(_, ctx) if is_suit(ctx.suit, "Spades") then add_mult(ctx, 3) end end,
+    },
+    j_gluttenous_joker = {
+        matches_trigger = function(_, e) return e == "card_played" end,
+        apply_effect = function(_, ctx) if is_suit(ctx.suit, "Clubs") then add_mult(ctx, 3) end end,
+    },
+    j_jolly = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Pair") then add_mult(ctx, 8) end end,
+    },
+    j_zany = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Three of a Kind") then add_mult(ctx, 12) end end,
+    },
+    j_mad = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Two Pair") then add_mult(ctx, 10) end end,
+    },
+    j_crazy = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Straight") then add_mult(ctx, 12) end end,
+    },
+    j_droll = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Flush") then add_mult(ctx, 10) end end,
+    },
+    j_sly = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Pair") then add_chips(ctx, 50) end end,
+    },
+    j_wily = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Three of a Kind") then add_chips(ctx, 100) end end,
+    },
+    j_clever = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Two Pair") then add_chips(ctx, 80) end end,
+    },
+    j_crafty = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Flush") then add_chips(ctx, 80) end end,
+    },
+    j_devious = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(_, ctx) if has_hand_type(ctx, "Straight") then add_chips(ctx, 100) end end,
+    },
+    j_half = {
+        matches_trigger = function(_, e, ctx)
+            if e ~= "on_hand_scored" then return false end
+            local cards = ctx and ctx.cards
+            return type(cards) == "table" and #cards <= 3
+        end,
+        apply_effect = function(_, ctx) add_mult(ctx, 20) end,
+    },
+    j_stencil = {
+        matches_trigger = function(j, e, ctx)
+            if e ~= "on_hand_scored" then return false end
+            if ctx == nil or tonumber(ctx.free_joker_slots) == nil then return false end
+            j.free_joker_slots = tonumber(ctx.free_joker_slots)
+            return true
+        end,
+        apply_effect = function(_, ctx)
+            mul_mult(ctx, (tonumber(ctx.free_joker_slots) or 0) + 1)
+        end,
+    },
+    j_ceremonial = {
+        matches_trigger = function(j, e)
+            if e == "on_hand_scored" then
+                return (tonumber(j.stored_mult) or 0) > 0
+            end
+            if e ~= "on_blind_selected" then return false end
+            if type(G and G.jokers) ~= "table" then return false end
+            for i, jj in ipairs(G.jokers) do
+                if jj == j and G.jokers[i + 1] then return true end
+            end
+            return false
+        end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name == "on_hand_scored" then
+                add_mult(ctx, tonumber(j.stored_mult) or 0)
+                return
+            end
+            if type(G and G.jokers) ~= "table" then return end
+            for i, jj in ipairs(G.jokers) do
+                if jj == j then
+                    local target_index = i + 1
+                    local victim = G.jokers[target_index]
+                    if not victim then return end
+                    j.stored_mult = (tonumber(j.stored_mult) or 0) + (tonumber(victim.sell_cost) or 0) * 2
+                    mark_effect_applied(ctx)
+                    if G.remove_owned_joker_at then
+                        G:remove_owned_joker_at(target_index)
+                    else
+                        table.remove(G.jokers, target_index)
+                        if G.remove then G:remove(victim) end
+                    end
+                    Sfx.play("resources/sounds/slice1.ogg")
+                    return
+                end
+            end
+        end,
+    },
+    j_mystic_summit = {
+        matches_trigger = function(_, e, ctx)
+            if e ~= "on_hand_scored" then return false end
+            local discards_left = tonumber((ctx and ctx.discards_left) or (G and G.discards)) or 0
+            return discards_left == 0
+        end,
+        apply_effect = function(_, ctx) add_mult(ctx, 15) end,
+    },
+    j_marble = {
+        matches_trigger = function(_, e) return e == "on_blind_selected" end,
+        apply_effect = function(_, ctx)
+            local deck = (ctx and ctx.deck) or (G and G.deck)
+            if not (deck and deck.cards) then return end
+            local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
+            table.insert(deck.cards, {
+                rank = math.random(2, 14),
+                suit = suits[math.random(1, #suits)],
+                enhancement = "stone",
+            })
+            if G and G.notify_cards_added_to_deck then
+                G:notify_cards_added_to_deck(1)
+            end
+            mark_effect_applied(ctx)
+            mark_created_item(ctx)
+        end,
+    },
+    j_loyalty_card = {
+        matches_trigger = function(_, e) return e == "on_hand_scored" end,
+        apply_effect = function(j, ctx)
+            local extra = type(j.effect_config.extra) == "table" and j.effect_config.extra or {}
+            local every = math.max(1, tonumber(extra.every) or 6)
+            local remaining = tonumber(j.runtime_counter) or every
+            if remaining < 1 or remaining > every then remaining = every end
+            remaining = remaining - 1
+            if remaining <= 0 then
+                j.runtime_counter = every
+                mul_mult(ctx, tonumber(extra.Xmult) or tonumber(j.effect_config.Xmult) or 4)
+            else
+                j.runtime_counter = remaining
+            end
+        end,
+    },
     j_hanging_chad = {
-        matches_trigger = function(joker, event_name, ctx)
-            return legacy_matches_trigger(joker, event_name, ctx) == true
-        end,
-        apply_effect = function(joker, ctx)
-            legacy_apply_effect(joker, ctx)
-        end,
         query_retrigger = function(joker, ctx)
             if ctx.held then return 0 end
             local node = ctx.card_node or ctx.retrigger_card
@@ -494,24 +437,12 @@ local SPECIAL = {
         end,
     },
     j_mime = {
-        matches_trigger = function(joker, event_name, ctx)
-            return legacy_matches_trigger(joker, event_name, ctx) == true
-        end,
-        apply_effect = function(joker, ctx)
-            legacy_apply_effect(joker, ctx)
-        end,
         query_retrigger = function(_, ctx)
             if ctx.held then return 1 end
             return 0
         end,
     },
     j_hack = {
-        matches_trigger = function(joker, event_name, ctx)
-            return legacy_matches_trigger(joker, event_name, ctx) == true
-        end,
-        apply_effect = function(joker, ctx)
-            legacy_apply_effect(joker, ctx)
-        end,
         query_retrigger = function(_, ctx)
             if ctx.held then return 0 end
             local node = ctx.card_node or ctx.retrigger_card
@@ -521,12 +452,6 @@ local SPECIAL = {
         end,
     },
     j_sock_and_buskin = {
-        matches_trigger = function(joker, event_name, ctx)
-            return legacy_matches_trigger(joker, event_name, ctx) == true
-        end,
-        apply_effect = function(joker, ctx)
-            legacy_apply_effect(joker, ctx)
-        end,
         query_retrigger = function(_, ctx)
             if ctx.held then return 0 end
             local node = ctx.card_node or ctx.retrigger_card
@@ -669,7 +594,10 @@ local SPECIAL = {
     j_popcorn = {
         matches_trigger = function(_, e) return e == "on_round_end" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
-            if j.runtime_counter == 0 then j.stored_mult = 20 end
+            if j.runtime_counter == 0 then 
+                j.stored_mult = 20 
+                j.runtime_counter = 1
+            end
             if ctx.event_name == "on_round_end" then
                 j.stored_mult = math.max(0, (tonumber(j.stored_mult) or 0) - 4)
                 if j.stored_mult <= 0 then
@@ -677,6 +605,9 @@ local SPECIAL = {
                     if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
                         for i, jj in ipairs(G.jokers) do
                             if jj == j then
+                                local p = Popup()
+                                p:spawn("Eaten!", "Nope", card_center_x(ctx.VT), card_center_y(ctx.VT))
+                                Top:addPopup(p)
                                 Sfx.play("resources/sounds/slice1.ogg")
                                 G:remove_owned_joker_at(i)
                                 break
@@ -701,10 +632,13 @@ local SPECIAL = {
         end
     },
     j_hologram = {
-        matches_trigger = function(_, e) return e == "on_shop_buy" or e == "on_hand_scored" end,
+        matches_trigger = function(_, e) return e == "on_cards_added_to_deck" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
-            if ctx.event_name == "on_shop_buy" and ctx.offer_kind ~= "joker" then
-                j.stored_xmult = (tonumber(j.stored_xmult) or 1) + 0.25
+            if ctx.event_name == "on_cards_added_to_deck" then
+                local n = math.max(0, math.floor(tonumber(ctx.count) or 0))
+                if n > 0 then
+                    j.stored_xmult = (tonumber(j.stored_xmult) or 1) + 0.25 * n
+                end
             elseif ctx.event_name == "on_hand_scored" then
                 mul_mult(ctx, tonumber(j.stored_xmult) or 1)
             end
@@ -746,6 +680,9 @@ local SPECIAL = {
                 seal = seals[math.random(1, #seals)],
             }
             hand:add_card(cd, true)
+            if G.notify_cards_added_to_deck then
+                G:notify_cards_added_to_deck(1)
+            end
             mark_effect_applied(ctx)
             mark_created_item(ctx)
         end,
@@ -775,12 +712,12 @@ local SPECIAL = {
             if r == 14 or r == 2 or r == 3 or r == 5 or r == 8 then add_mult(ctx, 8) end
         end
     },
-    j_rough_gem = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if ctx.suit == "Diamonds" then add_money(ctx, 1) end end },
-    j_arrowhead = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if ctx.suit == "Spades" then add_chips(ctx, 50) end end },
-    j_onyx_agate = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if ctx.suit == "Clubs" then add_mult(ctx, 7) end end },
+    j_rough_gem = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if is_suit(ctx.suit, "Diamonds") then add_money(ctx, 1) end end },
+    j_arrowhead = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if is_suit(ctx.suit, "Spades") then add_chips(ctx, 50) end end },
+    j_onyx_agate = { matches_trigger = function(_, e) return e == "card_played" end, apply_effect = function(_, ctx) if is_suit(ctx.suit, "Clubs") then add_mult(ctx, 7) end end },
     j_bloodstone = {
         matches_trigger = function(_, e) return e == "card_played" end,
-        apply_effect = function(_, ctx) if ctx.suit == "Hearts" and G:do_random(1, 2, 1) then mul_mult(ctx, 1.5) end end
+        apply_effect = function(_, ctx) if is_suit(ctx.suit, "Hearts") and G:do_random(1, 2, 1) then mul_mult(ctx, 1.5) end end
     },
     j_8_ball = {
         matches_trigger = function(_, e) return e == "card_played" end,
@@ -803,30 +740,12 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_blind_selected" end,
         apply_effect = function(_, ctx)
             if not (G and G.add_joker_by_def and G.random_joker_def_id_by_rarity) then return end
-            local spawned = 0
-            local allow_duplicates = G.hasJoker and G:hasJoker("j_ring_master")
-            if allow_duplicates then
-                for _ = 1, 2 do
-                    local id = G:random_joker_def_id_by_rarity(1)
-                    if G:add_joker_by_def(id) then
-                        spawned = spawned + 1
-                        mark_effect_applied(ctx)
-                        mark_created_item(ctx)
-                    end
-                end
-            else
-                local picked = {}
-                local tries = 0
-                local max_tries = 20
-                while spawned < 2 and tries < max_tries do
-                    tries = tries + 1
-                    local id = G:random_joker_def_id_by_rarity(1)
-                    if id and not picked[id] and G:add_joker_by_def(id) then
-                        picked[id] = true
-                        spawned = spawned + 1
-                        mark_effect_applied(ctx)
-                        mark_created_item(ctx)
-                    end
+            for _ = 1, 2 do
+                local id = G:random_joker_def_id_by_rarity(1)
+                if not id then break end
+                if G:add_joker_by_def(id) then
+                    mark_effect_applied(ctx)
+                    mark_created_item(ctx)
                 end
             end
         end
@@ -849,12 +768,17 @@ local SPECIAL = {
     j_flower_pot = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(_, ctx)
-            local suits = {}
+            local has = { Hearts = false, Clubs = false, Diamonds = false, Spades = false }
             for _, n in ipairs((ctx and ctx.cards) or {}) do
                 local s = n and n.card_data and n.card_data.suit
-                if s then suits[s] = true end
+                if s then
+                    if is_suit(s, "Hearts") then has.Hearts = true end
+                    if is_suit(s, "Clubs") then has.Clubs = true end
+                    if is_suit(s, "Diamonds") then has.Diamonds = true end
+                    if is_suit(s, "Spades") then has.Spades = true end
+                end
             end
-            if suits.Hearts and suits.Clubs and suits.Diamonds and suits.Spades then
+            if has.Hearts and has.Clubs and has.Diamonds and has.Spades then
                 mul_mult(ctx, 3)
             end
         end
@@ -887,7 +811,7 @@ local SPECIAL = {
             local cards = held_cards(ctx)
             if #cards == 0 then return end
             for _, c in ipairs(cards) do
-                if c.suit ~= "Spades" and c.suit ~= "Clubs" then return end
+                if not is_suit(c.suit, "Spades") and not is_suit(c.suit, "Clubs") then return end
             end
             mul_mult(ctx, 3)
         end
@@ -908,8 +832,8 @@ local SPECIAL = {
     },
     j_throwback = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
-        apply_effect = function(j, ctx)
-            local skipped = tonumber(j.runtime_counter) or 0
+        apply_effect = function(_, ctx)
+            local skipped = (G and tonumber(G.skipsTaken)) or 0
             mul_mult(ctx, 1 + (0.25 * skipped))
         end
     },
@@ -993,7 +917,7 @@ local SPECIAL = {
     j_ancient_joker = {
         matches_trigger = function(_,e) return e == "card_played" or e == "on_round_end" end,
         apply_effect = function(j, ctx)
-            if ctx.event_name == "card_played" and ctx.suit == j.random_suit then
+            if ctx.event_name == "card_played" and is_suit(ctx.suit, j.random_suit) then
                 mul_mult(ctx, 1.5)
             elseif ctx.event_name == "on_round_end" then
                 local suits = { "Hearts", "Clubs", "Diamonds", "Spades" }
@@ -1025,6 +949,9 @@ local SPECIAL = {
                     if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
                         for i, jj in ipairs(G.jokers) do
                             if jj == j then
+                                local p = Popup()
+                                p:spawn("Eaten!", "Nope", card_center_x(ctx.VT), card_center_y(ctx.VT))
+                                Top:addPopup(p)
                                 Sfx.play("resources/sounds/slice1.ogg")
                                 G:remove_owned_joker_at(i)
                                 break
@@ -1058,6 +985,9 @@ local SPECIAL = {
                 if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
                     for i, jj in ipairs(G.jokers) do
                         if jj == j then
+                            local p = Popup()
+                            p:spawn("Drank!", "Nope", card_center_x(ctx.VT), card_center_y(ctx.VT))
+                            Top:addPopup(p)
                             Sfx.play("resources/sounds/slice1.ogg")
                             G:remove_owned_joker_at(i)
                             break
@@ -1089,7 +1019,7 @@ local SPECIAL = {
             elseif ctx.event_name == "on_discard" then
                 local discarded = ctx.discarded_cards
                 for n,c in ipairs(discarded) do
-                    if c.suit == j.random_suit then
+                    if is_suit(c.suit, j.random_suit) then
                         j.runtime_counter = (tonumber(j.runtime_counter) or 0) + 3
                     end
                 end
@@ -1138,7 +1068,12 @@ local SPECIAL = {
                         for i, jj in ipairs(G.jokers) do
                             if jj == j then
                                 Sfx.play("resources/sounds/slice1.ogg")
-                                G.gros_michel_extinct = true
+                                local p = Popup()
+                                p:spawn("Extinct!", "Nope", card_center_x(ctx.VT), card_center_y(ctx.VT))
+                                Top:addPopup(p)
+                                if G.activate_joker_pool_swap then
+                                    G:activate_joker_pool_swap("j_gros_michel", "j_cavendish")
+                                end
                                 G:remove_owned_joker_at(i)
                                 break
                             end
@@ -1192,6 +1127,9 @@ local SPECIAL = {
                 if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
                     for i, jj in ipairs(G.jokers) do
                         if jj == j then
+                            local p = Popup()
+                            p:spawn("Eaten!", "Nope", card_center_x(ctx.VT), card_center_y(ctx.VT))
+                            Top:addPopup(p)
                             Sfx.play("resources/sounds/slice1.ogg")
                             G:remove_owned_joker_at(i)
                             break
@@ -1247,6 +1185,9 @@ local SPECIAL = {
             if not copy then return end
             if G.ensure_card_uid then G:ensure_card_uid(copy) end
             if hand:add_card(copy, true) then
+                if G.notify_cards_added_to_deck then
+                    G:notify_cards_added_to_deck(1)
+                end
                 mark_created_item(ctx)
             end
         end,
@@ -1323,6 +1264,9 @@ local SPECIAL = {
                         for i, jj in ipairs(G.jokers) do
                             if jj == j then
                                 Sfx.play("resources/sounds/slice1.ogg")
+                                local p = Popup()
+                                p:spawn("Extinct!", "Nope", card_center_x(ctx.VT), card_center_y(ctx.VT))
+                                Top:addPopup(p)
                                 G:remove_owned_joker_at(i)
                                 break
                             end
@@ -1374,6 +1318,9 @@ local SPECIAL = {
                 if G and type(G.jokers) == "table" and G.remove_owned_joker_at then
                     for i, jj in ipairs(G.jokers) do
                         if jj == j then
+                            local p = Popup()
+                            p:spawn("Eaten!", "Nope", card_center_x(ctx.VT), card_center_y(ctx.VT))
+                            Top:addPopup(p)
                             Sfx.play("resources/sounds/slice1.ogg")
                             G:remove_owned_joker_at(i)
                             break
@@ -1452,7 +1399,7 @@ local SPECIAL = {
         apply_effect = function(j, ctx)
             if ctx.event_name == "card_played" then
                 card = ctx.card_node
-                if(card.card_data.enhancement or card.card_data.enhancement ~= "none") then
+                if(card.card_data.enhancement and card.card_data.enhancement ~= "none") then
                     j.stored_xmult = (tonumber(j.stored_xmult) or 0) + 0.1
                     card:set_enhancement("none")
                     mark_effect_applied(ctx)
@@ -1466,7 +1413,7 @@ local SPECIAL = {
     j_vagabond = {
         matches_trigger = function(_, e) return e == "on_hand_played" end,
         apply_effect = function(_,ctx)
-            if G and G.money and G.money < 4 then
+            if G and G.money and G.money <= 4 then
                 local tid = G:random_consumable_id_of_kind("tarot")
                 if tid then
                     G:add_consumable(tid)
@@ -1555,9 +1502,7 @@ local SPECIAL = {
                 if j.random_rank == nil or j.random_suit == nil then return end
                 local cr = tonumber(ctx.rank)
                 local jr = tonumber(j.random_rank)
-                local cs = tostring(ctx.suit or ""):lower()
-                local js = tostring(j.random_suit or ""):lower()
-                if cr == jr and cs ~= "" and cs == js then
+                if cr == jr and is_suit(ctx.suit, j.random_suit) then
                     mul_mult(ctx, 3)
                 end
             elseif ctx.event_name == "on_round_end" then
@@ -1680,7 +1625,8 @@ local SPECIAL = {
                 local hasClubs = false
                 local hasOther = false
                 for _, card in ipairs(cards) do
-                    if card.card_data.suit == "Clubs" then
+                    local s = card and card.card_data and card.card_data.suit
+                    if is_suit(s, "Clubs") then
                         hasClubs = true
                     else
                         hasOther = true
@@ -1784,8 +1730,19 @@ local SPECIAL = {
         end
     },
 
+    j_diet_cola = {
+        matches_trigger = function(_, e) return e == "on_joker_sold" end,
+        apply_effect = function(j, ctx)
+            if ctx.event_name ~= "on_joker_sold" or ctx.joker ~= j then return end
+            if G and G.addTag then
+                G:addTag("double")
+                mark_effect_applied(ctx)
+            end
+        end
+    },
+
     j_hit_the_road = {
-        matches_trigger = function(_, e) return e == "on_discard" or e == "on_hand_scored" end,
+        matches_trigger = function(_, e) return e == "on_discard" or e == "on_hand_scored" or e == "on_round_end" end,
         apply_effect = function(j, ctx)
             if ctx.event_name == "on_discard" and ctx.discard_reason == "discard" then
                 local discarded = ctx.discarded_cards
@@ -1796,6 +1753,8 @@ local SPECIAL = {
                 end
             elseif ctx.event_name == "on_hand_scored" then
                 mul_mult(ctx, tonumber(j.stored_xmult) or 1)
+            elseif ctx.event_name == "on_round_end" then
+                j.stored_xmult = 1
             end
         end
     },
@@ -1815,8 +1774,10 @@ local SPECIAL = {
 function JokerEffects.get(joker)
     local def = joker and joker.def or {}
     local id = def.id
-    if SPECIAL[id] then return SPECIAL[id] end
-    return DEFAULT_IMPL
+    if type(id) == "string" and SPECIAL[id] then
+        return SPECIAL[id]
+    end
+    return nil
 end
 
 function JokerEffects.begin_apply_context(ctx)
@@ -1842,7 +1803,7 @@ end
 function JokerEffects.apply_shake_if_needed(joker, ctx)
     if not joker or not JokerEffects.should_shake_for_context(ctx) then return false end
     joker.scoring_shake_timer = JokerEffects.SHAKE_MAX_DURATION
-    joker.scoring_shake_t0 = love.timer.getTime()
+    joker.scoring_shake_phase = 0
     return true
 end
 
