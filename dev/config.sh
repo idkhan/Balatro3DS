@@ -11,9 +11,9 @@ BUILD_DIR="$CACHE_DIR/build"
 STAGE_DIR="$CACHE_DIR/stage"
 
 # Application metadata. Version tracks lovebrew.toml so there is one source of truth.
-APP_TITLE="Balatro3DS"
-APP_DESCRIPTION="A Remake of Balatro for the 3DS"
-APP_AUTHOR="Gazpacho"
+APP_TITLE="Balatro"
+APP_DESCRIPTION="Balatro"
+APP_AUTHOR="rosematcha"
 APP_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/lovebrew.toml" | head -1)"
 APP_ICON="$REPO_ROOT/resources/textures/1x/icon.png"   # 48x48 png
 BANNER_IMAGE="$REPO_ROOT/banner.png"                   # 256x128 png, fallback
@@ -26,9 +26,15 @@ UNIQUE_ID="0xBA1A7"
 PRODUCT_CODE="CTR-H-BLTR"
 
 # Where the game lives inside the CIA's RomFS. This doubles as the LOVE save
-# identity (love strips the path and extension), so keeping it equal to the
-# .3dsx filename means CIA and 3dsx builds share one save directory.
-GAME_ROOT="$APP_TITLE"
+# identity (love strips the path and extension), and the .3dsx is named from it
+# too so CIA and 3dsx builds share one save directory.
+#
+# Deliberately NOT derived from APP_TITLE: the runtime is patched once at setup
+# time to boot this exact path, so changing it silently desynchronises an
+# already-built runtime from the RomFS the CIA ships (the console then shows the
+# no-game screen). It is also the save directory name, so renaming it orphans
+# every existing save. Change it only together with ./dev/setup.sh --rebuild.
+GAME_ROOT="Balatro3DS"
 
 # Files staged in the repo that no code loads. mkbcfnt rasterises every glyph in
 # a face, so these seven CJK/Noto TTFs turn into 599MB of .bcfnt and dominate the
