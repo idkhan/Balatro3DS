@@ -1334,6 +1334,12 @@ function Joker:apply_effect(ctx)
     local state_changed, created = runtime_snapshot_delta(before, after)
     local after_chips = tonumber(ctx.chips)
     local after_mult = tonumber(ctx.mult)
+    -- An effect that changed runtime state without announcing it (Yorick counting a
+    -- discarded card) opts out here: the snapshot heuristic cannot tell a silent tick from a
+    -- payoff, but the effect can, and a false trigger costs a beat of the staggered emit queue.
+    if ctx._joker_effect_silent == true then
+        state_changed = false
+    end
     if before_chips ~= after_chips or before_mult ~= after_mult or state_changed then
         if JokerEffects and JokerEffects.mark_effect_applied then
             JokerEffects.mark_effect_applied(ctx)

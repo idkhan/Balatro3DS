@@ -33,6 +33,25 @@ local function mark_created_item(ctx)
     ctx._joker_effect_created_item_now = true
 end
 
+--- Declare that this application of the effect changed runtime state but has nothing to
+--- announce, so `Joker:apply_effect`'s snapshot heuristic must not read the change as a
+--- trigger. The reference decides this per branch by returning a message or returning bare
+--- (Yorick's non-payoff tick is `return` with no table, `reference/Balatro/card.lua:2787-2801`);
+--- a silent branch costs no beat of the staggered emit queue and raises no juice.
+local function mark_effect_silent(ctx)
+    if type(ctx) ~= "table" then return end
+    ctx._joker_effect_silent = true
+end
+
+--- Hold this trigger's beat for `seconds` instead of the default. Mirrors the reference's
+--- per-eval `delay` field, which `card_eval_status_text` scales by 1.25
+--- (`reference/Balatro/functions/common_events.lua:853-878`) -- so the reference's `delay = 0.2`
+--- is 0.25 s here, against the 0.9375 s an eval with no `delay` gets.
+local function set_effect_delay(ctx, seconds)
+    if type(ctx) ~= "table" then return end
+    ctx._joker_effect_delay = tonumber(seconds)
+end
+
 local function card_center_x(node)
     return node.x + (node.w / 2) * node.scale
 end
@@ -901,7 +920,16 @@ local SPECIAL = {
                 if (tonumber(j.runtime_counter) or 0) >= 23 then
                     j.runtime_counter = j.runtime_counter - 23
                     j.stored_xmult = (tonumber(j.stored_xmult) or 1) + 1
+                    -- The payoff is the reference's `delay = 0.2` eval, not the 0.75 default
+                    -- (reference/Balatro/card.lua:2787-2796).
+                    set_effect_delay(ctx, 0.25)
                     mark_effect_applied(ctx)
+                else
+                    -- Counting is silent in the reference -- the non-payoff branch returns
+                    -- nothing at all, so it raises no status text and holds no beat. Without
+                    -- this the counter tick alone reads as a trigger to the snapshot check in
+                    -- `Joker:apply_effect`, and every discarded card costs a full beat.
+                    mark_effect_silent(ctx)
                 end
             elseif ctx.event_name == "on_hand_scored" then
                 mul_mult(ctx, tonumber(j.stored_xmult) or 1)
@@ -1022,6 +1050,8 @@ local SPECIAL = {
                     end
                     return
                 end
+                -- reference/Balatro/card.lua:2757-2786 -- Ramen's bite is a `delay = 0.2` eval.
+                set_effect_delay(ctx, 0.25)
                 mark_effect_applied(ctx)
             end
         end
@@ -1940,6 +1970,22 @@ function JokerEffects.begin_apply_context(ctx)
     if type(ctx) ~= "table" then return end
     ctx._joker_effect_applied_now = false
     ctx._joker_effect_created_item_now = false
+    ctx._joker_effect_silent = nil
+    ctx._joker_effect_delay = nil
+end
+
+function JokerEffects.mark_effect_silent(ctx)
+    mark_effect_silent(ctx)
+end
+
+function JokerEffects.set_effect_delay(ctx, seconds)
+    set_effect_delay(ctx, seconds)
+end
+
+--- Seconds this trigger's beat should hold, or nil for the caller's default.
+function JokerEffects.effect_delay(ctx)
+    if type(ctx) ~= "table" then return nil end
+    return tonumber(ctx._joker_effect_delay)
 end
 
 function JokerEffects.mark_effect_applied(ctx)

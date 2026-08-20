@@ -276,6 +276,8 @@ function Game:init(seed)
     self._joker_emit_queue = nil
     self._joker_emit_next = 1
     self._joker_emit_timer = 0
+    --- Per-trigger override of `JOKER_EMIT_INTERVAL`, taken from the effect's requested delay.
+    self._joker_emit_interval = nil
     --- Beat between jokers in a staggered batch. The reference announces a joker through
     --- `card_eval_status_text`'s `extra` branch, which holds for `0.75*1.25`
     --- (`common_events.lua:859,878`) - noticeably longer than a played card's chip pop,
@@ -9739,6 +9741,8 @@ function Game:_apply_one_joker_emit()
     end
     local j = q.list[self._joker_emit_next]
     local did_trigger = false
+    -- Each beat starts from the default; only a joker that asks for a delay overrides it.
+    self._joker_emit_interval = nil
     if j then
         q.ctx = self:prepare_joker_event_ctx(q.event_name, q.ctx)
         local edition_triggered = false
@@ -9754,6 +9758,11 @@ function Game:_apply_one_joker_emit()
                 did_trigger = edition_triggered
                     or q.ctx._joker_effect_applied_now == true
                     or q.ctx._joker_effect_created_item_now == true
+                -- Reference evals carry their own `delay`; a joker that asked for one holds
+                -- the beat for that long instead of the 0.9375 s default.
+                if did_trigger then
+                    self._joker_emit_interval = tonumber(q.ctx._joker_effect_delay)
+                end
             end
         end
         self:_sync_joker_ctx(q.ctx)
@@ -9830,7 +9839,8 @@ end
 function Game:_update_joker_emit_queue(dt)
     if not self._joker_emit_queue then return end
     self._joker_emit_timer = self._joker_emit_timer + dt
-    local interval = tonumber(self.JOKER_EMIT_INTERVAL) or 0.9375
+    local interval = self._joker_emit_interval
+        or tonumber(self.JOKER_EMIT_INTERVAL) or 0.9375
     if self._joker_emit_timer < interval then
         return
     end

@@ -592,6 +592,66 @@ suite.test("played card gets one beat before its first joker and no tail beat", 
     game.begin_joker_emit = saved_begin
 end)
 
+suite.test("Yorick's discard count is silent until the 23rd card", function()
+    -- The reference's non-payoff branch returns nothing at all
+    -- (`reference/Balatro/card.lua:2787-2801`), so it raises no status text and holds no beat
+    -- of the staggered emit queue. The port infers a trigger from a runtime-state snapshot,
+    -- and Yorick's counter moves on every discarded card -- without the silent opt-out a
+    -- five-card discard costs five full beats before anything leaves the hand.
+    local game = bootstrap.new_game(2207)
+    T.assert_true(game:add_joker_by_def("j_yorick"), "Yorick is in the run")
+    local yorick = game.jokers[1]
+    yorick.runtime_counter = 0
+
+    local function discard_one()
+        local ctx = { event_name = "on_discard", discard_reason = "discard", card = { rank = 5 } }
+        yorick:apply_effect(ctx)
+        return ctx
+    end
+
+    for i = 1, 22 do
+        local ctx = discard_one()
+        T.assert_false(ctx._joker_effect_applied_now == true,
+            "card " .. i .. " is counted without announcing anything")
+        T.assert_false(JokerEffects.should_shake_for_context(ctx),
+            "and Yorick does not juice for a card it merely counted")
+    end
+
+    local ctx = discard_one()
+    T.assert_true(ctx._joker_effect_applied_now == true, "the 23rd card pays out")
+    T.assert_eq(yorick.stored_xmult, 2, "and the payout is +X1")
+    T.assert_eq(JokerEffects.effect_delay(ctx), 0.25,
+        "the payout holds the reference's short 0.2*1.25 beat, not the 0.9375 default")
+end)
+
+suite.test("an effect's requested delay shortens that trigger's beat", function()
+    local game = bootstrap.new_game(2208)
+    local calls = {}
+    local quick = trigger_joker(10, calls)
+    local plain = trigger_joker(20, calls)
+    quick.apply_effect = function(self, ctx)
+        calls[#calls + 1] = self
+        ctx._joker_effect_applied_now = true
+        ctx._joker_effect_delay = 0.25
+    end
+    game.jokers = { quick, plain }
+
+    T.assert_true(game:begin_joker_emit("on_discard", {}), "the batch pauses")
+    T.assert_eq(#calls, 1, "the quick joker owns the opening beat")
+
+    game:_update_joker_emit_queue(0.25)
+    T.assert_eq(#calls, 2, "0.25 s is enough, because that is what it asked for")
+
+    -- The override is per beat, not sticky: the next batch falls back to the default.
+    local more = {}
+    game.jokers = { trigger_joker(10, more), trigger_joker(20, more) }
+    T.assert_true(game:begin_joker_emit("on_discard", {}), "a second batch pauses")
+    game:_update_joker_emit_queue(0.25)
+    T.assert_eq(#more, 1, "a plain trigger still holds the full beat")
+    game:_update_joker_emit_queue(game.JOKER_EMIT_INTERVAL)
+    T.assert_eq(#more, 2, "and releases on it")
+end)
+
 suite.test("Cartomancer triggers at blind selection when there is room", function()
     local game = bootstrap.new_game(2203)
     local impl = JokerEffects.get(fake_joker("j_cartomancer"))
