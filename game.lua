@@ -11701,6 +11701,16 @@ function Game:_release_booster_pack()
     if not sess or sess.opening_phase ~= "buildup" then return end
     sess.opening_phase = "reveal"
     sess.opening_t = 0
+    -- A pack releases every card on one frame, and the dissolve mask's crowd count is a frame
+    -- behind by design - so without this the single frame the player is watching is the one
+    -- frame drawn at the expensive resolution. The pack knows the number, so it says so.
+    if Fx and Fx.expect_dissolves then
+        local pending = 0
+        for _, ch in ipairs(sess.choices) do
+            if type(ch) == "table" and not ch.taken then pending = pending + 1 end
+        end
+        Fx.expect_dissolves(pending)
+    end
     sess.choice_nodes = self:_booster_spawn_choice_nodes(sess.choices)
     if self.shake then self:shake(3) end
     if Sfx and Sfx.play then Sfx.play("explosion_release1") end

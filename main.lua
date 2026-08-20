@@ -103,6 +103,10 @@ function love.load()
     Loading.step(0.97)
     Top = TopUI()
 
+    -- Bakes the coarse dissolve fields a crowded animation falls back to, so a Mega pack's
+    -- five simultaneous materialises do not all bake one on their first frame.
+    Fx.prewarm_dissolve()
+
     -- The music manager owns every streamed track from here. It picks one from G.STATE
     -- and crossfades on its own off Sfx.update; this only kicks the first one off.
     Sfx.music_start()
@@ -168,6 +172,10 @@ function love.update(dt)
     -- framebuffers (`renderer_ext.hpp:194-199`), so it can only happen outside the run
     -- loop's screen walk -- which is exactly where `love.update` sits.
     Stereo.update()
+
+    -- Rolls the dissolve crowd count that picks the mask resolution. Here rather than in
+    -- `love.draw`, which runs once per screen; see `Fx.begin_frame`.
+    Fx.begin_frame()
 
     -- The backdrop runs on wall time and never pauses: the reference advances REAL_SHADER from
     -- G.real_dt, so the background keeps flowing while the game is paused or a modal is up.
