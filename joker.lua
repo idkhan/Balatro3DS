@@ -159,6 +159,40 @@ function Joker.sprite_key_from_pos(atlas_name, index, edition)
     return "Jokers" .. set .. "_" .. num
 end
 
+--- The front sprite key a joker built from this def and these params would resolve to.
+---
+--- Mirrors what `Joker:refresh_quads` derives, so a warming pass can name the sprite before
+--- the joker exists. Kept next to `sprite_key_from_pos` so the two fall out of step loudly
+--- rather than quietly.
+---@param def table entry from JOKER_DEFS
+---@param params table|nil create params, for an edition or a position override
+---@return string|nil
+function Joker.front_sprite_key_for(def, params)
+    if type(def) ~= "table" then return nil end
+    local pos = (type(params) == "table" and params.pos) or def.pos
+    local atlas = (pos and pos.atlas) or "Joker1_p1"
+    local index = (pos and pos.index) or 0
+    local edition = type(params) == "table" and params.edition or nil
+    return Joker.sprite_key_from_pos(atlas, index, edition)
+end
+
+--- Pull a joker's front sprite into the registry before the frame that draws it.
+---
+--- `Game:ensure_joker_sprite_loaded` is cache-keyed and idempotent, so this is exactly the
+--- load the constructor would do, moved earlier. A pack releasing five jokers at once is five
+--- blocking `newImage` calls (~24 ms each on console) inside one frame otherwise.
+---@param def table
+---@param params table|nil
+---@return boolean warmed false when there was nothing to do or no game to do it through
+function Joker.warm_sprite(def, params)
+    local key = Joker.front_sprite_key_for(def, params)
+    if not key or not G or not G.ensure_joker_sprite_loaded then return false end
+    local entry = G.JOKER_SPRITES and G.JOKER_SPRITES[key]
+    if entry and entry.image then return false end
+    G:ensure_joker_sprite_loaded(key)
+    return true
+end
+
 --- A stable per-card hue offset. The reference gives each card its own `holo.y` /
 --- `polychrome.y` seed so a row of editioned cards does not shimmer in lockstep; here
 --- the field itself is shared between every card on screen (one build per frame rather

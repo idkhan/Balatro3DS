@@ -11593,6 +11593,57 @@ end
 local BOOSTER_MATERIALIZE_COLOUR = { 1, 1, 1, 1 }
 local BOOSTER_MATERIALIZE_TIMEFAC = 1.5
 
+--- Warm one pack choice's art, at most one per call.
+---
+--- `_release_booster_pack` constructs every choice node in a single frame, and each
+--- construction blocks on `newImage` - a SD read plus a texture build, ~24 ms on console.
+--- Five of those stacked is the ~80 ms freeze on the frame the pack bursts open, which is the
+--- one frame of the whole animation the player is actually looking at.
+---
+--- The fix is scheduling, not caching: the choices are rolled in `begin_booster_session`, and
+--- the wrapper then spends PACK_MOVE_DURATION + PACK_BURST_DURATION (1.7 s, ~100 frames)
+--- flying in and shaking before it releases. One sprite a frame across that window costs the
+--- same total time but never puts two loads in the same frame, so the freeze becomes a handful
+--- of merely-slow frames under an animation that is already shaking the screen.
+---
+--- One per call rather than a whole batch on purpose: a 24 ms load already overruns a 16.7 ms
+--- frame, so the budget is one, and there are twenty times more frames than choices.
+---@param sess table the booster session
+local function warm_next_booster_choice(sess)
+    local choices = sess and sess.choices
+    if type(choices) ~= "table" then return end
+    local i = (tonumber(sess.warm_index) or 0) + 1
+    while i <= #choices do
+        local ch = choices[i]
+        if type(ch) == "table" and not ch.taken then
+            if (ch.kind == "tarot" or ch.kind == "planet" or ch.kind == "spectral")
+                and Consumable and Consumable.warm_sprite then
+                local def = ch.consumable_def
+                -- Asked for rather than recomputed: the negative-edition offset belongs to
+                -- the constructor, and a warm that guessed it wrong would load the wrong
+                -- sprite and leave the real one to stall the frame it was sparing.
+                local index = type(def) == "table" and Consumable.sprite_index_for(def)
+                if index and not Consumable.sprite_is_resident(index) then
+                    sess.warm_index = i
+                    Consumable.warm_sprite(index)
+                    return
+                end
+            elseif ch.kind == "joker" and Joker and Joker.warm_sprite then
+                local jd = JOKER_DEFS and JOKER_DEFS[ch.joker_id]
+                if type(jd) == "table" then
+                    local params = type(ch.create_params) == "table" and ch.create_params
+                        or { edition = ch.edition or "base" }
+                    sess.warm_index = i
+                    if Joker.warm_sprite(jd, params) then return end
+                end
+            end
+            -- A playing card draws from the shared card atlas, which a run always has resident.
+        end
+        i = i + 1
+    end
+    sess.warm_index = #choices
+end
+
 function Game:_booster_spawn_choice_nodes(choices)
     local nodes = {}
     for i, ch in ipairs(choices) do
@@ -11738,6 +11789,11 @@ function Game:_update_booster_opening(dt)
     if sess.opening_phase == "move" and sess.opening_t >= BoosterPackUI.PACK_MOVE_DURATION then
         sess.opening_phase = "buildup"
         sess.opening_t = sess.opening_t - BoosterPackUI.PACK_MOVE_DURATION
+    end
+    -- Everything before the release is dead time the art can be loaded in. Once the pack has
+    -- released, the nodes exist and warming has nothing left to do.
+    if sess.opening_phase == "move" or sess.opening_phase == "buildup" then
+        warm_next_booster_choice(sess)
     end
     if sess.opening_phase == "buildup" then
         local speed = tonumber(self.SETTINGS and self.SETTINGS.GAMESPEED) or 1

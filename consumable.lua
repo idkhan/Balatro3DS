@@ -28,7 +28,12 @@ local _sprite_cache = {}
 local _sprite_owners = {}
 local _sprite_generation = 0
 
-local function consumable_acquire_sprite(index)
+--- Load one sprite into the cache, or return the entry already there.
+---
+--- Split out of `consumable_acquire_sprite` so the cost can be paid before the frame that
+--- needs it: `newImage` is a blocking SD read plus a texture build, ~24 ms on console, and
+--- five of them landing together is a visible freeze rather than a slow frame.
+local function consumable_load_sprite(index)
     local entry = _sprite_cache[index]
     if not entry then
         local path = string.format("%s%03d.png", CONSUMABLE_SPRITE_DIR, index)
@@ -49,6 +54,31 @@ local function consumable_acquire_sprite(index)
         }
         _sprite_cache[index] = entry
     end
+    return entry
+end
+
+--- Pull a sprite into the cache without taking ownership of it.
+---
+--- Deliberately does not touch `_sprite_owners`: the consumable that eventually wants this
+--- sprite takes the reference itself, and a warmed sprite nobody constructs is left for
+--- `release_all_sprites` at run teardown rather than being pinned by a phantom owner.
+---@param index number
+function Consumable.warm_sprite(index)
+    if index == nil then return end
+    consumable_load_sprite(index)
+end
+
+--- Whether a sprite is already resident, so a warming pass can skip it and spend its frame
+--- on one that is not.
+---@param index number
+---@return boolean
+function Consumable.sprite_is_resident(index)
+    local entry = _sprite_cache[index]
+    return entry ~= nil and entry.image ~= nil
+end
+
+local function consumable_acquire_sprite(index)
+    local entry = consumable_load_sprite(index)
     _sprite_owners[index] = (_sprite_owners[index] or 0) + 1
     return entry, _sprite_generation
 end
@@ -134,6 +164,22 @@ local function consumable_normalize_edition(raw)
     return "base"
 end
 
+--- The sprite index a consumable built from this def would load.
+---
+--- The negative offset lives here and only here: a warming pass that recomputed it would load
+--- the base sprite and leave the real one to block the frame it was supposed to be sparing,
+--- and nothing would look wrong until a negative consumable turned up in a pack.
+---@param def table entry from CONSUMABLE_DEFS
+---@return number
+function Consumable.sprite_index_for(def)
+    if type(def) ~= "table" then return 0 end
+    local index = tonumber(def.index) or 0
+    if consumable_normalize_edition(def.edition) == "negative" then
+        index = index + NEGATIVE_CONSUMABLE_INDEX_OFFSET
+    end
+    return index
+end
+
 ---@param X number
 ---@param Y number
 ---@param def table  -- entry from CONSUMABLE_DEFS
@@ -145,10 +191,7 @@ function Consumable:init(X, Y, def)
     self.sell_cost = (self.kind == "spectral") and 2 or 1
     self.edition = consumable_normalize_edition(self.def.edition)
     self.atlas_name = self.def.atlas or "Tarot"
-    self.index = tonumber(self.def.index) or 0
-    if self.edition == "negative" then
-        self.index = self.index + NEGATIVE_CONSUMABLE_INDEX_OFFSET
-    end
+    self.index = Consumable.sprite_index_for(self.def)
     self.atlas_name = "Consumable_" .. tostring(self.index)
 
     local cw, ch = 72, 95
