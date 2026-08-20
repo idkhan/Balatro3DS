@@ -253,6 +253,75 @@ suite.test("no draw case can overrun the frame vertex buffer", function()
     end
 end)
 
+--- The submit probe. It is the only part of the harness whose arithmetic can be wrong
+--- without anything throwing, and getting it wrong is what produced "70 draw commands, 0 gpu
+--- submits" on the first hardware run: the renderer only submits queued commands at a flush,
+--- so a counter read inside the frame that issued them describes the previous flush.
+---
+--- The stub models exactly that. Draw calls accumulate into `pending`; `latched` is copied
+--- from `pending` at the end of each frame, which is what the runtime does at Present; and
+--- `getBatchStats` only ever returns `latched`. If the probe read its own frame, or compared
+--- the wrong pair of frames, the recorded count would not equal the number of draws the case
+--- actually issues.
+suite.test("the draw-count probe measures the frame the case ran in", function()
+    local game = bootstrap.new_game(1)
+    local Benchmark = require("benchmark")
+
+    local FIELDS = { "logical", "submits", "runs", "maxrun", "texbinds", "barriers",
+                     "verts", "indices", "allocs" }
+    local pending, latched = {}, {}
+    for _, key in ipairs(FIELDS) do pending[key], latched[key] = 0, 0 end
+
+    local originals = {}
+    for _, name in ipairs({ "draw", "rectangle", "print", "printf" }) do
+        originals[name] = love.graphics[name]
+        love.graphics[name] = function(...)
+            pending.logical = pending.logical + 1
+            pending.submits = pending.submits + 1
+            return originals[name](...)
+        end
+    end
+    love.graphics.getBatchStats = function()
+        local copy = { batching = true, vcapacity = 24576, icapacity = 49152 }
+        for _, key in ipairs(FIELDS) do copy[key] = latched[key] end
+        return copy
+    end
+
+    with_moving_clock(function()
+        Benchmark.start(game)
+        local frames = 0
+        while Benchmark.is_running() and frames < 8000 do
+            frames = frames + 1
+            Benchmark.update(game, 1 / 60)
+            Benchmark.draw_step(game)
+            for _, key in ipairs(FIELDS) do latched[key] = pending[key] end
+        end
+        T.assert_true(Benchmark.is_finished(), "the run still terminates")
+
+        -- batch_rects_60_untextured issues exactly sixty rectangle calls per repetition, and
+        -- nothing else in the harness draws under the stub, so the probe's answer is knowable
+        -- to the unit.
+        -- Order matters as much as the value: results are printed in the order they are
+        -- recorded, so a detail row written before its case's own row is printed under the
+        -- name of the case above it. The first hardware report read "particles_rect_70 ...
+        -- 1 draw command" for exactly that reason.
+        local rows, seen = Benchmark.results(), false
+        for i, r in ipairs(rows) do
+            if r.name == "batch_rects_60_untextured" then
+                local counted = rows[i + 1]
+                T.assert_true(counted ~= nil and counted.name == "  ^ draw commands",
+                    "the case's own row comes first, then its detail rows")
+                T.assert_eq(counted.value, 60, "one row per rectangle the case draws")
+                seen = true
+            end
+        end
+        T.assert_true(seen, "the batching case should be present and probed")
+    end)
+
+    for name, fn in pairs(originals) do love.graphics[name] = fn end
+    love.graphics.getBatchStats = nil
+end)
+
 --- The frame case samples across real frames rather than looping inside one, so its
 --- machinery is different from every other case's and deserves its own check: it must
 --- produce a primary timing row from the sampled deltas, not stall and not read as zero.

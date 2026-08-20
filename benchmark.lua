@@ -232,6 +232,42 @@ end, {
 -- chain; love.graphics.draw can take x/y/r/sx directly and build the matrix once in C++.
 -- These two against image_quad_draw say whether flattening the chain is worth the refactor.
 
+-- DynaText draws one glyph at a time -- `text:sub(i, i)`, `font:getWidth(glyph)` and a
+-- transformed `print` per character -- so a nine-character headline is nine of the 52 us
+-- `print_short` measures plus nine font-metric lookups. The static case is the same string
+-- every frame with no animation enabled, which is the shape a cached decomposition helps; the
+-- animated case adds the float/rotation sine per glyph on top.
+
+local function dyna_fixture(key, config)
+    if fx[key] then return fx[key] end
+    local ok, DynaText = pcall(require, "dyna_text")
+    if not ok then return nil end
+    fx.dyna = DynaText
+    fx[key] = DynaText.new(config)
+    return fx[key]
+end
+
+case("text", "dynatext_static_9", "draw", 150, function()
+    fx.dyna.draw(fx.dyna_static, "Game Over", 8, 8, 200, "left")
+end, {
+    setup = function() dyna_fixture("dyna_static", {}) end,
+    available = function() return fx.dyna ~= nil and fx.dyna_static ~= nil end,
+    verts = 54,
+    note = "nine glyphs, no animation: this one should fall straight through to printf",
+})
+
+case("text", "dynatext_animated_9", "draw", 100, function()
+    fx.dyna.draw(fx.dyna_animated, "Game Over", 8, 8, 200, "left")
+end, {
+    setup = function()
+        dyna_fixture("dyna_animated", { float_amount = 2, rotation_amount = 0.08 })
+    end,
+    available = function() return fx.dyna ~= nil and fx.dyna_animated ~= nil end,
+    verts = 54,
+    count_draws = true,
+    note = "nine per-glyph transformed prints; the glyph loop's real cost",
+})
+
 case("transform", "transform_chain_card", "draw", 300, function(i)
     love.graphics.push()
     love.graphics.translate(i % 8, 150)
@@ -318,6 +354,75 @@ end, {
     verts = 120,
     count_draws = true,
     note = "clear+add+draw every rep; the moving-card cost, Lua add calls included",
+})
+
+-- The batching cases proper. These are the ones the renderer change is judged on, and they
+-- are sized so the run count is unambiguous rather than so the timing is precise: 40 quads is
+-- one submission if the coalescing works and 40 if it does not, and the "gpu submits" row of
+-- the probe says which happened without any interpretation.
+
+case("batching", "batch_quads_60_one_texture", "draw", 30, function(i)
+    local img, quad = fx.image, fx.quad
+    for k = 1, 60 do love.graphics.draw(img, quad, ((i + k) % 64), (k % 8) * 4) end
+end, {
+    available = function() return fx.image ~= nil and fx.quad ~= nil end,
+    verts = 240,
+    count_draws = true,
+    note = "60 fan quads, no barrier between them: should be ONE gpu submit",
+})
+
+case("batching", "batch_rects_60_untextured", "draw", 30, function(i)
+    for k = 1, 60 do
+        love.graphics.rectangle("fill", ((i + k) % 64), (k % 8) * 4, 6, 6)
+    end
+end, {
+    verts = 240,
+    count_draws = true,
+    note = "60 untextured fans; the particle shape, without particles",
+})
+
+case("batching", "batch_rects_60_recoloured", "draw", 30, function(i)
+    for k = 1, 60 do
+        love.graphics.setColor(1, (k % 8) / 8, 0.5, 1)
+        love.graphics.rectangle("fill", ((i + k) % 64), (k % 8) * 4, 6, 6)
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+end, {
+    verts = 240,
+    count_draws = true,
+    note = "colour is per vertex, so it must NOT break the run; compare submits above",
+})
+
+case("batching", "batch_alternating_20", "draw", 40, function(i)
+    local a, b, quad = fx.image, fx.image2, fx.quad
+    for k = 1, 20 do
+        love.graphics.draw((k % 2 == 0) and a or b, quad, ((i + k * 3) % 64), 8)
+    end
+end, {
+    setup = function()
+        if fx.image2 then return end
+        local ok, img = pcall(love.graphics.newImage, "resources/textures/1x/chips.png",
+            { dpiscale = 1, mipmaps = false })
+        if ok and img then fx.image2 = img end
+    end,
+    available = function() return fx.image ~= nil and fx.image2 ~= nil and fx.quad ~= nil end,
+    verts = 80,
+    count_draws = true,
+    note = "a texture barrier every draw; submits MUST stay at 20 or the merge is unsafe",
+})
+
+case("batching", "batch_barrier_scissor", "draw", 30, function(i)
+    for k = 1, 20 do
+        if k == 10 then
+            love.graphics.setScissor(0, 0, 320, 120)
+            love.graphics.setScissor()
+        end
+        love.graphics.rectangle("fill", ((i + k) % 64), 8, 6, 6)
+    end
+end, {
+    verts = 80,
+    count_draws = true,
+    note = "one state change mid-run; submits should be 3, not 1 and not 20",
 })
 
 -- ---------------------------------------------------------------- fill rate
@@ -476,6 +581,35 @@ case("lua", "math_exp_100", "cpu", 200, function()
     return s
 end, { note = "per 100; the spring integrator's coefficient path" })
 
+-- The GC step ladder. `Game:update` runs one of these every frame, and the size is the one
+-- knob that trades average cost against spike size. A step is not linear in its argument --
+-- below some size it is dominated by the fixed cost of entering the collector -- so the whole
+-- ladder is measured rather than two points of it.
+
+case("lua", "gc_step_8", "cpu", 200, function()
+    collectgarbage("step", 8)
+end, { note = "the smallest useful step; per-frame floor" })
+
+case("lua", "gc_step_16", "cpu", 200, function()
+    collectgarbage("step", 16)
+end)
+
+case("lua", "gc_step_32", "cpu", 200, function()
+    collectgarbage("step", 32)
+end)
+
+case("lua", "gc_step_48", "cpu", 200, function()
+    collectgarbage("step", 48)
+end)
+
+case("lua", "gc_step_64", "cpu", 200, function()
+    collectgarbage("step", 64)
+end)
+
+case("lua", "gc_step_96", "cpu", 200, function()
+    collectgarbage("step", 96)
+end)
+
 case("lua", "gc_step_160", "cpu", 200, function()
     collectgarbage("step", 160)
 end, { note = "the incremental step Game:update runs" })
@@ -571,13 +705,71 @@ end, {
     note = "50 nodes at rest; the gap to the case above is what the early-out saves",
 })
 
+-- Idle collision. `Game:check_collisions` runs every frame whether or not anything is being
+-- dragged, and the not-dragging branch used to walk every node to clear a flag that was
+-- already clear. This case runs it against a board-sized node list with nothing held, so its
+-- cost should be independent of the list length once the release frame has passed.
+
+local function collision_stub(game, n)
+    local nodes = make_moveables(n, false)
+    for _, node in ipairs(nodes) do node.states.collide.can = true end
+    -- Its own collision state, not the running game's: `check_collisions` writes to both the
+    -- nudge list and the active flag, and inheriting them through __index would have the
+    -- benchmark shoving the player's cards around.
+    return setmetatable({
+        nodes = nodes,
+        dragging = nil,
+        _collidables_buf = {},
+        _collision_nudged = {},
+        _collision_active = false,
+    }, { __index = game })
+end
+
+case("engine", "collision_idle_50", "cpu", 400, function()
+    fx.collide_idle:check_collisions(1 / 60)
+end, {
+    setup = function(game)
+        fx.collide_idle = collision_stub(game, 50)
+        -- One dragging frame and one release, so the case times the settled idle state
+        -- rather than the transition.
+        fx.collide_idle.dragging = fx.collide_idle.nodes[1]
+        pcall(function() fx.collide_idle:check_collisions(1 / 60) end)
+        fx.collide_idle.dragging = nil
+        pcall(function() fx.collide_idle:check_collisions(1 / 60) end)
+    end,
+    available = function() return _G.Moveable ~= nil and fx.collide_idle ~= nil end,
+    note = "nothing held; should not scale with the node count",
+})
+
+case("engine", "collision_drag_50", "cpu", 200, function()
+    fx.collide_drag:check_collisions(1 / 60)
+end, {
+    setup = function(game)
+        fx.collide_drag = collision_stub(game, 50)
+        fx.collide_drag.dragging = fx.collide_drag.nodes[1]
+    end,
+    available = function() return _G.Moveable ~= nil and fx.collide_drag ~= nil end,
+    note = "one node held against 49 collidables; the path that has to stay correct",
+})
+
 case("engine", "collision_rect_50", "cpu", 400, function()
     local list = fx.rects
     for i = 1, 50 do list[i]:get_collision_rect() end
 end, {
     setup = function() fx.rects = make_moveables(50, false) end,
     available = function() return _G.Moveable ~= nil end,
-    note = "allocates a table per call; only runs while dragging",
+    note = "allocates a table per call; the form the scan used to use",
+})
+
+case("engine", "collision_bounds_50", "cpu", 400, function()
+    local list = fx.rects
+    for i = 1, 50 do list[i]:get_collision_bounds() end
+end, {
+    setup = function() fx.rects = fx.rects or make_moveables(50, false) end,
+    available = function()
+        return _G.Moveable ~= nil and Moveable.get_collision_bounds ~= nil
+    end,
+    note = "four scalars, no allocation; the gap to the case above is the garbage",
 })
 
 -- ---------------------------------------------------------------- composite
@@ -645,6 +837,31 @@ end, {
     own_buffer = true,
     count_draws = true,
     note = "field on the CPU plus one indexed draw; scales linearly with grid density",
+})
+
+-- The same call with the New 3DS worker turned off, so the pair prices what moving the field
+-- to core 2 is worth. The difference between these two IS the main-thread saving: the drawn
+-- output is identical either way, because the worker computes the same numbers into the same
+-- buffer and the main thread does the same promotion and the same single indexed draw.
+--
+-- The worker is put back in teardown whatever happens, including if the case throws: leaving
+-- the backdrop synchronous for the rest of the session would silently change every later
+-- composite number.
+case("composite", "backdrop_frame_sync", "draw", 30, function()
+    Backdrop.draw(320)
+end, {
+    setup = function()
+        if Backdrop.set_worker then Backdrop.set_worker(false) end
+    end,
+    teardown = function()
+        if Backdrop.set_worker then Backdrop.set_worker(true) end
+    end,
+    available = function()
+        return Backdrop.is_supported ~= nil and Backdrop.is_supported()
+            and Backdrop.set_worker ~= nil and love.graphics.setBackdropWorker ~= nil
+    end,
+    own_buffer = true,
+    note = "the same field, computed on the main thread; minus backdrop_frame = the saving",
 })
 
 --- The stereo saving, measured. With the 3D slider up the runtime hands the run loop a
@@ -848,15 +1065,44 @@ case("frame", "frame_time_60", "frame", 60, function() end, {
 -- runner
 --------------------------------------------------------------------------------
 
---- Draw commands issued so far this frame. The counters accumulate across the frame and are
---- reset by `present()`, so a before/after pair inside one case is a clean delta. The second
---- return is the renderer's post-batching submit count: today ctr issues one C3D_DrawArrays
---- per command so the two always match, and a case where they diverge is itself a finding.
+--- The renderer's counters for the LAST COMPLETED frame.
+---
+--- Reading counters inside the frame that issued the draws does not work, and the first
+--- version of this suite reported "70 draw commands, 0 gpu submits" for the particle case
+--- because of it. The renderer queues commands and only submits them on a texture change, at a
+--- state barrier or at Present, so a mid-frame read sees the previous flush. The runtime now
+--- latches the whole counter set at Present, and everything here is a delta between two
+--- finished frames.
+---
+--- Returns nil on a runtime without the patch (desktop, the headless stub), which is the
+--- caller's signal to skip the probe rather than report zeroes.
+local function batch_stats()
+    if not love.graphics.getBatchStats then return nil end
+    local ok, stats = pcall(love.graphics.getBatchStats)
+    if not ok or type(stats) ~= "table" then return nil end
+    return stats
+end
+
+--- Logical draw commands issued so far this frame, from the stock LOVE counter. Still useful
+--- as a cross-check: it is incremented at queue time, so unlike the submit count it is correct
+--- to read mid-frame.
 local function draw_call_count()
     local ok, stats = pcall(love.graphics.getStats)
     if not ok or type(stats) ~= "table" then return nil end
     return tonumber(stats.drawcalls)
 end
+
+--- The counters a probe reports, in the order they are written to the report.
+local PROBE_FIELDS = {
+    { key = "logical", label = "  ^ draw commands", unit = "cmds" },
+    { key = "submits", label = "  ^ gpu submits", unit = "cmds" },
+    { key = "runs", label = "  ^ batch runs", unit = "cmds" },
+    { key = "maxrun", label = "  ^ longest run", unit = "cmds", absolute = true },
+    { key = "texbinds", label = "  ^ texture binds", unit = "cmds" },
+    { key = "barriers", label = "  ^ state barriers", unit = "cmds" },
+    { key = "verts", label = "  ^ vertices", unit = "cmds" },
+    { key = "allocs", label = "  ^ heap commands", unit = "cmds" },
+}
 
 local function record(c, value, status)
     results[#results + 1] = {
@@ -886,7 +1132,10 @@ end
 --- budget, which keeps the repetition counts (and so the timing quality) intact. Half the
 --- buffer is the budget: the benchmark screen's own panel, the top screen and the
 --- draw-command probe all draw into the same frame and none of them are counted here.
-local VERTEX_BUDGET = 12000
+--- Two thirds of the buffer rather than half, because merging a run of fans takes them apart
+--- into independent triangles and a four-vertex quad becomes six. A case's declared `verts` is
+--- its unmerged cost, so the budget has to carry the 1.5x that batching can add on top.
+local VERTEX_BUDGET = 8000
 
 --- Progress through the case at `index`, for the cases that span frames. nil between cases.
 local step = nil
@@ -916,32 +1165,48 @@ local function begin_case(game, c)
     return true
 end
 
---- How many draw commands the case actually issues, straight from the renderer. This is the
---- number every batching argument is really about, and unlike a Lua-side call count it
---- cannot be fooled by a call that fans out or one that batches internally. It runs on its
---- own frame so its geometry never has to share the budget with a timed chunk.
-local function probe_draw_counts(c)
-    local before = draw_call_count()
-    local counted = pcall(c.run, 1)
-    local after = draw_call_count()
-    if not (counted and before and after and after >= before) then return end
-    record({ group = c.group, name = "  ^ draw commands", unit = "cmds" }, after - before)
-    -- `drawcallsbatched` is deliberately NOT reported. It counts commands as FlushVertices
-    -- consumes them, and FlushVertices runs only on a texture change or at Present
-    -- (`renderer_ext.cpp:149-168`), so a probe that queues commands and reads the counter
-    -- inside the same frame measures the previous flush, not this one. The first run read
-    -- "70 draw commands, 0 gpu submits" for the particle case, which is an artifact of the
-    -- sampling point rather than a finding.
+--- What one repetition of the case actually cost the renderer, as a delta between two
+--- finished frames.
+---
+--- Three frames are needed and the order matters. The counters can only be read for a frame
+--- that has already presented, so:
+---
+---   frame A  draw the benchmark UI and nothing else.
+---   frame B  read A's counters as the baseline, then run the case once.
+---   frame C  read B's counters; B minus A is the case.
+---
+--- The benchmark's own panel draws identically in A and B, so it cancels. A single-frame
+--- before/after read cannot work here at all: at the moment the case finishes, its commands
+--- are still queued and the counter still describes the previous flush.
+---
+--- `maxrun` is reported absolutely rather than as a delta -- it is a high-water mark, not a
+--- total, and the difference of two high-water marks means nothing.
+local function record_probe(c, base, after)
+    for _, field in ipairs(PROBE_FIELDS) do
+        local a, b = base[field.key], after[field.key]
+        if type(a) == "number" and type(b) == "number" then
+            local value = field.absolute and b or (b - a)
+            if value ~= 0 or field.key == "logical" or field.key == "submits" then
+                record({ group = c.group, name = field.label, unit = field.unit }, value)
+            end
+        end
+    end
 end
 
---- Record the timing, take the draw counts if asked, and release the index.
-local function end_case(game, c)
+--- Record the timing. Deliberately separate from releasing the index, and deliberately before
+--- the probe: results are written in call order, so a case whose detail rows were recorded
+--- first had every one of them printed under the name of the case above it. Which is how the
+--- first report read "particles_rect_70 ... 1 draw command".
+local function record_timing(c)
     local value = nil
     if not step.failed and step.done > 0 then
         value = (step.elapsed / step.done) * (c.unit == "ms" and 1000 or 1000000)
     end
     record(c, value)
-    if value and c.count_draws then probe_draw_counts(c) end
+end
+
+--- Release the index and put back whatever the case set up.
+local function end_case(game, c)
     if c.teardown then pcall(c.teardown, game) end
     step = nil
     index = index + 1
@@ -967,6 +1232,7 @@ local function run_cpu_case(game, c)
         end
     end
     if not step.failed then time_chunk(c, c.reps) end
+    record_timing(c)
     end_case(game, c)
 end
 
@@ -985,7 +1251,31 @@ local function step_draw_case(game, c)
 
     if step.stage == "time" then
         time_chunk(c, math.min(per_frame, c.reps - step.done))
-        if step.failed or step.done >= c.reps then step.stage = "done" end
+        if step.failed or step.done >= c.reps then
+            record_timing(c)
+            step.stage = (c.count_draws and not step.failed and batch_stats()) and "probe_idle"
+                or "done"
+        end
+        return
+    end
+
+    -- The three probe frames. See record_probe for why it cannot be done in one.
+    if step.stage == "probe_idle" then
+        step.stage = "probe_run"
+        return
+    end
+
+    if step.stage == "probe_run" then
+        step.probe_base = batch_stats()
+        if not pcall(c.run, 1) then step.probe_base = nil end
+        step.stage = "probe_read"
+        return
+    end
+
+    if step.stage == "probe_read" then
+        local after = batch_stats()
+        if step.probe_base and after then record_probe(c, step.probe_base, after) end
+        step.stage = "done"
         return
     end
 
@@ -1095,7 +1385,22 @@ local function environment_lines(game)
     if stats_ok and type(stats) == "table" then
         add("texture memory", string.format("%.2f MiB", (stats.texturememory or 0) / 1048576))
         add("draw calls (menu)", stats.drawcalls or "?")
-        add("gpu submits (menu)", stats.drawcallsbatched or "?")
+        -- Deliberately not `stats.drawcallsbatched`: that counts commands as the flush
+        -- consumes them, which is the same number as drawcalls whether or not they were
+        -- merged. The renderer's own counter is the one that says how many C3D draws happened.
+        local batch = batch_stats()
+        if batch then
+            add("gpu submits (last frame)", batch.submits or "?")
+            add("logical draws (last frame)", batch.logical or "?")
+            add("longest run (last frame)", batch.maxrun or "?")
+            add("state barriers (last frame)", batch.barriers or "?")
+            add("heap commands (last frame)", batch.allocs or "?")
+            add("vertex high water", string.format("%s / %s",
+                tostring(batch.vhigh), tostring(batch.vcapacity)))
+            -- Non-zero here means geometry was DROPPED rather than written past the end of the
+            -- frame's vertex buffer. It is the safe failure, but it is still a failure.
+            add("prevented overflows", batch.overflows or 0)
+        end
         -- citro3d reports these in milliseconds already; see step_frame_case.
         if stats.cputime then add("cputime (menu)", string.format("%.3f ms", stats.cputime)) end
         if stats.gputime then add("gputime (menu)", string.format("%.3f ms", stats.gputime)) end
@@ -1107,10 +1412,76 @@ end
 -- report
 --------------------------------------------------------------------------------
 
+--- Which build produced this file.
+---
+--- A before/after pair of reports is worth nothing if the two cannot be told apart, and the
+--- fields that silently change every number below are exactly the ones nobody writes down: the
+--- commit, whether the runtime itself was built optimised, which set of runtime patches it
+--- carries, and whether the two A/B switches this pass added were on. `format` is bumped
+--- whenever a case is renamed or its meaning changes, so an old report cannot be diffed
+--- against a new one by accident.
+local REPORT_FORMAT = 2
+
+local function build_lines(game)
+    local L = {}
+    local function add(k, v) L[#L + 1] = string.format("%-24s %s", k, tostring(v)) end
+
+    add("report format", REPORT_FORMAT)
+
+    local ok_flags, Flags = pcall(require, "build_flags")
+    if ok_flags and type(Flags) == "table" then
+        add("game commit", Flags.commit or "(unpackaged tree)")
+        add("build target", Flags.target or "?")
+        add("build stamp", Flags.timestamp or (Flags.release and "release" or "-"))
+    end
+
+    local info = nil
+    if love.graphics.getRuntimeInfo then
+        local ok, got = pcall(love.graphics.getRuntimeInfo)
+        if ok and type(got) == "table" then info = got end
+    end
+
+    if info then
+        add("runtime patches", info.patch_version or "?")
+        add("runtime build", string.format("%s %s", tostring(info.runtime_build),
+            tostring(info.runtime_opt)))
+        add("runtime compiled", info.runtime_compiled or "?")
+        add("apt cpu time limit", tostring(info.cpu_time_limit) .. "%")
+    else
+        -- No binding means the runtime predates this optimisation pass, so nothing below
+        -- that depends on it is comparable with a report that has it.
+        add("runtime patches", "ABSENT (pre-optimisation runtime)")
+    end
+
+    local ok_flags, PerfFlags = pcall(require, "perf_flags")
+    if ok_flags and type(PerfFlags) == "table" and PerfFlags.state then
+        local flags = PerfFlags.state()
+        add("perf flags from", flags.source or "?")
+    end
+
+    local stats = batch_stats()
+    if stats then
+        local MODES = { [0] = "off", [1] = "on (expand to triangles)", [2] = "on (indexed)" }
+        add("renderer batching", MODES[stats.batching] or tostring(stats.batching))
+        add("vertex buffer", string.format("%d verts", stats.vcapacity or 0))
+        add("index buffer", string.format("%d indices", stats.icapacity or 0))
+    end
+
+    local ok_backdrop, Backdrop = pcall(require, "backdrop")
+    if ok_backdrop and type(Backdrop) == "table" and Backdrop.worker_status then
+        add("backdrop worker", Backdrop.worker_status())
+    end
+
+    return L
+end
+
 local function build_report(game)
     local out = {}
     out[#out + 1] = "Balatro3DS benchmark"
     out[#out + 1] = string.rep("=", 52)
+    out[#out + 1] = ""
+    out[#out + 1] = "-- build --"
+    for _, line in ipairs(build_lines(game)) do out[#out + 1] = line end
     out[#out + 1] = ""
     out[#out + 1] = "-- environment --"
     for _, line in ipairs(environment_lines(game)) do out[#out + 1] = line end
@@ -1270,11 +1641,13 @@ function Benchmark.extra_frames()
         if c.phase == "frame" then
             extra = extra + c.reps
         elseif c.phase == "draw" then
-            -- warmup + ceil(reps / per_frame) timed chunks + the recording frame, minus the
-            -- one frame every case is already allotted.
+            -- warmup + ceil(reps / per_frame) timed chunks + the recording frame, plus the
+            -- three probe frames when the case counts draws, minus the one frame every case
+            -- is already allotted.
             local per_frame = c.verts > 0
                 and math.max(1, math.floor(VERTEX_BUDGET / c.verts)) or c.reps
             extra = extra + 1 + math.ceil(c.reps / per_frame) + 1 - 1
+            if c.count_draws then extra = extra + 3 end
         end
     end
     return extra
