@@ -673,13 +673,6 @@ function MainMenuUI.draw_main(game)
         love.graphics.printf("Back", foot.x, label_y(foot), foot.w, "center")
     end
 
-    if is_root and game.SEED then
-        love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-        love.graphics.setColor(C.DARK_WHITE or C.GREY)
-        love.graphics.printf("Seed " .. tostring(game.SEED),
-            panel_x, foot_y - 14, panel_w, "center")
-    end
-
     game._main_menu_rects = rects
 
     local focus_idx = tonumber(game._menu_focus_index) or 1
