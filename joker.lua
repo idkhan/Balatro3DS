@@ -285,8 +285,42 @@ local function resolve_joker_sprite(key)
     return G:ensure_joker_sprite_loaded(key)
 end
 
+--- Fronts whose art does not fill the atlas cell. These three are drawn shorter than a card
+--- and their art is top-anchored in the cell with transparent padding underneath
+--- (`reference/Balatro/resources/textures/1x/Jokers.png`, cells 7,0 / 9,11 / 8,13 — measured
+--- from the alpha there and in the extracted `resources/textures/1x/Jokers/` sprites). The
+--- reference leaves them hanging from the top of a full-size card rect and masks every effect
+--- to the sprite's own alpha in a fragment shader, so nothing there has to know the real
+--- height. The PICA200 has neither a fragment stage nor a stencil, so here the edition
+--- silhouette, the debuff X and the focus outline are all plain rectangles over the cell, and
+--- each has to be told. Centring the art in the slot at the same time keeps those rectangles
+--- concentric with the cell, which is what lets the popup and tooltip anchors stay as they are.
+---
+--- Declared, never measured: on hardware `Image:getDimensions()` reports the power-of-two t3x
+--- size rather than the source PNG's, so a height derived from the image would be wrong
+--- on-device and right on desktop.
+local SHORT_ART_HEIGHT = {
+    j_half = 60,
+    j_square = 69,
+    j_photograph = 78,
+}
+
 function Joker.is_wee_def(def)
     return type(def) == "table" and def.id == Joker.WEE_JOKER_ID
+end
+
+--- Height of this joker's visible art and the offset that centres it in the cell, both in
+--- unscaled sprite pixels. Full-size fronts return the cell height and a zero offset, so
+--- callers can apply this unconditionally.
+---
+--- The offset is floored rather than left fractional: Square Joker's 25 px of padding would
+--- otherwise centre on a half pixel, and a sprite drawn at a half-texel offset samples
+--- between texels. That is a blurred row of pixel art on a 240p screen, to buy half a pixel
+--- of symmetry nobody can see.
+---@return number art_h, number offset_y
+function Joker:get_art_metrics()
+    local h = SHORT_ART_HEIGHT[self.def and self.def.id] or JOKER_SPRITE_H
+    return h, math.floor((JOKER_SPRITE_H - h) * 0.5)
 end
 
 function Joker:get_display_scale_mult()
@@ -962,9 +996,14 @@ function Joker:draw_tooltip(draw_x, draw_y)
     for _, line in ipairs(lines) do
         table.insert(resolved_lines, self:resolve_tooltip_line_segments(line))
     end
-    local card_w = self.VT.w * self:get_render_scale()
-    local card_h = self.VT.h * self:get_render_scale()
-    TooltipDraw.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, card_w, card_h)
+    -- Anchor on the art, not the cell: a tooltip hung off Half Joker's full-size box opens
+    -- level with 17 px of empty space.
+    local art_h, art_off = self:get_art_metrics()
+    local scale = self:get_render_scale()
+    local card_w = self.VT.w * scale
+    local card_h = art_h * scale
+    TooltipDraw.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y + art_off * scale,
+        card_w, card_h)
 end
 
 
@@ -1069,6 +1108,11 @@ function Joker:draw()
     -- the mask below; the stickers and the debuff wash over it ride a plain fade.
     local dissolve = self._card_lifecycle and self:lifecycle_dissolve() or nil
     local lifecycle_alpha = dissolve and (1 - dissolve) or 1
+    -- Short fronts (Half Joker and friends) carry their padding at the bottom of the cell;
+    -- `art_y` centres the whole face stack in the slot instead of letting it hang. Zero for
+    -- every other joker, so this costs one add on the common path.
+    local art_h, art_off = self:get_art_metrics()
+    local art_y = draw_y + art_off
     local cx = draw_x + (self.VT.w * base_scale) / 2
     local cy = draw_y + (self.VT.h * base_scale) / 2
     local shown_up = self.sprite_face_up
@@ -1088,7 +1132,7 @@ function Joker:draw()
         local b1, b2 = self:lifecycle_burn()
         local seed = self:lifecycle_seed()
         if shown_up and self.front_sprite and self.front_sprite.image then
-            masked = Fx.draw_dissolve_image(self.front_sprite.image, draw_x, draw_y,
+            masked = Fx.draw_dissolve_image(self.front_sprite.image, draw_x, art_y,
                 dissolve, b1, b2, seed)
         elseif not shown_up and self.back_atlas and self.back_atlas.image and self.back_quad then
             local qx, qy, qw, qh = self.back_quad:getViewport()
@@ -1101,7 +1145,7 @@ function Joker:draw()
     if masked then
         -- The sub-position overlay (the soul/floating sprite) is part of the art, so it is
         -- masked with it or not at all; it fades on the same curve instead.
-        if shown_up then self:draw_sub_pos_overlay(draw_x, draw_y, lifecycle_alpha) end
+        if shown_up then self:draw_sub_pos_overlay(draw_x, art_y, lifecycle_alpha) end
     elseif shown_up then
         if self.front_sprite and self.front_sprite.image then
             local ed = Joker.normalize_edition(self.edition)
@@ -1109,23 +1153,27 @@ function Joker:draw()
                 -- Full-image form on purpose: it draws the exact same rectangle as
                 -- the plain draw below, so an edition can never change the sprite's
                 -- apparent size or placement (cell-based UVs against a padded t3x do).
+                -- `art_h` only crops the additive silhouette pass, which is a baked
+                -- full-card mask and would otherwise hang below a short front.
                 local ft = Fx.time()
-                Fx.draw_edition_image(self.front_sprite.image, draw_x, draw_y, ed, ft,
-                    Fx.foil_phase(rot, self.juice_r, ft), self:edition_seed())
+                Fx.draw_edition_image(self.front_sprite.image, draw_x, art_y, ed, ft,
+                    Fx.foil_phase(rot, self.juice_r, ft), self:edition_seed(), art_h)
             else
                 set_shop_edition_tint(ed)
-                love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)
+                love.graphics.draw(self.front_sprite.image, draw_x, art_y, 0, 1, 1)
             end
             love.graphics.setColor(1, 1, 1, lifecycle_alpha)
         end
-        self:draw_sub_pos_overlay(draw_x, draw_y, lifecycle_alpha)
+        self:draw_sub_pos_overlay(draw_x, art_y, lifecycle_alpha)
     else
         if self.back_atlas and self.back_atlas.image and self.back_quad then
             love.graphics.draw(self.back_atlas.image, self.back_quad, draw_x, draw_y, 0, 1, 1)
         end
     end
 
-    self:draw_sticker_overlays(draw_x, draw_y)
+    -- Stickers are top-left badges on the card they mark, so they ride the art when a short
+    -- front is showing and the full cell when the (always full-size) back is.
+    self:draw_sticker_overlays(draw_x, shown_up and art_y or draw_y)
 
     if joker_is_debuffed_for_display(self) then
         -- Grey wash: redraw the art tinted so the wash follows the sprite's silhouette rather than
@@ -1133,12 +1181,16 @@ function Joker:draw()
         love.graphics.setColor(DEBUFF_WASH_R, DEBUFF_WASH_G, DEBUFF_WASH_B, DEBUFF_WASH_A * lifecycle_alpha)
         if shown_up then
             if self.front_sprite and self.front_sprite.image then
-                love.graphics.draw(self.front_sprite.image, draw_x, draw_y, 0, 1, 1)
+                love.graphics.draw(self.front_sprite.image, draw_x, art_y, 0, 1, 1)
             end
         elseif self.back_atlas and self.back_atlas.image and self.back_quad then
             love.graphics.draw(self.back_atlas.image, self.back_quad, draw_x, draw_y, 0, 1, 1)
         end
-        draw_debuff_x_overlay(draw_x, draw_y, self.VT.w, self.VT.h)
+        if shown_up then
+            draw_debuff_x_overlay(draw_x, art_y, self.VT.w, art_h)
+        else
+            draw_debuff_x_overlay(draw_x, draw_y, self.VT.w, self.VT.h)
+        end
     end
 
     love.graphics.pop()

@@ -15526,6 +15526,18 @@ function Game:draw_node_gamepad_focus_outline(node)
     if not r then return end
     local lift_y = self:shop_joker_selection_lift_y(node)
     r = { x = r.x, y = r.y + lift_y, w = r.w, h = r.h }
+    -- The collision rect is the full card slot, which is what keeps the shop and joker rows
+    -- gapless to touch. The outline is meant to trace the card the player can see, and a few
+    -- joker fronts are drawn shorter than their slot (`joker.lua` SHORT_ART_HEIGHT), so pull
+    -- it in to the art. Centred art keeps this a symmetric inset.
+    if node.get_art_metrics then
+        local art_h, art_off = node:get_art_metrics()
+        local scale = node.get_render_scale and node:get_render_scale() or 1
+        if art_h * scale < r.h then
+            r.y = r.y + art_off * scale
+            r.h = art_h * scale
+        end
+    end
     local lw = love.graphics.getLineWidth()
     love.graphics.setLineWidth(2)
     if self:is_joker_swap_pick(node) then
