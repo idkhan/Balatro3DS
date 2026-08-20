@@ -667,6 +667,18 @@ function Hand:ordered_selected_nodes()
     return out
 end
 
+--- Whether picking a card should also make it the tooltip's subject. The d-pad cursor already
+--- owns the tooltip while the buttons drive, and two claims on it fight; on touch there is no
+--- cursor, so the tapped card is the only thing that can show one.
+local function selection_owns_tooltip(game)
+    if not game then return false end
+    if game.is_card_select_mode and game:is_card_select_mode()
+        and (not game.gamepad_focus_visible or game:gamepad_focus_visible()) then
+        return false
+    end
+    return true
+end
+
 function Hand:is_selected(node)
     for _, n in ipairs(self.selected) do
         if n == node then return true end
@@ -702,10 +714,8 @@ function Hand:toggle_selection(node)
             -- ramp this used to run was
             -- `highlight_card`, which belongs to the scoring lift, not to clicking a card.
             table.remove(self.selected, i)
-            if self.game then
-                if not (self.game.is_card_select_mode and self.game:is_card_select_mode()) then
-                    self.game.active_tooltip_card = nil
-                end
+            if self.game and selection_owns_tooltip(self.game) then
+                self.game.active_tooltip_card = nil
             end
             if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
             self:calculate_play()
@@ -720,11 +730,9 @@ function Hand:toggle_selection(node)
     -- (`cardarea.lua:140`).
     Sfx.play("cardSlide1")
     table.insert(self.selected, node)
-    if self.game then
-        if not (self.game.is_card_select_mode and self.game:is_card_select_mode()) then
-            self.game.active_tooltip_card = node
-            self.game.active_tooltip_joker = nil
-        end
+    if self.game and selection_owns_tooltip(self.game) then
+        self.game.active_tooltip_card = node
+        self.game.active_tooltip_joker = nil
     end
     if self.game.move_selected_hand_cards_to_front then self.game:move_selected_hand_cards_to_front() end
     self:calculate_play()

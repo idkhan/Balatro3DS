@@ -275,9 +275,15 @@ function love.draw(screen)
     end
 end
 
---- Button input takes the focus outline back from the touch screen.
-local function note_button_input()
-    if G and G.note_input_mode then G:note_input_mode("gamepad") end
+--- Button input takes the focus outline back from the touch screen. Returns true when the press
+--- was spent doing exactly that: the focus target is invisible while the finger drives, so the
+--- press that brings it back must not also act on it.
+local function note_button_input(button)
+    if not G or not G.note_input_mode then return false end
+    local consumed = button and G.consumes_focus_restore_press
+        and G:consumes_focus_restore_press(button) or false
+    G:note_input_mode("gamepad")
+    return consumed
 end
 
 --- Profile renaming swallows keys so letters do not double as gamepad shortcuts.
@@ -306,7 +312,9 @@ function love.keypressed(key)
         ProfileUI.handle_key(G, key)
         return
     end
-    note_button_input()
+    -- Keys that map to a button go through `love.gamepadpressed`, which notes the mode itself;
+    -- doing it here too would spend the focus-restore press before that call can see it.
+    if not key_to_gamepad_button(key) then note_button_input() end
     if key == "f1" then
         if G then G.DEBUG = not G.DEBUG end
         return
@@ -363,8 +371,8 @@ function love.gamepadpressed(_, button)
     -- controller (`reference/Balatro/engine/controller.lua:190`). The scene under the cover is
     -- half built and its hitboxes are wherever the last frame left them.
     if ScreenWipe.active(G) then return end
-    note_button_input()
     button = InputBindings.normalize_gamepad_button(button)
+    if note_button_input(button) then return end
     if G and G.STATE == G.STATES.PAUSED and G.handle_controls_listen_press then
         if G:handle_controls_listen_press(button) then
             return
@@ -532,8 +540,9 @@ function love.gamepadaxis(joystick, axis, value)
     if not trigger_btn or not InputBindings.is_rebindable_button(trigger_btn) then return end
 
     local threshold = InputBindings.TRIGGER_AXIS_THRESHOLD
+    -- No `note_button_input` here: the synthesized `love.gamepadpressed` below does it, and
+    -- noting the mode twice would spend the focus-restore press before that call sees it.
     local pressed = (tonumber(value) or 0) > threshold
-    if pressed then note_button_input() end
     G._trigger_axis_held = G._trigger_axis_held or {}
     local was = G._trigger_axis_held[trigger_btn] == true
 

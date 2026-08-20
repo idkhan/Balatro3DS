@@ -5002,7 +5002,10 @@ function Game:draw_tooltips_on_top()
     if self._collection_open and self._menu_sub_state == "collection_grid" then
         return
     end
-    if self:is_card_select_mode() then
+    -- The d-pad cursor owns the hand tooltip only while the buttons are driving. On touch the
+    -- cursor is invisible, so its tooltip falls through to the per-node pass below, which draws
+    -- for the card the finger actually tapped (`active_tooltip_card`).
+    if self:is_card_select_mode() and self:gamepad_focus_visible() then
         local node = self:dpad_cursor_node()
         if node and node.draw_tooltip_overlay then
             node:draw_tooltip_overlay()
@@ -15230,7 +15233,9 @@ function Game:joker_gamepad_focus_at(idx)
     self._joker_focus_index = idx
     self:clear_bottom_tooltips()
     local node = self.jokers[idx]
-    if node then
+    -- A panel pulled down by touch still sets the focus index, but showing its tooltip would put
+    -- a readout on screen for a joker the finger never touched.
+    if node and self:gamepad_focus_visible() then
         self.active_tooltip_joker = node
         self:move_to_front(node)
     end
@@ -15260,9 +15265,10 @@ function Game:consumable_gamepad_focus_at(idx)
     self._consumable_focus_index = idx
     self.active_tooltip_joker = nil
     self.active_tooltip_card = nil
-    self.active_tooltip_consumable_index = idx
+    -- Same as the joker row: index yes, tooltip only when the buttons are driving.
+    self.active_tooltip_consumable_index = self:gamepad_focus_visible() and idx or nil
     local node = nodes[idx]
-    if node then
+    if node and self:gamepad_focus_visible() then
         self:move_to_front(node)
     end
     return node
@@ -15566,9 +15572,92 @@ end
 --- Track whether the player is currently steering with the touch screen or the
 --- buttons. Focus outlines only make sense for button navigation; on touch the
 --- finger is the cursor and an outline just reads as a stray black box.
+---
+--- This is the port's `Controller.HID.last_type` (`reference/Balatro/engine/controller.lua:136`):
+--- one flag holding whichever device was used last, flipped by the event itself rather than by a
+--- timer, and everything focus-related reads it. The reference drops `focused.target` outright
+--- the moment the pointer takes over (`controller.lua:167-175`) and suppresses hover entirely
+--- while a touch is not down (`controller.lua:358`), which is why a mouse player never sees the
+--- controller's snap-to land on anything. Same rule here: while the finger is driving, nothing is
+--- focused until it lands on something.
 ---@param mode "touch"|"gamepad"
 function Game:note_input_mode(mode)
+    if mode ~= "touch" and mode ~= "gamepad" then return end
+    local prev = self.input_mode
     self.input_mode = mode
+    if mode == prev then return end
+    if mode == "touch" then
+        -- Drop whatever the buttons had focused. Touch handlers run after this and set their
+        -- own tooltip, so clearing here only ever removes a selection the finger did not make.
+        self:clear_bottom_tooltips()
+    else
+        self:restore_gamepad_focus()
+    end
+end
+
+--- Bring the focus target back when the player picks the buttons up again. The focus *indices*
+--- survive touch mode untouched, so this only has to re-derive the layers whose target was left
+--- unset while the finger was driving.
+function Game:restore_gamepad_focus()
+    local layer = self:get_gamepad_focus_layer()
+    if layer == "jokers" and #(self.jokers or {}) > 0 then
+        -- Whatever the finger last put a tooltip on wins, so the focus lands where the player
+        -- was already looking rather than snapping back to the first slot.
+        local idx = tonumber(self._joker_focus_index) or 1
+        for i, joker in ipairs(self.jokers) do
+            if joker == self.active_tooltip_joker then idx = i break end
+        end
+        self:joker_gamepad_focus_at(idx)
+        return
+    end
+    if layer == "consumables" and self.consumable_nodes and #self.consumable_nodes > 0 then
+        local idx = tonumber(self.active_tooltip_consumable_index)
+            or tonumber(self._consumable_focus_index) or 1
+        self:consumable_gamepad_focus_at(idx)
+        return
+    end
+    if self.STATE == self.STATES.OPEN_BOOSTER and self.booster_session
+        and not self:is_hand_cursor_active() then
+        if not tonumber(self.booster_session.active_choice_index) then
+            self:booster_gamepad_focus_first()
+        end
+        return
+    end
+    if self.STATE == self.STATES.SHOP and tonumber(self._shop_focus_index) then
+        self:sync_shop_gamepad_focus()
+    end
+end
+
+--- Which buttons the first press after a touch spends on restoring focus instead of acting.
+local FOCUS_RESTORE_DIRECTIONS = {
+    up = true, down = true, left = true, right = true,
+    dpup = true, dpdown = true, dpleft = true, dpright = true,
+}
+
+--- True when the focus target is currently invisible and the given button would act on it.
+--- A mouse player always has a cursor on screen, so the reference has nothing to restore; a
+--- touch player does not, and letting confirm fire on whatever the cursor was last parked on
+--- picks a card they cannot see. Directions restore rather than step, which is what the
+--- reference does too -- `update_focus(dir)` with no live target picks a node instead of moving
+--- off one (`controller.lua:1128-1140`). Buttons that act on the *selection* (play, discard) or
+--- on global UI (start, panels) are never swallowed.
+---@return boolean
+function Game:consumes_focus_restore_press(button)
+    if self.input_mode ~= "touch" then return false end
+    if self.STATE == self.STATES.PAUSED or self._deck_view_open or self._collection_open then
+        return false
+    end
+    local s = self.STATE
+    if s ~= self.STATES.SELECTING_HAND and s ~= self.STATES.SHOP and s ~= self.STATES.OPEN_BOOSTER then
+        return false
+    end
+    if FOCUS_RESTORE_DIRECTIONS[button] then return true end
+    local role = self.get_role_for_button and self:get_role_for_button(button)
+    if role == "confirm" then return true end
+    -- Cancel is sell on the pulled-down rows and deselect/sort in the hand; only the former
+    -- reads the focus target.
+    if role == "cancel" then return self:get_gamepad_focus_layer() ~= "hand" end
+    return false
 end
 
 function Game:gamepad_focus_visible()
@@ -15577,6 +15666,10 @@ end
 
 function Game:should_draw_gamepad_focus_outline(node)
     if not node then return false end
+    -- Card, Joker and Consumable each read this to decide whether to volunteer a tooltip, so it
+    -- has to answer "is this node's focus on screen", not just "is it the focus target". While
+    -- the finger is driving there is no focus on screen at all.
+    if not self:gamepad_focus_visible() then return false end
     if self:is_hand_cursor_active() and self:dpad_cursor_node() == node then
         return true
     end
@@ -15748,6 +15841,12 @@ function Game:booster_gamepad_focus_first()
     if not sess then return nil end
     local indices = self:booster_gamepad_untaken_indices()
     if #indices == 0 then return nil end
+    -- Opening a pack must not pop a tooltip on the leftmost card when nothing has been touched.
+    -- The buttons take focus back through `restore_gamepad_focus`.
+    if not self:gamepad_focus_visible() then
+        sess.active_choice_index = nil
+        return nil
+    end
     sess.active_choice_index = indices[1]
     local node = sess.choice_nodes and sess.choice_nodes[indices[1]]
     if node then self:move_to_front(node) end

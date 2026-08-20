@@ -967,7 +967,10 @@ function Card:should_draw_tooltip()
     if not self.face_up then return false end
     if G and G.is_hand_scoring_active and G:is_hand_scoring_active() then return false end
     if G and G._collection_open and G._collection_tooltip_node == self then return true end
-    if G and G.is_hand_cursor_active and G:is_hand_cursor_active() then
+    -- The d-pad cursor only claims the tooltip while the buttons are driving. On touch it is
+    -- invisible, so the tapped card claims it through `active_tooltip_card` at the bottom.
+    if G and G.is_hand_cursor_active and G:is_hand_cursor_active()
+        and (not G.gamepad_focus_visible or G:gamepad_focus_visible()) then
         return G:dpad_cursor_node() == self
     end
     if self.shop_offer_slot and G and G.STATE == G.STATES.SHOP and G.active_tooltip_joker == self then
