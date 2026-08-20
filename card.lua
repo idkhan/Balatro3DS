@@ -487,11 +487,15 @@ local function card_edition_for_display(card)
     return nil
 end
 
+-- Flat stand-in for the mesh passes on an Old 3DS shop shelf (`Fx.shop_editions_animated`).
+-- These track the animated base multiplies in fx.lua, pushed a little further because a
+-- static tint has no shimmer carrying the read: foil cold, holo red-pink (it is the
+-- +Mult edition), polychrome violet.
 local function set_shop_edition_tint(edition)
     if edition == "foil" then
-        love.graphics.setColor(0.80, 0.90, 1.0, 1)
+        love.graphics.setColor(0.74, 0.72, 1.0, 1)
     elseif edition == "holo" then
-        love.graphics.setColor(0.94, 0.82, 1.0, 1)
+        love.graphics.setColor(1.0, 0.78, 0.88, 1)
     elseif edition == "polychrome" then
         love.graphics.setColor(0.88, 0.72, 1.0, 1)
     else

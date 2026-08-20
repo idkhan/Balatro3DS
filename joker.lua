@@ -210,14 +210,16 @@ end
 -- Edition visuals: foil/holo/polychrome go through the Fx mesh passes; negative uses
 -- a dedicated baked sprite (see sprite_key_from_pos).
 
---- Shop shelves favor a stable frame rate over animated edition sweeps. A flat
---- multiply keeps the edition recognizable without rebuilding two meshes per item
---- every frame on the 3DS.
+--- Shop shelves favor a stable frame rate over animated edition sweeps, so this is a flat
+--- stand-in for the mesh passes on an Old 3DS shelf (`Fx.shop_editions_animated`). The tints
+--- track the animated base multiplies in fx.lua, pushed a little further because a static
+--- tint has no shimmer carrying the read: foil cold, holo red-pink (it is the +Mult edition),
+--- polychrome violet.
 local function set_shop_edition_tint(edition)
     if edition == "foil" then
-        love.graphics.setColor(0.80, 0.90, 1.0, 1)
+        love.graphics.setColor(0.74, 0.72, 1.0, 1)
     elseif edition == "holo" then
-        love.graphics.setColor(0.94, 0.82, 1.0, 1)
+        love.graphics.setColor(1.0, 0.78, 0.88, 1)
     elseif edition == "polychrome" then
         love.graphics.setColor(0.88, 0.72, 1.0, 1)
     else
