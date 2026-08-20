@@ -11,6 +11,21 @@
 scripts/*
 tools/*
 
+# Local dev tooling: downloaded binaries, build cache, output and the dev server
+dev/.tools/
+dev/.cache/
+dev/.venv/
+dev/dist/
+dev/server/
+__pycache__/
+
 # Misc
 Bugs.txt
 conf.lua
+.DS_Store
+
+# Design iteration scratch
+.scratch/
+
+# Reference material + review notes (not for version control)
+reference/

@@ -49,7 +49,7 @@ VOUCHER_DEFS = {
     },
     v_reroll = {
         id = "v_reroll",
-        name = "Reroll",
+        name = "Reroll Surplus",
         description = "Rerolls cost $2 less",
         pos = 17,
         tier = 1,
@@ -239,14 +239,14 @@ VOUCHER_DEFS = {
     v_grabber = {
         id = "v_grabber",
         name = "Grabber",
-        description = "Permanently gain +1 hand per round ",
+        description = "Permanently gain +1 hand per round",
         pos = 5,
         tier = 1
     },
     v_nacho = {
         id = "v_nacho",
-        name = "Nacho Tongs",
-        description = "Permanently gain an additional +1 hand per round ",
+        name = "Nacho Tong",
+        description = "Permanently gain an additional +1 hand per round",
         pos = 14,
         tier = 2,
         unlock = "Play a total of 2500 cards",
