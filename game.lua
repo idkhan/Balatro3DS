@@ -1121,8 +1121,14 @@ function Game:sync_shop_offer_nodes()
         table.remove(self.shop_offer_nodes, i)
     end
 
+    -- Cards that materialise on the shelf this pass and carry an edition: the reference
+    -- announces every one of them (`card.lua:430-452`), so the shop is where a player
+    -- most often hears foil/holo/polychrome/negative.
+    local revealed = nil
+
     for i, offer in ipairs(self.shop_offers) do
         local node = self.shop_offer_nodes[i]
+        local existing = node
         local need_joker = (offer.kind == nil or offer.kind == "joker")
         local need_cons = (offer.kind == "tarot" or offer.kind == "planet" or offer.kind == "spectral")
         local need_pc = (offer.kind == "playing_card")
@@ -1195,8 +1201,36 @@ function Game:sync_shop_offer_nodes()
             node.states.click.can = self:shop_nodes_interactive()
             node.states.drag.can = self:shop_nodes_interactive()
             node.states.collide.can = false
+            if node ~= existing then
+                local ed = self:shop_offer_edition(offer)
+                if ed then
+                    node.edition_reveal_pending = ed
+                    revealed = revealed or {}
+                    revealed[#revealed + 1] = node
+                end
+            end
         end
     end
+
+    if revealed then self:begin_edition_reveals(revealed) end
+end
+
+--- The edition a shop offer will show, or nil for a plain one. Jokers and consumables
+--- carry it on the offer; a playing card carries it on its card data, the same split the
+--- rest of the shop code uses.
+---@param offer table
+---@return string|nil
+function Game:shop_offer_edition(offer)
+    if type(offer) ~= "table" then return nil end
+    local ed = offer.edition
+    if ed == nil and type(offer.card_data) == "table" then
+        local mod = offer.card_data.modifier
+        ed = type(mod) == "table" and mod.edition or nil
+    end
+    if type(ed) ~= "string" then return nil end
+    if Joker and Joker.normalize_edition then ed = Joker.normalize_edition(ed) end
+    if ed == "base" then return nil end
+    return ed
 end
 
 function Game:layout_shop_offer_nodes(param)
@@ -4134,8 +4168,12 @@ function Game:load_run_snapshot(snapshot)
     end
 
     if self.sync_shop_offer_nodes then
+        -- Restoring a save rebuilds every shop node at once. Those cards are not
+        -- appearing, they are being put back, so they announce nothing.
+        self._suppress_edition_reveals = true
         self:purge_all_joker_pool_swaps_from_shop()
         self:sync_shop_offer_nodes()
+        self._suppress_edition_reveals = nil
     end
     if self.sync_shop_booster_nodes then
         self:sync_shop_booster_nodes()
@@ -5884,6 +5922,9 @@ function Game:apply_consumable_effect(c)
                 if ord[1].sync_visual_from_card_data then
                     ord[1]:sync_visual_from_card_data()
                 end
+                -- `set_edition` is never silent here (`card.lua:1195` passes no `silent`),
+                -- so Aura's result announces itself like any other edition.
+                self:announce_edition(ord[1], picked)
             end
         elseif id == "spectral_wraith" then
             local jid = self:random_joker_def_id_by_rarity(3, "wraith")
@@ -5927,6 +5968,7 @@ function Game:apply_consumable_effect(c)
                         self:discover_edition(j.edition)
                         if j.refresh_quads then j:refresh_quads() end
                         self:refresh_joker_capacity_from_negatives()
+                        self:announce_edition(j, j.edition)
                         break
                     end
                     attempts = attempts + 1
@@ -6106,6 +6148,7 @@ function Game:apply_consumable_effect(c)
                 self:discover_edition(j.edition)
                 if j.refresh_quads then j:refresh_quads() end
                 self:refresh_joker_capacity_from_negatives()
+                self:announce_edition(j, j.edition)
             end
         else 
             local p = Popup()
@@ -8135,6 +8178,7 @@ function Game:update(dt, real_dt)
     self:_update_scene_transitions(real_dt)
     self:_update_blind_defeat(real_dt)
     self:_update_card_ripple(real_dt)
+    self:_update_edition_reveals(real_dt)
     self:_update_boss_announce_sting(real_dt)
     -- The level-up ladder is an event-queue sequence in the reference, and events run off the
     -- `TOTAL` timer by default (`engine/event.lua:22`), so it scales with the game-speed
@@ -12902,6 +12946,89 @@ function Game:_update_card_ripple(dt)
     end
 
     if rip.next > #rip.queue then self._card_ripple = nil end
+end
+
+--- Announce an edition the moment its card becomes visible.
+---
+--- `Card:set_edition` never sets an edition silently: it queues an event that juices the
+--- card and plays the edition's own sting 0.2 s later, holding the controller for the
+--- duration (`reference/Balatro/card.lua:430-452`). A shop shelf full of editioned cards
+--- therefore announces itself card by card rather than all at once, which is what makes a
+--- polychrome offer register before the player has read a single price.
+---
+--- The port has no event manager, so this is the same shape as `begin_card_ripple`: a
+--- queue drained against real time from `update`.
+local EDITION_REVEAL_DELAY = 0.2
+local EDITION_REVEAL_STAGGER = 0.28
+
+---@param nodes table[] display nodes carrying a non-base edition, in shelf order
+function Game:begin_edition_reveals(nodes)
+    if self._suppress_edition_reveals then return end
+    if type(nodes) ~= "table" or #nodes == 0 then return end
+    local queue = self._edition_reveals and self._edition_reveals.queue or {}
+    -- A reveal already in flight keeps its clock; new cards queue behind it so two
+    -- stings never land on the same frame.
+    local base = 0
+    for _, entry in ipairs(queue) do
+        if entry.at > base then base = entry.at end
+    end
+    if #queue == 0 then base = EDITION_REVEAL_DELAY - EDITION_REVEAL_STAGGER end
+    for _, node in ipairs(nodes) do
+        base = base + EDITION_REVEAL_STAGGER
+        queue[#queue + 1] = { at = base, node = node, edition = node.edition_reveal_pending }
+    end
+    self._edition_reveals = self._edition_reveals or { t = 0, next = 1 }
+    self._edition_reveals.queue = queue
+end
+
+--- Drain the reveal queue: the reference's `juice_up(1, 0.5)` plus the edition's sting.
+---@param dt number real seconds
+function Game:_update_edition_reveals(dt)
+    local rev = self._edition_reveals
+    if not rev then return end
+    if self.STATE == self.STATES.PAUSED then return end
+
+    -- A shop shelf is built while the panel is still sliding in and its nodes are
+    -- hidden (`shop_contents_hidden`). Announcing a card the player cannot see yet puts
+    -- the sting ahead of the reveal, so the clock holds until the card is on screen.
+    local head = rev.queue[rev.next]
+    local head_node = head and head.node
+    if head_node and head_node.states and head_node.states.visible == false then return end
+
+    rev.t = rev.t + dt
+    while rev.next <= #rev.queue and rev.t >= rev.queue[rev.next].at do
+        local entry = rev.queue[rev.next]
+        rev.next = rev.next + 1
+        local node = entry.node
+        if node then
+            -- Reference `card.lua:441`.
+            if node.juice_up then node:juice_up(1, 0.5) end
+            node.edition_reveal_pending = nil
+        end
+        if Joker and Joker.play_edition_reveal_sfx then
+            Joker.play_edition_reveal_sfx(entry.edition)
+        end
+    end
+
+    if rev.next > #rev.queue then self._edition_reveals = nil end
+end
+
+--- Queue a reveal for a single node that has just been given an edition (Aura, Wheel of
+--- Fortune, a Negative Tag), matching the shop path.
+---@param node table|nil
+---@param edition string|nil
+function Game:announce_edition(node, edition)
+    local ed = Joker and Joker.normalize_edition and Joker.normalize_edition(edition)
+        or edition
+    if not ed or ed == "base" then return end
+    if not node then
+        if not self._suppress_edition_reveals and Joker and Joker.play_edition_reveal_sfx then
+            Joker.play_edition_reveal_sfx(ed)
+        end
+        return
+    end
+    node.edition_reveal_pending = ed
+    self:begin_edition_reveals({ node })
 end
 
 --- The beat between clearing a blind and the Cash Out panel arriving.
