@@ -29,6 +29,12 @@ local function readout(g, slot)
     return j and j._jd_main, j and j._jd_note
 end
 
+--- Whether that readout is drawn in the inactive grey.
+local function dimmed(g, slot)
+    local j = g.jokers[slot or 1]
+    return j and j._jd_main_dim == true
+end
+
 suite.test("nothing is computed while the setting is off", function()
     local g = game_with_display()
     g.SETTINGS.JOKER_DISPLAY = false
@@ -43,13 +49,16 @@ suite.test("a flat Mult joker reads its own number", function()
     T.assert_eq(readout(g), "+4")
 end)
 
-suite.test("a hand-type joker only shows when the selection contains that hand", function()
+suite.test("a hand-type joker reads zero, greyed, when the hand does not contain it", function()
+    -- Not blank: a blank panel cannot distinguish "this Joker will do nothing with what you have
+    -- selected" from "the readout has never heard of this Joker".
     local g, hand = game_with_display()
     g:add_joker_by_def("j_jolly")
     hand:add_card({ rank = 10, suit = "Spades" })
     hand:add_card({ rank = 4, suit = "Hearts" })
     select_all(hand)
-    T.assert_nil(readout(g), "High Card is not a Pair")
+    T.assert_eq(readout(g), "+0", "High Card is not a Pair")
+    T.assert_true(dimmed(g), "and it says so by going grey")
 
     hand:clear_selection()
     hand:add_card({ rank = 10, suit = "Hearts" })
@@ -57,6 +66,7 @@ suite.test("a hand-type joker only shows when the selection contains that hand",
         if (node.card_data or {}).rank == 10 then hand:toggle_selection(node) end
     end
     T.assert_eq(readout(g), "+8", "a Pair pays Jolly Joker")
+    T.assert_false(dimmed(g), "and comes back up to the Mult colour")
 end)
 
 suite.test("a suit joker totals every scoring card of its suit", function()
@@ -100,17 +110,28 @@ suite.test("a money joker reads in dollars", function()
     T.assert_eq(readout(g), "$4", "one dollar of interest per whole $5")
 end)
 
-suite.test("Blueprint names what it is copying", function()
+suite.test("Blueprint wears the readout of whatever it is copying", function()
+    -- The mod replaces Blueprint's display with the copied Joker's, rather than naming it: a
+    -- Blueprint on a Baron should read the Kings in your hand, not the word "Baron".
     local g = game_with_display()
     g:add_joker_by_def("j_blueprint")
     g:add_joker_by_def("j_joker")
-    T.assert_eq(readout(g, 1), "Joker")
+    T.assert_eq(readout(g, 1), "+4")
 end)
 
-suite.test("Blueprint says so when the slot to its right cannot be copied", function()
+suite.test("Blueprint reads N/A when the slot to its right cannot be copied", function()
     local g = game_with_display()
     g:add_joker_by_def("j_blueprint")
-    T.assert_eq(readout(g, 1), "none", "with nothing to the right there is no target")
+    T.assert_eq(readout(g, 1), "N/A", "with nothing to the right there is no target")
+end)
+
+suite.test("Blueprint follows a chain of copycats to the Joker at the end", function()
+    local g = game_with_display()
+    g:add_joker_by_def("j_blueprint")
+    g:add_joker_by_def("j_blueprint")
+    g:add_joker_by_def("j_bull")
+    g.money = 7
+    T.assert_eq(readout(g, 1), "+14", "two Blueprints deep, still reading the Bull")
 end)
 
 suite.test("a Joker the Blind has switched off shows nothing", function()
@@ -154,9 +175,9 @@ suite.test("Dusk reads the hand being built as the last one", function()
     select_all(hand)
 
     g.hands = 2
-    T.assert_nil(readout(g), "with two hands left Dusk is not up yet")
+    T.assert_eq(readout(g), "+0", "with two hands left Dusk is not up yet")
     g.hands = 1
-    T.assert_eq(readout(g), "1", "the hand on the table is the final one")
+    T.assert_eq(readout(g), "+1", "the hand on the table is the final one")
 end)
 
 suite.test("a panel is laid out even while the card reads as invisible", function()
@@ -216,6 +237,128 @@ suite.test("the readouts use the face the rest of the game reads in", function()
     -- fallback everywhere else, which read soft next to the surrounding UI.
     local g = game_with_display()
     T.assert_eq(g.FONTS.PIXEL.SMALL_HEIGHT, 13, "SMALL is the native ladder's 13 px sheet")
+end)
+
+suite.test("a chance joker reads its rolls, not a payout it is not guaranteed", function()
+    -- Three face cards under Business Card is three coin flips at $2, not $6. Showing the total
+    -- claims a certainty the Joker does not have.
+    local g, hand = game_with_display()
+    g:add_joker_by_def("j_business")
+    hand:add_card({ rank = 13, suit = "Spades" })
+    hand:add_card({ rank = 13, suit = "Hearts" })
+    hand:add_card({ rank = 12, suit = "Clubs" })
+    select_all(hand)
+
+    local main, note = readout(g)
+    T.assert_eq(main, "2x$2", "the Pair scores, so two face cards roll")
+    T.assert_eq(note, "1 in 2", "and the odds ride alongside")
+end)
+
+suite.test("a chance joker's rolls include retriggers and read zero when nothing qualifies", function()
+    local g, hand = game_with_display()
+    g:add_joker_by_def("j_bloodstone")
+    g:add_joker_by_def("j_sock_and_buskin")
+    hand:add_card({ rank = 13, suit = "Hearts" })
+    hand:add_card({ rank = 13, suit = "Hearts" })
+    select_all(hand)
+    T.assert_eq(readout(g, 1), "4xX1.5", "two Kings, each retriggered once")
+
+    hand:clear_selection()
+    T.assert_eq(readout(g, 1), "0xX1.5", "nothing selected, nothing to roll")
+    T.assert_true(dimmed(g, 1))
+end)
+
+suite.test("a state-only joker reads whether it is switched on", function()
+    local g = game_with_display()
+    g:add_joker_by_def("j_burnt")
+    g.discards = 3
+    T.assert_eq(readout(g), "ON")
+    T.assert_false(dimmed(g))
+    g.discards = 0
+    T.assert_eq(readout(g), "OFF")
+    T.assert_true(dimmed(g), "and greys out when it is not")
+end)
+
+suite.test("every Joker the game defines is either covered or deliberately blank", function()
+    -- The gap this guards is a Joker added to the catalog with no readout: the panel is silent
+    -- and there is nothing to tell you whether that is the Joker or the feature.
+    local g = game_with_display()
+    local uncovered = {}
+    for id in pairs(JOKER_DEFS) do
+        if not JokerDisplay.DEFS[id] and not JokerDisplay.PASSIVE[id] then
+            uncovered[#uncovered + 1] = id
+        end
+    end
+    table.sort(uncovered)
+    T.assert_eq(#uncovered, 0, "unclassified Jokers: " .. table.concat(uncovered, ", "))
+end)
+
+suite.test("a counter reads as one ratio rather than a value and a stray denominator", function()
+    local g = game_with_display()
+    g:add_joker_by_def("j_seltzer")
+    local main, note = readout(g)
+    T.assert_eq(main, "10/10")
+    T.assert_eq(note, "hands", "the denominator belongs to the value, not the reminder")
+end)
+
+suite.test("the readouts match the mod's definitions joker for joker", function()
+    -- One fixed board, walked against the values read out of the mod's
+    -- `definitions/display_definitions.lua`. This is the parity check: the point of the feature
+    -- is that it says what JokerDisplay says.
+    local g, hand = game_with_display(1234)
+    hand:add_card({ rank = 13, suit = "Hearts" })
+    hand:add_card({ rank = 13, suit = "Spades" })
+    hand:add_card({ rank = 4, suit = "Diamonds" })
+    hand:add_card({ rank = 8, suit = "Clubs" })
+    hand:add_card({ rank = 6, suit = "Hearts" })
+    select_all(hand)
+    -- The Pair of Kings scores; the 4, 8 and 6 do not.
+
+    local cases = {
+        -- flat and hand-type
+        { "j_joker",            "+4",     nil },
+        { "j_jolly",            "+8",     "Pair" },
+        { "j_zany",             "+0",     "Three of a Kind" },
+        { "j_duo",              "X2",     "Pair" },
+        { "j_tribe",            "X1",     "Flush" },
+        -- suits and ranks, summed over the scoring cards only
+        { "j_lusty_joker",      "+3",     "Hearts" },
+        { "j_greedy_joker",     "+0",     "Diamonds" },
+        { "j_arrowhead",        "+50",    "Spades" },
+        { "j_scary_face",       "+60",    "Faces" },
+        { "j_even_steven",      "+0",     "10,8,6,4,2" },
+        { "j_fibonacci",        "+0",     "A,2,3,5,8" },
+        { "j_odd_todd",         "+0",     "A,9,7,5,3" },
+        -- multiplicative, as a product
+        { "j_triboulet",        "X4",     "K,Q" },
+        { "j_photograph",       "X2",     "Faces" },
+        -- chance, as rolls
+        { "j_business",         "2x$2",   "1 in 2" },
+        { "j_bloodstone",       "1xX1.5", "1 in 2" },
+        { "j_reserved_parking", "0x$1",   "1 in 2" },
+        { "j_8_ball",           "+0",     "1 in 4" },
+        -- held in hand
+        { "j_baron",            "X1",     "Kings" },
+        { "j_shoot_the_moon",   "+0",     "Queens" },
+        -- retriggers
+        { "j_hack",             "+0",     "2,3,4,5" },
+        { "j_sock_and_buskin",  "+2",     "Faces" },
+        -- end of round
+        { "j_golden_joker",     "$4",     "Round" },
+        -- whole hand
+        { "j_flower_pot",       "X1",     "All Suits" },
+        { "j_seeing_double",    "X1",     "Club+other" },
+        { "j_superposition",    "+0",     "A+Straight" },
+    }
+
+    for _, case in ipairs(cases) do
+        local id, want_main, want_note = case[1], case[2], case[3]
+        for i = #g.jokers, 1, -1 do g:remove_owned_joker_at(i, true, true) end
+        T.assert_true(g:add_joker_by_def(id), "could not add " .. id)
+        local main, note = readout(g)
+        T.assert_eq(main, want_main, id .. " value")
+        T.assert_eq(note, want_note, id .. " reminder")
+    end
 end)
 
 suite.test("the settings toggle round-trips through the save", function()
