@@ -407,6 +407,10 @@ function Consumable:get_tooltip_body_lines()
         local lines = SMODS.tooltip_lines(def.id, card)
         if type(lines) == "table" and #lines > 0 then return lines end
     end
+    if def.id == "spectral_ectoplasm" then
+        local penalty = math.max(1, (tonumber(G and G.ectoplasm_used) or 0) + 1)
+        return { I18N.t("spectral.ectoplasm_penalty", { count = penalty }) }
+    end
     if def.id == "tarot_fool" and G then
         local out = description_lines(def)
         local last_id = G.last_consumable_use_id

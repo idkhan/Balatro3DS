@@ -405,4 +405,9 @@ return {
     -- Leftovers
     ["settings.art_default"] = "Default",
     ["hand.none"] = "None",
+    ["shop.continue_label"] = "Next Round",
+    ["shop.hold"] = "Hold",
+    ["blind.skip_short"] = "Skip",
+    ["spectral.ectoplasm_penalty"] = "Adds Negative to a random Joker; -{count} hand size",
+    ["common.or"] = "or",
 }
