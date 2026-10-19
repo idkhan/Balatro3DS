@@ -242,6 +242,10 @@ fi
 # Each language that m6x11plus cannot draw gets its source font cut down to the characters its
 # strings use, baked per cell height (see LANGUAGE_FONTS in dev/config.sh). Cached by font and
 # character set, so an unchanged translation costs nothing.
+python3 -c "import fontTools" 2>/dev/null \
+    || die "fontTools is needed to bake language fonts: python3 -m pip install fonttools"
+python3 "$DEV_DIR/build_zh_font.py"
+
 if (( ${#LANGUAGE_FONTS[@]} )); then
     python3 -c "import fontTools" 2>/dev/null \
         || die "fontTools is needed to bake language fonts: python3 -m pip install fonttools"

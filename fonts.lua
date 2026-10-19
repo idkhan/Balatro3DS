@@ -107,7 +107,7 @@ local ROLES = {
 Fonts.LANGUAGE_FACES = {
     zh_CN = {
         native = "resources/fonts/lang/zh_CN_h%d.ttf",
-        source = "resources/fonts/GoNotoCJKCore.ttf",
+        source = "resources/fonts/zh_CN.ttf",
         min_size = 13,
     },
 }
@@ -117,7 +117,7 @@ Fonts.LANGUAGE_FACES = {
 --- draws at the largest of these that fits its size, so the sheet's scale is exactly 1.0 and the
 --- text is at most a pixel smaller than the Latin face's. `dev/config.sh` (CJK_CELL_HEIGHTS)
 --- bakes this same list; `tests/test_localization.lua` fails if they drift.
-Fonts.LANGUAGE_CELL_HEIGHTS = { 13, 17, 21, 26, 32 }
+Fonts.LANGUAGE_CELL_HEIGHTS = { 13, 17, 21, 27, 33 }
 
 --- The language sheet a role of `size` draws from.
 function Fonts.language_size(face, size)
@@ -195,19 +195,20 @@ function Fonts.build(profile, language)
     local by_size, drawn_size = {}, {}
     for _, role in ipairs(ROLES) do
         local size = sizes[role]
-        local font = by_size[size]
+        local cache_size = language and Fonts.language_size(Fonts.LANGUAGE_FACES[language], size) or size
+        local font = by_size[cache_size]
         if not font then
             local is_native, actual
             font, is_native, actual = Fonts.font_for(profile, size, language)
-            by_size[size] = font
-            drawn_size[size] = actual or size
+            by_size[cache_size] = font
+            drawn_size[cache_size] = actual or size
             pixel.FACES = pixel.FACES + 1
             if is_native then pixel.NATIVE_FACES = pixel.NATIVE_FACES + 1 end
         end
         pixel[role] = font
         -- The size it is really drawn at: layout that reads this before it has a font has to
         -- see a raised language size, or it lays out for text smaller than what is drawn.
-        pixel[role .. "_HEIGHT"] = drawn_size[size]
+        pixel[role .. "_HEIGHT"] = drawn_size[cache_size]
     end
     return pixel
 end

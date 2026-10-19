@@ -43,6 +43,7 @@ GAME_ROOT="Balatro3DS"
 EXCLUDE_ASSETS=(
     # resources/textures/1x/menu.png is NOT excluded: the generated menu backdrop is gated to
     # the New 3DS (backdrop.lua), and the Old 3DS draws that prebaked 63-frame sheet instead.
+    "resources/fonts/zh_CN.ttf"
     "resources/fonts/GoNotoCJKCore.ttf"
     "resources/fonts/GoNotoCurrent-Bold.ttf"
     "resources/fonts/NotoSans-Bold.ttf"
@@ -87,11 +88,11 @@ PIXEL_FONT_SHEETS=(
 # Language font sheets, as "language:source font". The whole CJK font is far too big to ship
 # (mkbcfnt rasterises every glyph), so build.sh cuts it down to the characters in that language's
 # locale files and bakes one sheet per height (dev/bake_cjk_font.py). The heights are the ones
-# mkbcfnt can produce from GoNotoCJKCore and must match Fonts.LANGUAGE_CELL_HEIGHTS in fonts.lua.
+# mkbcfnt can produce from the normalized Chinese subset and must match Fonts.LANGUAGE_CELL_HEIGHTS in fonts.lua.
 LANGUAGE_FONTS=(
-    "zh_CN:resources/fonts/GoNotoCJKCore.ttf"
+    "zh_CN:resources/fonts/zh_CN.ttf"
 )
-CJK_CELL_HEIGHTS=( 13 17 21 26 32 )
+CJK_CELL_HEIGHTS=( 13 17 21 27 33 )
 
 # LövePotion runtime source. Pin LOVEPOTION_REF to a commit for reproducible
 # builds; "main" tracks upstream nightly.

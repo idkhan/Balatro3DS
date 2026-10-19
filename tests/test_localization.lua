@@ -138,7 +138,7 @@ suite.test("the language font draws every role from a baked height, never below 
     T.assert_eq(pixel.SMALL_HEIGHT, 13)
     T.assert_eq(pixel.PRICE_HEIGHT, 17, "18 is not reachable; 17 is")
     T.assert_eq(pixel.MEDIUM_HEIGHT, 21)
-    T.assert_eq(pixel.LARGE_HEIGHT, 32)
+    T.assert_eq(pixel.LARGE_HEIGHT, Fonts.LANGUAGE_CELL_HEIGHTS[#Fonts.LANGUAGE_CELL_HEIGHTS])
     local latin = Fonts.build("native", "en")
     T.assert_eq(latin.LANGUAGE, nil)
     T.assert_eq(latin.MEDIUM_HEIGHT, 22, "English is untouched")
