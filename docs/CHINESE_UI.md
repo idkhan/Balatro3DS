@@ -20,13 +20,19 @@ This needs `fonttools`; native sheet generation additionally needs `mkbcfnt` thr
 
 ## Layout and input
 
-The patch fits HUD counters on one line, gives Boss descriptions separate space from the target, measures wrapped blind text, keeps CJK punctuation with its neighbours, and moves discovery messages to a compact footer. It also fits menu labels and improves deck-footer placement.
+The patch fits HUD counters on one line, gives Boss descriptions separate space from the target, measures wrapped blind text, keeps CJK punctuation with its neighbours, and preserves discovery notifications in the original upper-screen popup. It also fits menu labels and improves deck-footer placement.
 
 Blind buttons display the current confirm/cancel bindings. Shop exit displays the cancel binding and a hold hint, works from shop focus, and remains protected while dragging or sweep-selecting. The existing upstream check that a hold must begin in the shop is preserved, so skipping a booster cannot also leave the shop.
 
+## Notifications and rewards
+
+The earlier revision moved discovery notifications to a footer to avoid covering the upper-screen score, chips and multiplier. In response to review, the original popup position, dimensions, border, shadow and slide animation have been restored. Chinese text still uses this contribution's font and translations. The popup keeps the original Chinese layout dimensions independently of the normalized font metrics.
+
+Reward previews and blind commitment now share the existing stake, challenge and Boss payout rules. Reward symbols use one `$` per dollar, without an extra currency prefix; zero blind reward displays `$0`. Their previous font size and normal fit-to-width behavior are retained.
+
 ## Validation
 
-Run the normal headless suite with `./tests/run.sh`. New cases cover Chinese font sharing, remapped prompts, single-line HUD readouts, punctuation, and shop exit gestures.
+Run the normal headless suite with `./tests/run.sh`. New cases cover Chinese font sharing, remapped prompts, single-line HUD readouts, punctuation, shop exit gestures, original notification geometry and accurate reward previews. The latest clean-source run passed 1080 cases, skipped 2 cases that require a patched LovePotion checkout, and had no failures.
 
 To compare names and placeholders against your own installed game:
 
@@ -36,4 +42,4 @@ python3 dev/audit_zh_translation.py --official-game /path/to/Balatro.exe
 
 The audit requires `lupa` and reads the game's localization locally. It reports differences and returns nonzero for missing keys, name mismatches, or placeholder mismatches. Its default output is `dev/.cache/zh-audit/`.
 
-Desktop dual-screen checks covered 84 blind-selection layouts, all 28 Boss HUDs, and eight scenes. Native sheet maps, baselines and locale coverage were also checked. **Hardware testing has been reported on a Japanese-region New Nintendo 3DS running Luma3DS 13.4. Other models and region variants have not been tested.** This does not establish exhaustive coverage of font clarity, memory use, layouts or gameplay; desktop previews do not extend the hardware coverage.
+Desktop dual-screen checks covered 84 blind-selection layouts, all 28 Boss HUDs, and eight scenes. Native sheet maps, baselines and locale coverage were also checked. **The earlier maintenance build was tested on a Japanese-region New Nintendo 3DS running Luma3DS 13.4. The latest notification-restoration and reward-preview changes have not yet been tested on hardware. Other models and region variants remain untested.** This does not establish exhaustive coverage of font clarity, memory use, layouts or gameplay; desktop previews do not extend the hardware coverage.

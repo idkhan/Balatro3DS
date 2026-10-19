@@ -602,8 +602,8 @@ suite.test("top-screen labels are cached and keep their formatting", function()
     T.assert_eq(ui:cached_label("money", 13, "$"), "$13")
 
     -- The reward readout is one pip per dollar, not the number.
-    T.assert_eq(ui:cached_reward_pips(3), "$$$$+")
-    T.assert_eq(ui:cached_reward_pips(0), "$+")
+    T.assert_eq(ui:cached_reward_pips(3), "$$$+")
+    T.assert_eq(ui:cached_reward_pips(0), "$0")
 end)
 
 suite.test("selling a joker pops it and dissolves it gold", function()

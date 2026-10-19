@@ -47,15 +47,25 @@ suite.test("HUD ratios use one line and scale inside their panel",function()
     T.assert_true(scale*font:getWidth("1/8")<=20)
     T.assert_true(scale*font:getHeight()<=14)
 end)
-suite.test("discovery toast stays in the top-screen footer",function()
+suite.test("Chinese toast keeps upstream geometry with the maintained font and text",function()
     local g=bootstrap.new_game(734);G=g
     g.SETTINGS.REDUCED_MOTION=true
-    g._milestone_active={title="New discovery",detail="The Joker",age=0.5}
-    local old=love.graphics.rectangle;local rects={}
-    love.graphics.rectangle=function(_,x,y,w,h) rects[#rects+1]={y=y,h=h} end
-    require("milestone_queue").draw(g);love.graphics.rectangle=old
-    T.assert_true(#rects>0)
-    for _,r in ipairs(rects) do T.assert_true(r.y>=226 and r.y+r.h<=240) end
+    g.FONTS.PIXEL=Fonts.build("native","zh_CN")
+    g._milestone_active={title="新发现",detail="小盲注",age=0.5}
+    for _,native in ipairs({0,5}) do
+        g.FONTS.PIXEL.NATIVE_FACES=native
+        local rects,labels={},{}
+        local old_rectangle,old_printf=love.graphics.rectangle,love.graphics.printf
+        love.graphics.rectangle=function(_,x,y,w,h) rects[#rects+1]={x=x,y=y,w=w,h=h} end
+        love.graphics.printf=function(text) labels[#labels+1]={text=text,font=love.graphics.getFont()} end
+        require("milestone_queue").draw(g)
+        love.graphics.rectangle,love.graphics.printf=old_rectangle,old_printf
+        T.assert_eq(rects[2].x,88);T.assert_eq(rects[2].y,5);T.assert_eq(rects[2].w,224)
+        T.assert_eq(rects[2].h,native==0 and 48 or 46)
+        T.assert_eq(labels[1].text,"新发现");T.assert_eq(labels[2].text,"小盲注")
+        T.assert_eq(labels[1].font,g.FONTS.PIXEL.SMALL)
+        T.assert_eq(labels[2].font,g.FONTS.PIXEL.MICRO)
+    end
 end)
 suite.test("leftover hand cards cannot cover shop controls",function()
     local g=bootstrap.new_game(735);G=g;g.STATE=g.STATES.SHOP
@@ -74,5 +84,32 @@ suite.test("Chinese boss text keeps commas and full stops off line starts",funct
         T.assert_false(line:sub(1,3)=="，" or line:sub(1,3)=="。")
     end
     T.assert_eq(table.concat(lines):gsub(" ",""),text:gsub(" ",""))
+end)
+suite.test("blind reward preview matches committed reward for stakes challenges and bosses",function()
+    local cases={{1,3},{2,4},{3,5},{1,0,red=true},{2,4,red=true},
+        {1,0,blocked="Small Blind"},{2,0,blocked="Big Blind"},
+        {3,0,blocked="Boss Blind"},{3,9,boss_dollars=9}}
+    for _,case in ipairs(cases) do
+        local g=bootstrap.new_game(739);G=g
+        if case.red then g:apply_stake_config("stake_red") end
+        if case.blocked then g.challenge_modifiers={no_blind_reward={[case.blocked]=true}} end
+        if case.boss_dollars then
+            local proto={};for k,v in pairs(g:get_boss_blind_prototype()) do proto[k]=v end
+            proto.dollars=case.boss_dollars
+            g.get_boss_blind_prototype=function() return proto end
+        end
+        g.current_blind_index=case[1];g.selected_blind_index=case[1]
+        local preview=g:get_blind_reward(case[1]);T.assert_eq(preview,case[2])
+        T.assert_true(g:_commit_selected_blind())
+        T.assert_eq(g.current_blind_reward,preview)
+    end
+end)
+suite.test("reward pips count dollars without an extra currency prefix",function()
+    local g=bootstrap.new_game(740);G=g
+    local ui=g.topUI or TopUI(g)
+    T.assert_eq(ui:cached_reward_pips(3),"$$$+")
+    T.assert_eq(ui:cached_reward_pips(4),"$$$$+")
+    T.assert_eq(ui:cached_reward_pips(5),"$$$$$+")
+    T.assert_eq(ui:cached_reward_pips(0),"$0")
 end)
 return suite

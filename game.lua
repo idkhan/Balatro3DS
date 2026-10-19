@@ -5809,7 +5809,16 @@ end
 function Game:get_blind_reward(index)
     local def = self:get_blind_def(index)
     if not def then return 0 end
-    return tonumber(def.reward) or 0
+    if index == 1 and self._stake_no_small_reward then return 0 end
+    local blocked = self.challenge_modifiers and self.challenge_modifiers.no_blind_reward
+    if type(blocked) == "table" and blocked[def.name] == true then return 0 end
+    local reward = tonumber(def.reward) or 0
+    if def.id == "boss" then
+        local proto = self:get_boss_blind_prototype()
+        reward = tonumber(proto and proto.dollars) or reward
+        if type(blocked) == "table" and blocked["Boss Blind"] == true then return 0 end
+    end
+    return math.max(0, math.floor(reward))
 end
 
 function Game:get_blind_sprite_index(index)
@@ -8116,8 +8125,7 @@ function Game:draw_bottom_blind_select()
             blind_index = i,
         }
 
-        -- Sized for "Reward: $$$$$$+" (a reward of 5, the maximum, prints six signs plus a plus),
-        -- which is the widest thing this box ever holds and used to spill past both its edges.
+        -- Keep the full reward line inside the card, including localized labels.
         local scoreWidth = 86
         local reward = self:get_blind_reward(i)
         love.graphics.setFont(text_font)
@@ -8136,7 +8144,7 @@ function Game:draw_bottom_blind_select()
         love.graphics.setFont(text_font)
 
         local reward_label = I18N.text("blind.reward", nil, "Reward: ")
-        local money = reward > 0 and (string.rep("$", reward) .. "+") or "$0"
+        local money = TopUI:cached_reward_pips(reward)
         local total_w = text_font:getWidth(reward_label .. money)
         local scale = math.min(1, (scoreWidth - 4) / math.max(1, total_w))
         love.graphics.push()
@@ -11850,15 +11858,7 @@ function Game:_commit_selected_blind()
 
     self.current_blind_index = idx
     self.current_blind_target = self:get_blind_target(idx, self.ante)
-    self.current_blind_reward = tonumber(def.reward) or 0
-    if idx == 1 and self._stake_no_small_reward then
-        -- Red and higher stakes remove the Small Blind reward (reference game.lua:2049-2057).
-        self.current_blind_reward = 0
-    end
-    if self.challenge_modifiers and type(self.challenge_modifiers.no_blind_reward) == "table"
-        and self.challenge_modifiers.no_blind_reward[def.name] == true then
-        self.current_blind_reward = 0
-    end
+    self.current_blind_reward = self:get_blind_reward(idx)
     self.current_blind_name = def.name or "Blind"
     if Sfx and Sfx.play then
         -- Reference `blind.lua:140-143`: announce the blind's displayed requirement.
@@ -11869,11 +11869,6 @@ function Game:_commit_selected_blind()
         local proto = self:get_boss_blind_prototype()
         if proto then
             self.current_blind_name = proto.name or self.current_blind_name
-            self.current_blind_reward = tonumber(proto.dollars) or self.current_blind_reward
-        end
-        if self.challenge_modifiers and type(self.challenge_modifiers.no_blind_reward) == "table"
-            and self.challenge_modifiers.no_blind_reward["Boss Blind"] == true then
-            self.current_blind_reward = 0
         end
         if self.current_boss_blind_id then
             self:discover_item(self.current_boss_blind_id)

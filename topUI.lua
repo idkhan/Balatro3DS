@@ -225,7 +225,8 @@ end
 function TopUI:cached_reward_pips(dollars)
     local cache = self._reward_pip_cache
     if cache and cache.value == dollars then return cache.text end
-    local text = "$" .. string.rep("$", dollars) .. "+"
+    dollars = math.max(0, math.floor(tonumber(dollars) or 0))
+    local text = dollars > 0 and (string.rep("$", dollars) .. "+") or "$0"
     self._reward_pip_cache = { value = dollars, text = text }
     return text
 end
@@ -293,12 +294,8 @@ function TopUI:draw(screen)
         blind_target = G:get_blind_target(G.selected_blind_index or G.current_blind_index or 1, G.ante)
     end
     local blind_reward = tonumber(G.current_blind_reward) or 0
-    if G.STATE == G.STATES.BLIND_SELECT and blind_def then
-        blind_reward = tonumber(blind_def.reward) or blind_reward
-        if blind_def.id == "boss" and G.get_boss_blind_prototype then
-            local proto = G:get_boss_blind_prototype()
-            blind_reward = tonumber(proto and proto.dollars) or blind_reward
-        end
+    if G.STATE == G.STATES.BLIND_SELECT and G.get_blind_reward then
+        blind_reward = G:get_blind_reward(blind_index)
     end
     local blind_key = (blind_def and blind_def.key) or "Big"
     local blind_color = G.C.BLIND_COLORS.Big
