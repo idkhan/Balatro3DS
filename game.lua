@@ -5809,7 +5809,16 @@ end
 function Game:get_blind_reward(index)
     local def = self:get_blind_def(index)
     if not def then return 0 end
-    return tonumber(def.reward) or 0
+    if index == 1 and self._stake_no_small_reward then return 0 end
+    local blocked = self.challenge_modifiers and self.challenge_modifiers.no_blind_reward
+    if type(blocked) == "table" and blocked[def.name] == true then return 0 end
+    local reward = tonumber(def.reward) or 0
+    if def.id == "boss" then
+        local proto = self:get_boss_blind_prototype()
+        reward = tonumber(proto and proto.dollars) or reward
+        if type(blocked) == "table" and blocked["Boss Blind"] == true then return 0 end
+    end
+    return math.max(0, math.floor(reward))
 end
 
 function Game:get_blind_sprite_index(index)
@@ -6048,7 +6057,7 @@ function Game:draw()
     -- deselecting the hand. The row still covers the rest of the fan, which is the point of
     -- pulling it down; the selection comes out on top of it.
     local rows_pulled = (self.jokers_on_bottom == true) or (self.consumables_on_bottom == true)
-    if self.hand and self.hand.card_nodes then
+    if self.hand and self.hand.card_nodes and self.STATE ~= self.STATES.SHOP then
         for _, hn in ipairs(self.hand.card_nodes) do
             if hn and hn.draw and not (rows_pulled and hn.selected) then hn:draw() end
         end
@@ -6087,7 +6096,7 @@ function Game:draw()
         end
     end
     -- The other half of the selection lift (see the hand pass above).
-    if rows_pulled and self.hand and self.hand.card_nodes then
+    if rows_pulled and self.hand and self.hand.card_nodes and self.STATE ~= self.STATES.SHOP then
         for _, hn in ipairs(self.hand.card_nodes) do
             if hn and hn.selected and hn.draw then hn:draw() end
         end
@@ -7977,7 +7986,7 @@ end
 function Game:draw_bottom_blind_select()
     love.graphics.push()
     love.graphics.translate(0, self:get_blind_slide_dy())
-    local card_w, card_h = 98, 300
+    local card_w = 98
     local gap = 8
     local start_x = 6
     local y = 8
@@ -7993,11 +8002,12 @@ function Game:draw_bottom_blind_select()
         local target = self:get_blind_target(i, self.ante)
         local card_color = self.C.PANEL
         if not selectable then
-            y = 44
-        else 
+            y = 28
+        else
             y = 8
         end
-        
+        local card_h = 232 - y
+
         love.graphics.setColor(card_color)
         love.graphics.rectangle("fill", x, y, card_w, card_h, 4, 4)
         local blind_color = self:get_blind_color(i) or self.C.BLOCK.BACK
@@ -8010,29 +8020,57 @@ function Game:draw_bottom_blind_select()
         love.graphics.setLineWidth(2)
         love.graphics.setColor(self.C.GREY)
 
-        local scorePosY = 105
-        local addedHeight = 0
+        local text_font = self.FONTS.PIXEL.SMALL
+        local line_step = text_font:getHeight() + 2
+        local scoreHeight = line_step * 3 + 6
+        local scorePosY = 98
         if def and def.id == "boss" then
             local effect = self:get_boss_effect_text()
             if effect ~= "" then
-                local info_w = card_w - 10
-                local info_h = 118
-                local info_x = x + 5
-                local info_y = y + 105
+                local info_w = card_w - 18
+                local max_h = 230 - (y + 98) - scoreHeight - 4
+                local language = I18N.get_language()
+                local layout = self._blind_effect_layout
+                if not layout or layout.text ~= effect or layout.font ~= text_font
+                    or layout.language ~= language or layout.max_h ~= max_h then
+                    local effect_font = Fonts.fit_block(self, text_font, effect, info_w, max_h)
+                    local Utf8 = require("utf8_text")
+                    local lines = Utf8.wrap_lines(effect_font, effect, info_w)
+                    local text_w = info_w
+                    -- Balance without adding lines, which would make the text smaller.
+                    if language == "zh_CN" and #lines > 1 and not effect:find("\n", 1, true) then
+                        local count = #lines
+                        local low, high = effect_font:getHeight() * 2, info_w
+                        while low < high do
+                            local mid = math.floor((low + high) / 2)
+                            if #Utf8.wrap_lines(effect_font, effect, mid) <= count then high = mid else low = mid + 1 end
+                        end
+                        text_w = low
+                        lines = Utf8.wrap_lines(effect_font, effect, text_w)
+                    end
+                    local block_h = math.max(1, #lines) * effect_font:getHeight()
+                    layout = { text=effect, font=text_font, language=language, max_h=max_h,
+                        effect_font=effect_font, lines=lines, text_w=text_w, block_h=block_h,
+                        scale=math.min(1, max_h / block_h) }
+                    self._blind_effect_layout = layout
+                end
+                local effect_font, lines = layout.effect_font, layout.lines
+                local text_w, block_h, scale = layout.text_w, layout.block_h, layout.scale
                 love.graphics.setColor(self.C.WHITE)
-                love.graphics.setFont(self.FONTS.PIXEL.SMALL)
-                local num_lines = select(2, string.gsub(effect, "\n", "")) + 1
-                love.graphics.printf(effect, info_x + 4, info_y + 4, info_w - 8, "center")
-                addedHeight = love.graphics.getFont():getHeight() * num_lines + 2 * padding
+                love.graphics.setFont(effect_font)
+                love.graphics.push()
+                love.graphics.translate(x + (card_w - text_w * scale) / 2, y + 98)
+                love.graphics.scale(scale, scale)
+                for line_index, line in ipairs(lines) do
+                    local line_w = effect_font:getWidth(line)
+                    love.graphics.print(line, (text_w - line_w) / 2, (line_index - 1) * effect_font:getHeight())
+                end
+                love.graphics.pop()
+                scorePosY = 98 + math.ceil(block_h * scale) + 4
             end
-            scorePosY = 105 + addedHeight
         end
-
-        if def and def.id == "boss" then
-            love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142 + addedHeight, 4, 4)
-        else 
-            love.graphics.rectangle("line", x + padding/2, y + padding/2, card_w - padding, 142, 4, 4)
-        end
+        love.graphics.rectangle("line", x + padding/2, y + padding/2,
+            card_w - padding, scorePosY + scoreHeight - padding/2 + 2, 4, 4)
         love.graphics.setLineWidth(1)
 
 
@@ -8041,7 +8079,7 @@ function Game:draw_bottom_blind_select()
             selectText = I18N.text("blind.select", nil, "Select")
         end
         local selectWidth = 60
-        local selectHeight = 16
+        local selectHeight = 20
         local offset = 6
         local btn_x = x + math.floor(card_w / 2) - math.floor(selectWidth / 2)
         local btn_y = y + padding/2 + offset
@@ -8055,7 +8093,16 @@ function Game:draw_bottom_blind_select()
         love.graphics.setColor(self.C.WHITE)
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
         local tx = x + math.floor(card_w / 2) - math.floor(selectWidth / 2)
-        love.graphics.printf(selectText, tx, btn_y + 2, selectWidth, "center")
+        local select_prompt_w = 0
+        if selectable and self:gamepad_focus_visible() then
+            if self:draw_button_pip(self:get_button_for_role("confirm"), tx + 3, btn_y + math.floor((selectHeight - 13)/2), 12) then
+                select_prompt_w = 17
+            end
+        end
+        local select_label_w = selectWidth - select_prompt_w - 4
+        local select_font = Fonts.fit(self, self.FONTS.PIXEL.SMALL, selectText, select_label_w)
+        love.graphics.setFont(select_font)
+        love.graphics.printf(selectText, tx + select_prompt_w + 2, btn_y + math.floor((selectHeight-select_font:getHeight())/2), select_label_w, "center")
 
         -- Wide enough for the longest boss name ("Crimson Heart"), which overran the old 70 px
         -- pill. The card's inner border sits at x+8..x+90, so this keeps a 4 px margin inside it.
@@ -8078,52 +8125,51 @@ function Game:draw_bottom_blind_select()
             blind_index = i,
         }
 
-        -- Sized for "Reward: $$$$$$+" (a reward of 5, the maximum, prints six signs plus a plus),
-        -- which is the widest thing this box ever holds and used to spill past both its edges.
+        -- Keep the full reward line inside the card, including localized labels.
         local scoreWidth = 86
-        local scoreHeight = 28
         local reward = self:get_blind_reward(i)
-
-        if reward > 0 then 
-            scoreHeight = 44
-        end
-        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        love.graphics.setFont(text_font)
         love.graphics.setColor(self.C.BLOCK.BACK)
-        tx = x + math.floor(card_w / 2) - math.floor(scoreWidth / 2)
+        tx = x + math.floor((card_w - scoreWidth) / 2)
         love.graphics.rectangle("fill", tx, y + scorePosY + 2, scoreWidth, scoreHeight, 4, 4)
 
+        local ty = y + scorePosY + 5
         love.graphics.setColor(self.C.WHITE)
-        ty = y + scorePosY + 3
-        love.graphics.printf(I18N.text("blind.score_at_least", nil, "Score at Least"), tx, ty, scoreWidth, "center")
+        TopUI.center_text_juiced(I18N.text("blind.score_at_least", nil, "Score at Least"),
+            tx + 2, ty, scoreWidth - 4, text_font:getHeight())
         love.graphics.setColor(self.C.RED)
         local req = NumberFormat.format(math.floor(tonumber(target) or 0))
-        local rx = x + math.floor(card_w / 2) - math.floor(scoreWidth / 2)
-        love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, req, scoreWidth - 2))
-        love.graphics.printf(req, rx, ty + 12, scoreWidth, "center")
-        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        love.graphics.setFont(Fonts.fit(self, text_font, req, scoreWidth - 4))
+        TopUI.center_text_juiced(req, tx + 2, ty + line_step, scoreWidth - 4, text_font:getHeight())
+        love.graphics.setFont(text_font)
 
-        love.graphics.setColor(self.C.WHITE)
         local reward_label = I18N.text("blind.reward", nil, "Reward: ")
-        req = reward_label..string.rep("$", reward).."+"
-        rx = x + math.floor(card_w / 2) - math.floor(love.graphics.getFont():getWidth(req) / 2)
-
-        love.graphics.print(reward_label, rx, ty + 24)
+        local money = TopUI:cached_reward_pips(reward)
+        local total_w = text_font:getWidth(reward_label .. money)
+        local scale = math.min(1, (scoreWidth - 4) / math.max(1, total_w))
+        love.graphics.push()
+        love.graphics.translate(tx + (scoreWidth - total_w * scale) / 2, ty + 2 * line_step)
+        love.graphics.scale(scale, scale)
+        love.graphics.setColor(self.C.WHITE)
+        love.graphics.print(reward_label, 0, 0)
         love.graphics.setColor(self.C.MONEY)
-        love.graphics.print("$"..string.rep("$", reward).."+", rx + love.graphics.getFont():getWidth(reward_label), ty + 24)
+        love.graphics.print(money, text_font:getWidth(reward_label), 0)
+        love.graphics.pop()
 
         -- Skip UI
         if def and def.id ~= "boss" then
             love.graphics.push()
             love.graphics.setFont(self.FONTS.PIXEL.SMALL)
             love.graphics.setColor(self.C.WHITE)
-            local w = love.graphics.getFont():getWidth("or")
-            love.graphics.print("or", tx + math.floor(blindWidth/2) - math.floor(w/2) + 4, ty + 44)
+            local or_text = I18N.t("common.or")
+            local w = love.graphics.getFont():getWidth(or_text)
+            love.graphics.print(or_text, tx + math.floor(blindWidth/2) - math.floor(w/2) + 4, ty + scoreHeight - 1)
 
             -- Skip Box
             local p = 4
             local sx = x + p
             local sw = card_w - 2 * p
-            local sy = ty + 54 + p
+            local sy = ty + scoreHeight + text_font:getHeight() + 2
             local sh = 24 + 2 * p
             love.graphics.setColor(self.C.BLOCK.BACK)
             love.graphics.rectangle("fill", sx, sy, sw, sh, 4, 4)
@@ -8165,13 +8211,18 @@ function Game:draw_bottom_blind_select()
             self._blind_skip_tap_rects = self._blind_skip_tap_rects or {}
             self._blind_skip_tap_rects[i] = { x = buttonX, y = buttonY, w = buttonW, h = buttonH, blind_index = i }
             love.graphics.setColor(self.C.WHITE)
-            -- No "(B)": cancel is rebindable (`InputBindings.ROLES`), so a baked-in button letter
-            -- goes stale the moment it is remapped, and it was what pushed this label past its
-            -- button. The gamepad hint belongs with the bindings, not printed on a touch target.
-            local buttonText = I18N.text("blind.skip", nil, "Skip Blind")
-            love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, buttonText, buttonW - 4))
-            local button_font = love.graphics.getFont()
-            love.graphics.print(buttonText, buttonX + math.floor(buttonW/2) - math.floor(button_font:getWidth(buttonText)/2), buttonY + math.floor(buttonH/2) - math.floor(button_font:getHeight(buttonText)/2))
+            local buttonText = I18N.text("blind.skip_short", nil, "Skip")
+            local prompt_w = 0
+            if can_skip and self:gamepad_focus_visible() then
+                local button = self:get_button_for_role("cancel")
+                if self:draw_button_pip(button, buttonX + 3, buttonY + math.floor((buttonH - 13) / 2), 12) then
+                    prompt_w = 17
+                end
+            end
+            local label_w = buttonW - prompt_w - 4
+            local button_font = Fonts.fit(self, self.FONTS.PIXEL.SMALL, buttonText, label_w)
+            love.graphics.setFont(button_font)
+            love.graphics.print(buttonText, buttonX + prompt_w + 2 + math.floor((label_w - button_font:getWidth(buttonText))/2), buttonY + math.floor((buttonH - button_font:getHeight())/2))
             love.graphics.setFont(self.FONTS.PIXEL.SMALL)
 
             love.graphics.pop()
@@ -8187,12 +8238,12 @@ function Game:draw_bottom_blind_select()
         -- Anchored to the boss column, not to a screen-centre guess: at 200 - w - 6 this sat
         -- squarely over the Big Blind's Select button. The three columns are 6/112/218, so the
         -- boss card runs 218..316 and the button rides above it in the strip the upcoming
-        -- blinds leave free (their cards start at y = 44). When the boss is the selectable
+        -- blinds leave free (their cards start at y = 28). When the boss is the selectable
         -- blind its card comes up to y = 8 and the button is clamped to the top edge, where it
         -- overlaps nothing but that card's own padding — its Select button starts at y = 22.
         local bw, bh = 64, 16
         local boss_x = start_x + 2 * (card_w + gap)
-        local boss_y = self:is_blind_selectable(3) and 8 or 44
+        local boss_y = self:is_blind_selectable(3) and 8 or 28
         local bx = boss_x + card_w - bw - 6
         local by = math.max(2, boss_y - bh - 6)
         local can_afford = self:can_afford_price(10)
@@ -11807,15 +11858,7 @@ function Game:_commit_selected_blind()
 
     self.current_blind_index = idx
     self.current_blind_target = self:get_blind_target(idx, self.ante)
-    self.current_blind_reward = tonumber(def.reward) or 0
-    if idx == 1 and self._stake_no_small_reward then
-        -- Red and higher stakes remove the Small Blind reward (reference game.lua:2049-2057).
-        self.current_blind_reward = 0
-    end
-    if self.challenge_modifiers and type(self.challenge_modifiers.no_blind_reward) == "table"
-        and self.challenge_modifiers.no_blind_reward[def.name] == true then
-        self.current_blind_reward = 0
-    end
+    self.current_blind_reward = self:get_blind_reward(idx)
     self.current_blind_name = def.name or "Blind"
     if Sfx and Sfx.play then
         -- Reference `blind.lua:140-143`: announce the blind's displayed requirement.
@@ -11826,11 +11869,6 @@ function Game:_commit_selected_blind()
         local proto = self:get_boss_blind_prototype()
         if proto then
             self.current_blind_name = proto.name or self.current_blind_name
-            self.current_blind_reward = tonumber(proto.dollars) or self.current_blind_reward
-        end
-        if self.challenge_modifiers and type(self.challenge_modifiers.no_blind_reward) == "table"
-            and self.challenge_modifiers.no_blind_reward["Boss Blind"] == true then
-            self.current_blind_reward = 0
         end
         if self.current_boss_blind_id then
             self:discover_item(self.current_boss_blind_id)

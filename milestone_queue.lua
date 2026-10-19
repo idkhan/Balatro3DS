@@ -47,7 +47,14 @@ function Milestones.draw(game)
     local p = 4 -- padding
     love.graphics.push()
     love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    local height = love.graphics.getFont():getHeight() * 2 + 3 * p
+    local pixel = game.FONTS.PIXEL
+    local layout_line_height = love.graphics.getFont():getHeight()
+    if pixel.LANGUAGE == "zh_CN" then
+        -- Preserve upstream's box dimensions with our normalized Chinese font.
+        -- Original zh_CN h13: FINF height 17 on 3DS; GoNoto desktop face: 18.
+        layout_line_height = (pixel.NATIVE_FACES or 0) > 0 and 17 or 18
+    end
+    local height = layout_line_height * 2 + 3 * p
     local lineThickness = 2
     local shadowOffset = 4
     -- Slide from fully off-screen (box + shadow) to the resting y, so no strip is left
@@ -62,7 +69,7 @@ function Milestones.draw(game)
     love.graphics.setColor(C.BLACK or C.BLOCK.BACK)
     love.graphics.rectangle("fill", 92, y + lineThickness, 216, height - 2 * lineThickness, r)
     love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    local fontHeight = love.graphics.getFont():getHeight()
+    local fontHeight = layout_line_height
     love.graphics.setColor(C.WHITE)
     local title_y = y + lineThickness + p
     love.graphics.printf(a.title, 98, title_y, 204, "center")

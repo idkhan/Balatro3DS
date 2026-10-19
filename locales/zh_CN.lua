@@ -1,9 +1,9 @@
 --- Thanks to @Fussyzhy
 return {
     ["language.en"] = "English",
-    ["language.es"] = "Spanish",
+    ["language.es"] = "西班牙语",
     ["language.zh_CN"] = "简体中文",
-    ["language.da"] = "荷兰语",
+    ["language.da"] = "丹麦语",
     ["common.back"] = "返回",
     ["common.continue"] = "继续",
     ["common.none"] = "无",
@@ -406,4 +406,9 @@ return {
     -- Leftovers
     ["settings.art_default"] = "默认",
     ["hand.none"] = "无",
+    ["shop.continue_label"] = "下一轮",
+    ["shop.hold"] = "长按",
+    ["blind.skip_short"] = "跳过",
+    ["spectral.ectoplasm_penalty"] = "为随机小丑牌添加负片，手牌上限 -{count}",
+    ["common.or"] = "或",
 }

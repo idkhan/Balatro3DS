@@ -225,7 +225,8 @@ end
 function TopUI:cached_reward_pips(dollars)
     local cache = self._reward_pip_cache
     if cache and cache.value == dollars then return cache.text end
-    local text = "$" .. string.rep("$", dollars) .. "+"
+    dollars = math.max(0, math.floor(tonumber(dollars) or 0))
+    local text = dollars > 0 and (string.rep("$", dollars) .. "+") or "$0"
     self._reward_pip_cache = { value = dollars, text = text }
     return text
 end
@@ -293,12 +294,8 @@ function TopUI:draw(screen)
         blind_target = G:get_blind_target(G.selected_blind_index or G.current_blind_index or 1, G.ante)
     end
     local blind_reward = tonumber(G.current_blind_reward) or 0
-    if G.STATE == G.STATES.BLIND_SELECT and blind_def then
-        blind_reward = tonumber(blind_def.reward) or blind_reward
-        if blind_def.id == "boss" and G.get_boss_blind_prototype then
-            local proto = G:get_boss_blind_prototype()
-            blind_reward = tonumber(proto and proto.dollars) or blind_reward
-        end
+    if G.STATE == G.STATES.BLIND_SELECT and G.get_blind_reward then
+        blind_reward = G:get_blind_reward(blind_index)
     end
     local blind_key = (blind_def and blind_def.key) or "Big"
     local blind_color = G.C.BLIND_COLORS.Big
@@ -370,9 +367,8 @@ function TopUI:draw(screen)
         local is_boss_blind = blind_def and blind_def.id == "boss"
         local blind_name_x, blind_name_w = ix - sysDepth * textHeight, iw
         if is_boss_blind then
-            love.graphics.setFont(G.FONTS.PIXEL.MICRO or G.FONTS.PIXEL.SMALL)
-            love.graphics.setColor(G.C.RED)
-            DynaText.draw(self.boss_indicator_text, I18N.text("hud.boss", nil, "BOSS"), blind_name_x + 2, iy + 3, 24, "left")
+            -- The chip identifies the boss without spending a whole word of the narrow title.
+            G:draw_blind_chip_anim(blind_index, blind_name_x + 8, blindPosY + blindHeight / 2, 0.45)
             blind_name_x = blind_name_x + 22
             blind_name_w = blind_name_w - 22
             love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
@@ -393,53 +389,60 @@ function TopUI:draw(screen)
         local score_box_ix, score_box_iy, score_box_iw, score_box_ih = ix, iy, iw, ih
 
         
-        ix, iy, iw, ih = draw_rect_with_shadow(score_box_ix + math.floor(score_box_iw/3), score_box_iy - 1, 72, score_box_ih, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2, depthOffset)
-
-        G:draw_blind_chip_anim(
-            blind_index,
-            score_box_ix + math.floor(score_box_iw / 6) - 2,
-            score_box_iy + math.floor(score_box_ih / 2),
-            1.1
-        )
-        
-        local show_boss_effect = G.STATE == G.STATES.SELECTING_HAND and blind_def and blind_def.id == "boss"
+        local show_boss_effect = G.STATE == G.STATES.SELECTING_HAND and is_boss_blind
         if show_boss_effect then
-            -- The reference keeps each boss debuff visible in its blind UI
-            -- (`reference/Balatro/functions/UI_definitions.lua:2933-2979`). Reuse the
-            -- readout's blind block so the 320x240 touch screen remains uncluttered.
-            --
-            -- Everything is placed from the dark box's interior and the faces' own heights, the
-            -- same anchors the non-boss readout below uses. Fixed offsets from the outer sign
-            -- only lined up under desktop's TTF metrics; the 3DS sheets draw smaller glyphs, so
-            -- there the text sat on the box's border and the target fell out of its foot.
+            ix, iy, iw, ih = draw_rect_with_shadow(score_box_ix - 4, score_box_iy - 4,
+                score_box_iw + 8, score_box_ih + 8, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2, depthOffset)
+        else
+            ix, iy, iw, ih = draw_rect_with_shadow(score_box_ix + math.floor(score_box_iw/3), score_box_iy - 1,
+                72, score_box_ih, 4, 4, G.C.BLOCK.BACK, G.C.BLOCK.SHADOW, 2, depthOffset)
+            G:draw_blind_chip_anim(blind_index, score_box_ix + math.floor(score_box_iw / 6) - 2,
+                score_box_iy + math.floor(score_box_ih / 2), 1.1)
+        end
+        if show_boss_effect then
+            -- Give the ability the full width; keep a separate foot row for the target.
             local text_x = ix - sysDepth * textHeight
             local small = G.FONTS.PIXEL.SMALL
             local label = I18N.text("hud.score", nil, "Score")
             local label_w = small:getWidth(label) + 3
-            -- The blind's target does not change while the blind is being played.
             local bossReq = NumberFormat.format(math.floor(blind_target))
-            local req_font = Fonts.fit(G, G.FONTS.PIXEL.MEDIUM, bossReq, iw - label_w)
-
-            -- "Score" and the target share one row on the box's foot. Their cells share a
-            -- bottom edge, which lands the baselines together whatever height each sheet is.
-            local row_bottom = iy + ih + 2
+            local row_h = small:getHeight()
+            local row_y = iy + ih - row_h
             love.graphics.setFont(small)
             love.graphics.setColor(G.C.WHITE)
-            TextCache.print(label, text_x, row_bottom - small:getHeight())
-            love.graphics.setFont(req_font)
+            TextCache.print(label, text_x, row_y)
             love.graphics.setColor(G.C.RED)
-            TextCache.printf(bossReq, text_x + label_w, row_bottom - req_font:getHeight(), iw - label_w, "right")
+            TopUI.center_text_juiced(bossReq, text_x + label_w, row_y, iw - label_w, row_h)
 
-            -- The ability takes the rest of the box, starting where "Score at least" does.
             local effect = G.get_boss_effect_text and G:get_boss_effect_text() or ""
-            local effect_top = iy - 2
-            local effect_font = Fonts.fit_block(G, G.FONTS.PIXEL.MICRO or small, effect, iw,
-                row_bottom - small:getHeight() - effect_top)
-            love.graphics.setFont(effect_font)
+            local max_h = row_y - iy - 2
+            local layout = self._boss_ability_layout
+            if not layout or layout.text ~= effect or layout.font ~= small or layout.width ~= iw then
+                local Utf8 = require("utf8_text")
+                local lines = Utf8.wrap_lines(small, effect, iw)
+                if I18N.get_language() == "zh_CN" and #lines > 1 then
+                    local count, low, high = #lines, small:getHeight()*2, iw
+                    while low < high do
+                        local mid = math.floor((low+high)/2)
+                        if #Utf8.wrap_lines(small,effect,mid) <= count then high=mid else low=mid+1 end
+                    end
+                    lines = Utf8.wrap_lines(small,effect,low)
+                end
+                local max_w = 0
+                for _,line in ipairs(lines) do max_w = math.max(max_w, small:getWidth(line)) end
+                layout = {text=effect, font=small, width=iw, lines=lines, max_w=max_w}
+                self._boss_ability_layout = layout
+            end
+            local block_h = math.max(1, #layout.lines) * small:getHeight()
+            local scale = math.min(1, max_h / block_h, iw / math.max(1, layout.max_w))
             love.graphics.setColor(G.C.WHITE)
-            -- Shaped once: a boss's debuff text is fixed for the whole blind, and a wrapped
-            -- printf is 265 us against 16 for a batch that was shaped already.
-            TextCache.printf(effect, text_x, effect_top, iw, "left")
+            love.graphics.push()
+            love.graphics.translate(text_x + iw * (1-scale)/2, iy + (max_h-block_h*scale)/2)
+            love.graphics.scale(scale,scale)
+            for i,line in ipairs(layout.lines) do
+                TextCache.print(line, (iw-small:getWidth(line))/2, (i-1)*small:getHeight())
+            end
+            love.graphics.pop()
         else
             love.graphics.setColor(G.C.WHITE)
             love.graphics.setFont(G.FONTS.PIXEL.SMALL)
@@ -466,15 +469,18 @@ function TopUI:draw(screen)
     -- Round Score, Chips and Mult
     love.graphics.setColor(G.C.BLOCK.SHADOW)
     local width = 64
-    ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY, titleWidth, math.floor(titleHeight/3.5), 4, 4, "fill")
+    local score_row_height = math.max(math.floor(titleHeight/3.5), G.FONTS.PIXEL.MEDIUM:getHeight() + 12)
+    ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY, titleWidth, score_row_height, 4, 4, "fill")
     
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     love.graphics.setColor(G.C.WHITE)
-    TextCache.print(I18N.text("hud.round_score_1", nil, "Round"), ix, iy - 3)
-    TextCache.print(I18N.text("hud.round_score_2", nil, "Score"), ix, iy + 7)
+    local score_label = I18N.text("hud.round_score_1", nil, "Round")
+        .. (I18N.get_language() == "zh_CN" and "" or " ")
+        .. I18N.text("hud.round_score_2", nil, "Score")
+    local paneOffset = math.min(62, G.FONTS.PIXEL.SMALL:getWidth(score_label) + 4)
+    TopUI.center_text_juiced(score_label, ix, iy, paneOffset - 4, ih)
 
     love.graphics.setColor(G.C.PANEL)
-    local paneOffset = 30
     ix, iy, iw, ih = draw_rounded_rect(ix + paneOffset, iy, iw - paneOffset, ih, 2, 2, "fill")
 
     -- The eased count-up value, not `G.round_score`: the fit has to follow what is actually on
@@ -484,11 +490,11 @@ function TopUI:draw(screen)
     local score = self:score_readout()
     love.graphics.setFont(Fonts.fit(G, G.FONTS.PIXEL.MEDIUM, score, iw))
     love.graphics.setColor(G.C.WHITE)
-    TopUI.center_text(score, ix - sysDepth * textHeight, iy -1, iw, ih)
+    TopUI.center_text_juiced(score, ix - sysDepth * textHeight, iy, iw, ih)
 
 
     love.graphics.setColor(G.C.BLOCK.SHADOW)
-    ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY + math.floor(titleHeight/3.5) + 4, titleWidth, titleHeight - math.floor(titleHeight/3.5) - 3, 4, 4, "fill")
+    ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY + score_row_height + 4, titleWidth, titleHeight - score_row_height - 3, 4, 4, "fill")
 
     love.graphics.setColor(G.C.WHITE)
     love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
@@ -837,9 +843,9 @@ function TopUI.LabeledField(string, value, x, y, iw, ih, fieldColor, juice)
         ix, iy, iw, ih = draw_rounded_rect(ix, iy, iw, ih, 4, 4,"fill")
     end
 
-    love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
+    love.graphics.setFont(Fonts.fit(G, G.FONTS.PIXEL.MEDIUM, tostring(value), iw))
     love.graphics.setColor(fieldColor)
-    TopUI.center_text_juiced(value, ix - sysDepth * textHeight, iy - 1, iw, ih, juice)
+    TopUI.center_text_juiced(value, ix - sysDepth * textHeight, iy, iw, ih, juice)
 
 end
 
@@ -900,28 +906,20 @@ end
 --- every frame except the quarter second after a counter changes, and costs one nil test.
 --- @param scale number|nil Pop scale from the baked curve
 function TopUI.center_text_juiced(string, x, y, iw, ih, scale)
-    if not scale then
-        return TopUI.center_text(string, x, y, iw, ih)
-    end
-
-    -- The counters sit in 48 px boxes with the X between them, so a wide number must not be
-    -- allowed to grow past its box. A number that already fills the box only dips.
-    local w = love.graphics.getFont():getWidth(tostring(string or ""))
-    if w > 0 then
-        local cap = iw / w
-        if cap < 1 then cap = 1 end
-        if scale > cap then scale = cap end
-    end
-
-    local cx = x + iw * 0.5
-    local cy = y + ih * 0.5
+    -- A readout is one line. printf would wrap a ratio or a large number out of its panel.
+    local text = tostring(string or "")
+    local font = love.graphics.getFont()
+    local width, height = font:getWidth(text), font:getHeight()
+    local fit = math.min(1, iw / math.max(1, width), ih / math.max(1, height))
+    local pop = math.min(scale or 1, iw / math.max(1, width), ih / math.max(1, height))
+    if not scale then pop = fit end
+    local px, py = x + (iw - width * pop) / 2, y + (ih - height * pop) / 2
     love.graphics.push()
-    love.graphics.translate(cx, cy)
-    love.graphics.scale(scale, scale)
-    love.graphics.translate(-cx, -cy)
-    local xval, yval = TopUI.center_text(string, x, y, iw, ih)
+    love.graphics.translate(px, py)
+    love.graphics.scale(pop, pop)
+    love.graphics.print(text, 0, 0)
     love.graphics.pop()
-    return xval, yval
+    return px, py
 end
 
 function TopUI:init()
