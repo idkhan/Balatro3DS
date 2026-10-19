@@ -1,3 +1,4 @@
+local Fonts = require("fonts")
 
 local MainMenuUI = {}
 local CollectionUI = require("collection_ui")
@@ -690,9 +691,11 @@ function MainMenuUI.draw_main(game)
         rects[#rects + 1] = { kind = entry.kind, rect = rect }
         draw_button_with_shadow(rect.x, rect.y, rect.w, rect.h, 4, 4,
             C[entry.colour] or C.BLUE, C.BLOCK.SHADOW, 2)
-        love.graphics.setFont(font_m)
+        local label = I18N.text("menu.entry." .. entry.kind, nil, entry.label)
+        local font = Fonts.fit(game, font_m, label, rect.w - 12)
+        love.graphics.setFont(font)
         love.graphics.setColor(C.WHITE)
-        love.graphics.printf(I18N.text("menu.entry." .. entry.kind, nil, entry.label), rect.x, label_y(rect), rect.w, "center")
+        love.graphics.printf(label, rect.x + 6, rect.y + math.floor((rect.h - font:getHeight()) / 2), rect.w - 12, "center")
         y = y + btn_h + btn_gap
     end
 
@@ -1417,8 +1420,11 @@ function MainMenuUI.draw_deck_select(game)
     end
 
     love.graphics.setFont(font_s)
-    love.graphics.setColor(C.GREY)
-    love.graphics.printf(I18N.text("menu.deck_controls", nil, "A/Y: Play  START: Seed  LEFT/RIGHT: Deck  B/X: Back"), 0, H - 14, W, "center")
+    love.graphics.setColor(C.WHITE)
+    local footer = I18N.text("menu.deck_controls", nil, "A/Y: Play  START: Seed  LEFT/RIGHT: Deck  B/X: Back")
+    local footer_font = Fonts.fit(game, font_s, footer, W - 8)
+    love.graphics.setFont(footer_font)
+    love.graphics.printf(footer, 4, H - footer_font:getHeight() - 2, W - 8, "center")
 end
 
 --- The benchmark screen: a progress readout while the suite runs, then paged results.

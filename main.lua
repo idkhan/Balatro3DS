@@ -581,7 +581,7 @@ function love.gamepadreleased(_, button)
         local began_in_shop = G._cancel_press_state == G.STATES.SHOP
         G._cancel_press_state = nil
         if G.STATE == G.STATES.SHOP and began_in_shop and held and held >= hold_threshold
-            and G.get_gamepad_focus_layer and G:get_gamepad_focus_layer() == "hand" then
+            and not swept and not G.dragging then
             G:continue_from_shop()
         end
     end

@@ -104,4 +104,24 @@ function Utf8.break_pieces(chunk)
     return pieces
 end
 
+--- Wrap plain text at CJK break opportunities, keeping punctuation with its neighbour.
+function Utf8.wrap_lines(font, text, limit)
+    local lines = {}
+    for paragraph in (tostring(text or "") .. "\n"):gmatch("(.-)\n") do
+        local line = ""
+        for chunk, gap in paragraph:gmatch("(%S+)(%s*)") do
+            for _, piece in ipairs(Utf8.break_pieces(chunk)) do
+                if line ~= "" and font:getWidth(line .. piece) > limit then
+                    lines[#lines + 1] = line:gsub("%s+$", "")
+                    line = ""
+                end
+                line = line .. piece
+            end
+            line = line .. gap
+        end
+        lines[#lines + 1] = line:gsub("%s+$", "")
+    end
+    return lines
+end
+
 return Utf8

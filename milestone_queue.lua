@@ -43,34 +43,24 @@ function Milestones.draw(game)
     if not a then return end
     local C = game.C
     local reduced = game.SETTINGS and game.SETTINGS.REDUCED_MOTION == true
-    local r = 4 -- corner rounding
-    local p = 4 -- padding
-    love.graphics.push()
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    local height = love.graphics.getFont():getHeight() * 2 + 3 * p
-    local lineThickness = 2
-    local shadowOffset = 4
-    -- Slide from fully off-screen (box + shadow) to the resting y, so no strip is left
-    -- behind at the top edge when the toast appears or is dismissed.
-    local rest_y, hidden_y = 5, -(height + shadowOffset)
+    local Fonts = require("fonts")
+    local label = a.title .. (a.detail ~= "" and (": " .. a.detail) or "")
+    local width, height = 304, 14
+    local font = Fonts.fit(game, game.FONTS.PIXEL.SMALL, label, width - 8)
+    local rest_y, hidden_y = 226, 244
     local edge = math.max(0, math.min(a.age / SLIDE, (HOLD - a.age) / SLIDE, 1))
     local y = reduced and rest_y or (hidden_y + (rest_y - hidden_y) * edge)
-    love.graphics.setColor(C.BLOCK.SHADOW or C.BLACK)
-    love.graphics.rectangle("fill", 88, y + shadowOffset, 224, height, r)
+    love.graphics.push()
     love.graphics.setColor(C.ORANGE)
-    love.graphics.rectangle("fill", 88, y, 224, height, r)
+    love.graphics.rectangle("fill", 48, y, width, height, 3, 3)
     love.graphics.setColor(C.BLACK or C.BLOCK.BACK)
-    love.graphics.rectangle("fill", 92, y + lineThickness, 216, height - 2 * lineThickness, r)
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    local fontHeight = love.graphics.getFont():getHeight()
+    love.graphics.rectangle("fill", 49, y + 1, width - 2, height - 2, 3, 3)
+    love.graphics.setFont(font)
     love.graphics.setColor(C.WHITE)
-    local title_y = y + lineThickness + p
-    love.graphics.printf(a.title, 98, title_y, 204, "center")
-    if a.detail ~= "" then
-        love.graphics.setFont(game.FONTS.PIXEL.MICRO or game.FONTS.PIXEL.SMALL)
-        love.graphics.setColor(C.DARK_WHITE or C.WHITE)
-        love.graphics.printf(a.detail, 98, title_y + fontHeight + p, 204, "center")
-    end
+    local scale = math.min(1, (width - 8) / math.max(1, font:getWidth(label)), (height - 2) / font:getHeight())
+    love.graphics.translate(48 + (width - font:getWidth(label) * scale) / 2, y + (height - font:getHeight() * scale) / 2)
+    love.graphics.scale(scale, scale)
+    love.graphics.print(label, 0, 0)
     love.graphics.pop()
 end
 

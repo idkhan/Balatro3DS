@@ -643,11 +643,10 @@ function ShopUI.draw_bottom_shop(game)
         cache = {
             continue = {
                 x = 0, y = 0, w = 74, h = 45,
-                -- Leaving the shop is a held Cancel gesture (`main.lua:547-550`),
-                -- not a one-press action, so it deliberately has no pip.
+                -- Show both the live binding and the required hold gesture.
                 parts = {
-                    { text = I18N.text("shop.next_round_1", nil, "Next"), font = game.FONTS.PIXEL.BUTTON },
-                    { text = I18N.text("shop.next_round_2", nil, "Round"), font = game.FONTS.PIXEL.BUTTON },
+                    { text = I18N.text("shop.continue_label", nil, "Next Round"), font = game.FONTS.PIXEL.BUTTON },
+                    { text = I18N.text("shop.hold", nil, "Hold"), font = game.FONTS.PIXEL.SMALL },
                 },
             },
             reroll = {
@@ -669,6 +668,7 @@ function ShopUI.draw_bottom_shop(game)
     shop_continue_rect.x = panel_x + padding
     shop_continue_rect.y = panel_y + padding
     shop_continue_rect.color = game.C.RED
+    shop_continue_rect.button = game:get_button_for_role("cancel")
     local reroll_cost = game:shop_current_reroll_cost()
     local can_reroll = game:can_afford_price(reroll_cost)
     local reroll_color = can_reroll and game.C.GREEN or game.C.GREY
