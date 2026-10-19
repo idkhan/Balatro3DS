@@ -36,4 +36,4 @@ python3 dev/audit_zh_translation.py --official-game /path/to/Balatro.exe
 
 The audit requires `lupa` and reads the game's localization locally. It reports differences and returns nonzero for missing keys, name mismatches, or placeholder mismatches. Its default output is `dev/.cache/zh-audit/`.
 
-Desktop dual-screen checks covered 84 blind-selection layouts, all 28 Boss HUDs, and eight scenes. Native sheet maps, baselines and locale coverage were also checked. **Physical 3DS verification is still needed**, especially font clarity, memory use and the compact layouts; desktop previews do not establish hardware results.
+Desktop dual-screen checks covered 84 blind-selection layouts, all 28 Boss HUDs, and eight scenes. Native sheet maps, baselines and locale coverage were also checked. **Hardware testing has been reported on a Japanese-region New Nintendo 3DS running Luma3DS 13.4. Other models and region variants have not been tested.** This does not establish exhaustive coverage of font clarity, memory use, layouts or gameplay; desktop previews do not extend the hardware coverage.
