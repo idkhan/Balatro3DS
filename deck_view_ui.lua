@@ -575,13 +575,9 @@ end
 local DECK_SPRITE_SCALE = 0.62
 
 local function draw_deck_sprite(game, def, x, y, scale)
-    if not def then return false end
-    if game.ensure_asset_atlas_loaded then
-        game:ensure_asset_atlas_loaded("centers")
-    end
-    local atlas = game.ASSET_ATLAS and game.ASSET_ATLAS.centers
-    if not atlas or not atlas.image then return false end
-    local quad = game:atlas_cell_quad(atlas, tonumber(def.pos) or 0)
+    if not def or not game.get_deck_back_quad then return false end
+    -- A mod deck's back is its own image, not a cell of `centers`.
+    local atlas, quad = game:get_deck_back_quad(def.id)
     if not quad then return false end
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(atlas.image, quad, x, y, 0, scale, scale)

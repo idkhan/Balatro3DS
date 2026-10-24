@@ -2,8 +2,8 @@
     "id": "ExampleJokers",
     "name": "Example Jokers",
     "author": ["Balatro3DS"],
-    "description": "Shows the mod API: three Jokers (with negative art), a Tarot, a Spectral, a pair of Vouchers and a set of Spades face cards.",
+    "description": "Shows the mod API: three Jokers (with negative art), a Tarot, a Spectral, a pair of Vouchers, a Deck, an Edition and a set of Spades face cards.",
     "prefix": "exj",
     "main_file": "ExampleJokers.lua",
-    "version": "1.3.0"
+    "version": "1.5.0"
 }

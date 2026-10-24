@@ -50,7 +50,7 @@ local function new_mod(folder)
         folder = folder, path = ModLoader.DIR .. "/" .. folder,
         author = "", description = "", dependencies = {},
         status = "error", error = nil, runtime_errors = {},
-        registered = { jokers = {}, sprites = {}, consumables = {}, vouchers = {}, deck_skins = {}, strings = {} },
+        registered = { jokers = {}, sprites = {}, consumables = {}, vouchers = {}, decks = {}, editions = {}, deck_skins = {}, strings = {} },
     }
 end
 
@@ -354,9 +354,9 @@ local function log_lines()
         if mod.status == "disabled" then
             lines[#lines + 1] = "    turned off in Options > Mods (" .. ModLoader.DISABLED_PATH .. ")"
         elseif mod.status == "loaded" then
-            lines[#lines + 1] = ("    %d joker(s), %d consumable(s), %d voucher(s), %d deck skin(s), %d image(s)"):format(
+            lines[#lines + 1] = ("    %d joker(s), %d consumable(s), %d voucher(s), %d deck(s), %d edition(s), %d deck skin(s), %d image(s)"):format(
                 #mod.registered.jokers, #mod.registered.consumables, #mod.registered.vouchers,
-                #mod.registered.deck_skins, #mod.registered.sprites)
+                #mod.registered.decks, #mod.registered.editions, #mod.registered.deck_skins, #mod.registered.sprites)
         else
             lines[#lines + 1] = "    " .. tostring(mod.error)
         end

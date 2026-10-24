@@ -1697,7 +1697,7 @@ function Hand:_update_play_sequence(dt)
                     -- here, after the card's own listeners. This used to be guarded by an
                     -- undeclared global that was always nil, so the guard never fired and an
                     -- editioned playing card had its bonus applied twice in the animated path.
-                    chips, mult = self:apply_playing_card_edition(chips, mult, data)
+                    chips, mult = self:apply_playing_card_edition(chips, mult, data, node)
                     self:announce_playing_card_edition(node, data)
                     G.selectedHandChips = chips
                     G.selectedHandMult = mult
@@ -2283,17 +2283,36 @@ end
 ---@return number chip_bonus
 ---@return number mult_bonus
 ---@return number x_mult_bonus
+--- A mod edition (`SMODS.Edition`) also returns the money it pays when the card scores. Its
+--- `calculate` runs once per scored card: the result is kept for `announce_playing_card_edition`,
+--- which asks again for the same card straight after.
+---@return number dollars
 function Hand:get_playing_card_edition_bonus(card_data)
     local modifier = type(card_data) == "table" and card_data.modifier or nil
     local edition = type(modifier) == "table" and modifier.edition or nil
-    if edition == "foil" then return 50, 0, 1 end
-    if edition == "holo" then return 0, 10, 1 end
-    if edition == "polychrome" then return 0, 0, 1.5 end
-    return 0, 0, 1
+    if edition == "foil" then return 50, 0, 1, 0 end
+    if edition == "holo" then return 0, 10, 1, 0 end
+    if edition == "polychrome" then return 0, 0, 1.5, 0 end
+    if SMODS and SMODS.edition and SMODS.edition(edition) then
+        local cached = self._mod_edition_bonus
+        if cached and cached.data == card_data then
+            return cached[1], cached[2], cached[3], cached[4]
+        end
+        local node = self._mod_edition_node
+        local c, m, x, d = SMODS.edition_effect(edition, node and node.card_data == card_data and node or nil,
+            "main_scoring")
+        self._mod_edition_bonus = { data = card_data, c, m, x, d }
+        return c, m, x, d
+    end
+    return 0, 0, 1, 0
 end
 
-function Hand:apply_playing_card_edition(chips, mult, card_data)
-    local chip_bonus, mult_bonus, x_mult_bonus = self:get_playing_card_edition_bonus(card_data)
+function Hand:apply_playing_card_edition(chips, mult, card_data, node)
+    -- A fresh scoring of this card: drop what the last one kept.
+    self._mod_edition_bonus = nil
+    self._mod_edition_node = node
+    local chip_bonus, mult_bonus, x_mult_bonus, dollars = self:get_playing_card_edition_bonus(card_data)
+    if dollars ~= 0 and G then G.money = (tonumber(G.money) or 0) + dollars end
     -- Playing-card xMult is applied after that card's own effects (reference state_events.lua:759-776).
     return chips + chip_bonus, (mult + mult_bonus) * x_mult_bonus
 end
@@ -2319,7 +2338,7 @@ function Hand:accumulate_card_score(chips, mult, node, include_edition)
     -- `card_played` listeners have run, which is the reference's order
     -- (`state_events.lua:759-776`). Callers that score in one shot let it happen here.
     if include_edition ~= false then
-        chips, mult = self:apply_playing_card_edition(chips, mult, data)
+        chips, mult = self:apply_playing_card_edition(chips, mult, data, node)
     end
     local announce_edition_here = (include_edition ~= false)
 
@@ -2382,7 +2401,7 @@ end
 ---@param card_data table
 function Hand:announce_playing_card_edition(node, card_data)
     if not node or not node.VT then return end
-    local chip_bonus, mult_bonus, x_mult_bonus = self:get_playing_card_edition_bonus(card_data)
+    local chip_bonus, mult_bonus, x_mult_bonus, dollars = self:get_playing_card_edition_bonus(card_data)
     local x = node.VT.x + node.collision_offset.x + (node.VT.w / 2) * node.VT.scale
     local y = node.VT.y + node.collision_offset.y + (node.VT.h / 2) * node.VT.scale
     self:announce_card_effects(node, x, y, {
@@ -2391,6 +2410,8 @@ function Hand:announce_playing_card_edition(node, card_data)
         -- A neutral xMult is 1 and must not be announced; `announce_card_effects` skips 0, so
         -- the identity is subtracted out here and added back by the "x" prefix.
         { amount = (x_mult_bonus ~= 1) and x_mult_bonus or 0, kind = "xmult" },
+        -- Only a mod edition pays money (`p_dollars`).
+        { amount = dollars or 0, kind = "money" },
     })
 end
 

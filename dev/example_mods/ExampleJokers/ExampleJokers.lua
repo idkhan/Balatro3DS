@@ -162,6 +162,57 @@ SMODS.Voucher {
 }
 
 --------------------------------------------------------------------------------
+-- Decks
+--------------------------------------------------------------------------------
+
+-- A deck. `config` takes vanilla Balatro's Back keys (hand_size, discards, dollars, joker_slot,
+-- consumables, vouchers, ...) and needs no code; `calculate` hears the same contexts a Joker
+-- does, after the Jokers. `sprite` is the card back every playing card wears, 72x95.
+-- `back.effect.config` is the run's own copy of `config`, saved with the run.
+SMODS.Back {
+    key = "scholar",
+    loc_txt = {
+        name = "Scholar's Deck",
+        text = { "{C:attention}+#1#{} hand size", "{C:mult}+#2#{} Mult when you play", "a {C:attention}High Card{}" },
+    },
+    config = { hand_size = 1, extra = { mult = 10 } },
+    sprite = "scholar_back.png",
+    loc_vars = function(self, info_queue, back)
+        return { vars = { back.effect.config.hand_size, back.effect.config.extra.mult } }
+    end,
+    calculate = function(self, back, context)
+        if context.joker_main and context.scoring_name == "High Card" then
+            return { mult = back.effect.config.extra.mult }
+        end
+    end,
+}
+
+--------------------------------------------------------------------------------
+-- Editions
+--------------------------------------------------------------------------------
+
+-- An edition. `config` takes Steamodded's edition numbers (chips, mult, x_mult, p_dollars) and
+-- needs no code. `in_shop` with a `weight` lets the shop and packs roll it, on Steamodded's
+-- scale (Foil is 20). The 3DS can't run a shader, so `fx` describes the look instead: a `tint`
+-- over the art, a `glow` on top, and the glow's `animation`.
+SMODS.Edition {
+    key = "gilded",
+    loc_txt = {
+        name = "Gilded",
+        text = { "Earn {C:money}$#1#{} when", "this card scores" },
+    },
+    config = { p_dollars = 2 },
+    extra_cost = 3,
+    in_shop = true,
+    weight = 10,
+    sound = { sound = "gold_seal", per = 1.2, vol = 0.4 },
+    fx = { tint = { 1.0, 0.92, 0.7 }, glow = { 1.0, 0.85, 0.35, 0.45 }, animation = "sweep" },
+    loc_vars = function(self, info_queue, card)
+        return { vars = { self.config.p_dollars } }
+    end,
+}
+
+--------------------------------------------------------------------------------
 -- Card faces
 --------------------------------------------------------------------------------
 

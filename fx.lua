@@ -300,6 +300,73 @@ local EDITION_PASSES = {
     },
 }
 
+--------------------------------------------------------------------------------
+-- Mod editions
+--------------------------------------------------------------------------------
+
+--- A mod edition's look (`SMODS.Edition`'s `fx`) as the same two passes the vanilla editions
+--- use: `tint` multiplies the art, `glow` is added over it, and `animation` moves the glow --
+--- "sweep" a band across the card like foil, "shimmer" through the shared interference field
+--- like holo, "rainbow" the field's hues like polychrome (tint and glow colour ignored),
+--- "pulse" in and out, "steady" not at all. Declarative on purpose: these run per vertex
+--- every frame, and mod code there could neither be afforded nor safely fail.
+---@param look table `{ tint = {r,g,b}, glow = {r,g,b,a}, animation = string }`
+---@return table passes
+local function mod_edition_passes(look)
+    local tr, tg, tb = look.tint[1], look.tint[2], look.tint[3]
+    local gr, gg, gb, ga = look.glow[1], look.glow[2], look.glow[3], look.glow[4]
+    local anim = look.animation
+    if anim == "rainbow" then
+        return {
+            base = Fx.polychrome_base_rgba, base_field = "polychrome",
+            add = function(field, n, u, v, t, seed)
+                local r, g, b = Fx.hue_rgb(field[n] + 0.15 + seed)
+                return r, g, b, ga
+            end,
+            add_field = "polychrome",
+        }
+    end
+    local passes = { base = function() return tr, tg, tb, 1 end }
+    if anim == "shimmer" then
+        passes.add = function(field, n, u, v, t, seed)
+            return gr, gg, gb, ga * (0.4 + 0.6 * ((field[n] + seed) % 1))
+        end
+        passes.add_field = "holo"
+    elseif anim == "pulse" then
+        passes.add = function(u, v, t) return gr, gg, gb, ga * (0.55 + 0.45 * math.sin(t * 2.5)) end
+    elseif anim == "steady" then
+        passes.add = function() return gr, gg, gb, ga end
+    else
+        passes.add = function(u, v, t)
+            local pos = (t * 0.5) % 1.9 - 0.35
+            return gr, gg, gb, ga * (0.12 + 0.88 * Fx.band(u * 0.72 + v * 0.45, pos, 0.35))
+        end
+    end
+    return passes
+end
+
+--- The flat stand-in tint for each mod edition, where shelves do not animate.
+local MOD_EDITION_TINTS = {}
+
+--- Make a mod edition drawable. Called by `SMODS.Edition`.
+function Fx.register_edition(id, look)
+    EDITION_PASSES[id] = mod_edition_passes(look)
+    MOD_EDITION_TINTS[id] = look.animation == "rainbow" and { 0.88, 0.72, 1.0 } or look.tint
+end
+
+function Fx.unregister_edition(id)
+    if MOD_EDITION_TINTS[id] then
+        EDITION_PASSES[id] = nil
+        MOD_EDITION_TINTS[id] = nil
+    end
+end
+
+--- The flat tint for a mod edition, or nil for anything else.
+---@return table|nil `{ r, g, b }`
+function Fx.mod_edition_tint(id)
+    return MOD_EDITION_TINTS[id]
+end
+
 --- Source rect of one pattern cell.
 ---@param pattern table
 ---@param variant string "card" or "joker"

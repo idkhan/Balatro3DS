@@ -322,6 +322,11 @@ function Game:apply_deck_modifiers(def)
     self._deck_no_interest = cfg.no_interest == true
     self.deck_joker_slots = tonumber(cfg.joker_slots) or 0
     self.deck_spectral_rate = tonumber(cfg.spectral_rate) or 0
+    -- Blind requirements are multiplied by this (Plasma's 2, or a mod deck's `ante_scaling`).
+    self.deck_ante_scaling = tonumber(cfg.ante_scaling) or (def.special == "plasma" and 2) or 1
+    -- Percent chance a Joker or consumable in the shop or a pack is Negative (playing cards
+    -- never); nil keeps vanilla: 0.3 for Jokers, and no edition at all on consumables.
+    self.deck_negative_rate = tonumber(cfg.negative_rate)
     self._deck_special = def.special or nil
 end
 
@@ -331,6 +336,9 @@ function Game:apply_deck_config(deck_id)
 
     local cfg = def.config or {}
     self:apply_deck_modifiers(def)
+    -- A mod deck's own copy of its config for this run: `back.effect.config` in its `apply` and
+    -- `calculate`, free to change, and saved with the run.
+    self.deck_effect_config = def.smods and SMODS.deep_copy(def.smods.config or {}) or nil
 
     if (tonumber(cfg.dollars) or 0) ~= 0 then
         self.money = math.max(0, (tonumber(self.money) or 0) + (tonumber(cfg.dollars) or 0))
@@ -364,9 +372,44 @@ function Game:apply_deck_config(deck_id)
         end
     end
 
+    -- Last, as Steamodded runs a Back's `apply` after the vanilla config: it sees the deck
+    -- already built, the money already given and the starting cards already in hand.
+    if def.smods then SMODS.apply_back(self) end
+
     if self.refresh_playing_card_backs then
         self:refresh_playing_card_backs()
     end
+end
+
+--- Where a deck's back is drawn from: an asset-atlas name and a cell in it. A vanilla deck is a
+--- cell of `centers`; a mod deck is its own 72x95 image, registered as a one-cell atlas the
+--- first time it is asked for, so it loads and frees like any other sheet.
+---@param id string|nil deck id; nil falls back to the run's deck, then the pending one
+---@return string atlas_name
+---@return integer index
+function Game:get_deck_back_sprite(id)
+    id = id or self.selected_deck_id or self._pending_deck_id or "b_red"
+    local def = (DECK_DEFS_BY_ID and DECK_DEFS_BY_ID[id]) or (DECK_DEFS and DECK_DEFS[1])
+    local path = def and def.mod_sprite and SMODS and SMODS.sprite_path(def.mod_sprite)
+    if path and self.ASSET_ATLAS then
+        local name = "deck_back:" .. def.mod_sprite
+        local atlas = self.ASSET_ATLAS[name]
+        if not atlas or atlas.path ~= path then
+            self.ASSET_ATLAS[name] = { name = name, path = path, px = 72, py = 95, cols = 1, rows = 1 }
+        end
+        return name, 0
+    end
+    return "centers", tonumber(def and def.pos) or 0
+end
+
+--- A deck's back, loaded: the atlas and the quad of its cell, or nil when the art is missing.
+---@return table|nil atlas
+---@return userdata|nil quad
+function Game:get_deck_back_quad(id)
+    local name, index = self:get_deck_back_sprite(id)
+    local atlas = self:ensure_asset_atlas_loaded(name)
+    if not (atlas and atlas.image) then return nil, nil end
+    return atlas, self:atlas_cell_quad(atlas, index)
 end
 
 --- Atlas cell index for a deck's playing-card back (`DECK_DEFS.pos` in `centers`).

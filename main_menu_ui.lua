@@ -1086,24 +1086,23 @@ end
 --- `unlocked` defaults to the catalog flag, which `Game:apply_unlocks` does keep in step for
 --- decks (`game.lua:1716-1721`); callers that already have the runtime answer pass it in.
 function MainMenuUI.draw_deck_carousel_sprite(game, def, x, y, w, h, p, unlocked)
+    if unlocked == nil then unlocked = def and def.unlocked end
+    -- A locked deck shows the locked back (cell 4 of `centers`); an unlocked one its own back,
+    -- which for a mod deck is its own image (`Game:get_deck_back_sprite`).
+    local atlas_name, index = "centers", 4
+    if unlocked and game.get_deck_back_sprite then
+        atlas_name, index = game:get_deck_back_sprite(def and def.id)
+    end
     local atlas = nil
     if game.ensure_asset_atlas_loaded then
-        atlas = game:ensure_asset_atlas_loaded("centers")
+        atlas = game:ensure_asset_atlas_loaded(atlas_name)
     end
-    if unlocked == nil then unlocked = def and def.unlocked end
 
-    if atlas and atlas.image then
-        local index = tonumber(def and def.pos) or 0
-        if not unlocked then
-            index = 4
-        end
-        local iw, ih = atlas.image:getDimensions()
-        local cell_w = tonumber(atlas.px) or 72
-        local cell_h = tonumber(atlas.py) or 95
-        local cols = math.max(1, math.floor(iw / cell_w))
-        local col = index % cols
-        local row = math.floor(index / cols)
-        local quad = love.graphics.newQuad(col * cell_w, row * cell_h, cell_w, cell_h, iw, ih)
+    local quad, cell_w, cell_h
+    if atlas and atlas.image and game.atlas_cell_quad then
+        quad, cell_w, cell_h = game:atlas_cell_quad(atlas, index)
+    end
+    if quad then
 
         local scale = math.min((w - p) / cell_w, (h - p) / cell_h)
         if scale > 1 then scale = 1 end

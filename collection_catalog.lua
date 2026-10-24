@@ -283,6 +283,21 @@ function CollectionCatalog.build_edition_entries()
             discovery_id = "edition_" .. key,
         }
     end
+    -- Mod editions follow, in the order their mods defined them.
+    for i, id in ipairs(SMODS and SMODS.EDITION_ORDER or {}) do
+        local def = SMODS.Editions[id]
+        if def then
+            out[#out + 1] = {
+                id = "edition_" .. id,
+                category = "editions",
+                node_kind = "edition",
+                name = SMODS.edition_name(id),
+                order = #CollectionCatalog.EDITION_KEYS + i,
+                edition = id,
+                discovery_id = "edition_" .. id,
+            }
+        end
+    end
     return out
 end
 

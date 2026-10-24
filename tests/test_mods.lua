@@ -398,6 +398,428 @@ suite.test("a mod Joker's tooltip leads with its rarity, like a vanilla one", fu
 end)
 
 --------------------------------------------------------------------------------
+-- Decks
+--------------------------------------------------------------------------------
+
+local DECK_MOD = [==[
+SMODS.Back {
+    key = "rich",
+    loc_txt = { name = "Rich Deck", text = { "Start with {C:money}$#1#{}", "and {C:attention}#2#{} Joker slot" } },
+    config = { dollars = 20, joker_slot = 1, hands = -1, consumables = { "c_fool" }, vouchers = { "v_overstock_norm" },
+        ante_scaling = 2, extra = { scored = 0 } },
+    sprite = "rich_back.png",
+    loc_vars = function(self, info_queue, back)
+        return { vars = { back.effect.config.dollars, back.effect.config.joker_slot } }
+    end,
+    apply = function(self, back)
+        G.money = G.money + 1
+        back.effect.config.applied = true
+    end,
+    calculate = function(self, back, context)
+        if context.joker_main then
+            back.effect.config.extra.scored = back.effect.config.extra.scored + 1
+            return { mult = 7 }
+        end
+    end,
+}
+
+SMODS.Back {
+    key = "plain",
+    loc_txt = { name = "Plain Deck", text = { "Nothing special" } },
+    config = { remove_faces = true },
+    sprite = "plain_back.png",
+}
+]==]
+
+local function install_decks()
+    wipe_mods()
+    write_mod("Decks", { id = "Decks", prefix = "dk", main_file = "main.lua", version = "1" }, DECK_MOD)
+    ModLoader.load_all()
+    T.assert_eq(ModLoader.by_id.Decks.status, "loaded", tostring(ModLoader.by_id.Decks.error))
+    local game = bootstrap.new_game(4501)
+    G = game
+    G.play = G.play or SMODS.PLAY
+    _G.Top = _G.Top or { addPopup = function() end }
+    return game
+end
+
+suite.test("a mod deck is offered after the vanilla decks, unlocked, with Steamodded's config read", function()
+    local game = install_decks()
+    local def = DECK_DEFS_BY_ID.b_dk_rich
+    T.assert_true(def ~= nil)
+    T.assert_eq(DECK_SELECT_DEFS[#DECK_SELECT_DEFS].id, "b_dk_plain", "mod decks come last, in order")
+    T.assert_eq(def.config.joker_slots, 1, "joker_slot is the port's joker_slots")
+    T.assert_eq(def.start_consumables[1], "tarot_fool", "c_fool is the port's tarot_fool")
+    T.assert_eq(def.start_vouchers[1], "v_overstock", "Steamodded's voucher names are mapped")
+    T.assert_eq(DECK_DEFS_BY_ID.b_dk_plain.config.no_face_cards, true, "remove_faces")
+    T.assert_eq(def.description, "Start with $20\nand 1 Joker slot", "loc_vars fill the description")
+    T.assert_true(game:is_deck_unlocked("b_dk_rich"))
+    T.assert_true(game:is_stake_unlocked("b_dk_rich", "stake_white"), "its stake ladder starts at White")
+    T.assert_eq(#ModLoader.by_id.Decks.registered.decks, 2)
+
+    wipe_mods()
+    T.assert_eq(DECK_DEFS_BY_ID.b_dk_rich, nil, "unloading the mod takes its decks with it")
+    for _, d in ipairs(DECK_SELECT_DEFS) do T.assert_true(d.id ~= "b_dk_plain") end
+end)
+
+suite.test("a mod deck's config, apply and starting items shape the run", function()
+    local game = install_decks()
+    local base = bootstrap.new_game(4502)
+    base._pending_deck_id = "b_red"
+    base:initialize_run_loop()
+    local red_hands = base:get_effective_hands_per_round()
+    local red_target = base:get_base_requirement_for_ante(1)
+
+    G = game
+    game._pending_deck_id = "b_dk_rich"
+    game:initialize_run_loop()
+    T.assert_eq(game.selected_deck_id, "b_dk_rich")
+    T.assert_eq(game.money, base.money + 20 + 1, "config.dollars, then apply's +1")
+    T.assert_eq(game:get_effective_hands_per_round(), red_hands - 1)
+    T.assert_eq(game.consumables[1].id, "tarot_fool")
+    T.assert_true(game:has_voucher("v_overstock"))
+    T.assert_eq(game:get_base_requirement_for_ante(1), red_target * 2, "ante_scaling")
+    T.assert_eq(game.deck_effect_config.applied, true, "apply wrote to back.effect.config")
+    T.assert_eq(DECK_DEFS_BY_ID.b_dk_rich.smods.config.applied, nil, "...the run's copy, not the definition")
+    wipe_mods()
+end)
+
+suite.test("a mod deck's calculate scores after the Jokers, and its state saves with the run", function()
+    local game = install_decks()
+    game._pending_deck_id = "b_dk_rich"
+    game:initialize_run_loop()
+    local ctx = { event = "on_hand_scored", event_name = "on_hand_scored", chips = 10, mult = 2 }
+    game:emit_joker_event("on_hand_scored", ctx)
+    T.assert_eq(ctx.mult, 9, "+7 Mult from the deck")
+    T.assert_eq(game.deck_effect_config.extra.scored, 1)
+
+    local snap = game:build_run_snapshot()
+    local resumed = bootstrap.new_game(4503)
+    G = resumed
+    T.assert_true(resumed:load_run_snapshot(snap))
+    T.assert_eq(resumed.deck_effect_config.extra.scored, 1, "the deck's state came back")
+    local ctx2 = { event = "on_hand_scored", event_name = "on_hand_scored", chips = 10, mult = 2 }
+    resumed:emit_joker_event("on_hand_scored", ctx2)
+    T.assert_eq(resumed.deck_effect_config.extra.scored, 2)
+
+    -- A vanilla deck has no participant at all.
+    local vanilla = bootstrap.new_game(4504)
+    G = vanilla
+    vanilla._pending_deck_id = "b_red"
+    vanilla:initialize_run_loop()
+    T.assert_eq(SMODS.back_participant(vanilla), nil)
+    T.assert_eq(vanilla.deck_effect_config, nil)
+    wipe_mods()
+end)
+
+suite.test("a mod deck's back is its own image, on every playing card and in the menus", function()
+    local game = install_decks()
+    local name, index = game:get_deck_back_sprite("b_dk_rich")
+    T.assert_eq(name, "deck_back:mod:dk:rich_back.png")
+    T.assert_eq(index, 0)
+    T.assert_eq(select(1, game:get_deck_back_sprite("b_blue")), "centers")
+    T.assert_eq(select(2, game:get_deck_back_sprite("b_blue")), DECK_DEFS_BY_ID.b_blue.pos)
+
+    game._pending_deck_id = "b_dk_rich"
+    game:initialize_run_loop()
+    local card = Card(0, 0, nil, nil, { rank = 10, suit = "Clubs" }, nil, { face_up = false })
+    T.assert_eq(card.back_atlas, game.ASSET_ATLAS[name], "the card back draws from the deck's image")
+    T.assert_eq(card.face_atlas, game.ASSET_ATLAS.centers, "the face is still the standard card")
+    local atlas, quad = game:get_deck_back_quad("b_dk_rich")
+    T.assert_true(atlas ~= nil and quad ~= nil)
+    wipe_mods()
+end)
+
+suite.test("a bad deck is a load error naming what is wrong", function()
+    wipe_mods()
+    write_mod("A", { id = "A", prefix = "a", main_file = "main.lua", version = "1" },
+        [[SMODS.Back { key = "x", sprite = "x.png", config = { consumables = { "c_nope" } } }]])
+    write_mod("B", { id = "B", prefix = "b", main_file = "main.lua", version = "1" },
+        [[SMODS.Back { key = "x", config = {} }]])
+    ModLoader.load_all()
+    T.assert_true(ModLoader.by_id.A.error:find("c_nope", 1, true) ~= nil, ModLoader.by_id.A.error)
+    T.assert_true(ModLoader.by_id.B.error:find("sprite", 1, true) ~= nil, ModLoader.by_id.B.error)
+    T.assert_eq(DECK_DEFS_BY_ID.b_a_x, nil, "a failed deck is rolled back")
+    wipe_mods()
+end)
+
+suite.test("a deck's negative_rate makes Negative common and keeps the other editions", function()
+    wipe_mods()
+    write_mod("Neg", { id = "Neg", prefix = "neg", main_file = "main.lua", version = "1" }, [==[
+SMODS.Back {
+    key = "neg",
+    loc_txt = { name = "Neg Deck", text = { "{C:green}#1#%{} chance to be {C:dark_edition}Negative{}" } },
+    config = { negative_rate = 30 },
+    sprite = "neg_back.png",
+    loc_vars = function(self, info_queue, back) return { vars = { back.effect.config.negative_rate } } end,
+}
+]==])
+    ModLoader.load_all()
+    T.assert_eq(ModLoader.by_id.Neg.status, "loaded", tostring(ModLoader.by_id.Neg.error))
+    T.assert_eq(DECK_DEFS_BY_ID.b_neg_neg.description, "30% chance to be Negative")
+
+    local game = bootstrap.new_game(4601)
+    G = game
+    game._pending_deck_id = "b_neg_neg"
+    game:initialize_run_loop()
+    T.assert_eq(game:get_joker_edition_rates().negative, 30)
+
+    local counts = { negative = 0, polychrome = 0, holo = 0, foil = 0, base = 0 }
+    local n = 4000
+    for i = 1, n do
+        local ed = game:roll_joker_offer_edition("t" .. i)
+        counts[ed] = counts[ed] + 1
+    end
+    local share = counts.negative / n
+    T.assert_true(share > 0.27 and share < 0.33, "about 30% Negative, got " .. share)
+    T.assert_true(counts.foil > 0 and counts.holo > 0, "Foil and Holo still show up")
+
+    -- Any other deck keeps the vanilla 0.3%.
+    local red = bootstrap.new_game(4602)
+    G = red
+    red._pending_deck_id = "b_red"
+    red:initialize_run_loop()
+    T.assert_eq(red:get_joker_edition_rates().negative, 0.3)
+    T.assert_eq(red.deck_negative_rate, nil)
+
+    -- Consumables in the shop and in packs, at the same rate; a Negative one costs $5 more.
+    G = game
+    local negative, plain_price, negative_price = 0, nil, nil
+    for i = 1, 1000 do
+        game.ante = i
+        local offer = game:_roll_shop_queue_consumable_offer("tarot")
+        local base = game:shop_price_for_consumable_offer(CONSUMABLE_DEFS[offer.id], "tarot")
+        if offer.edition == "negative" then
+            negative = negative + 1
+            T.assert_eq(offer.price, base + 5, "Negative costs $5 more")
+            T.assert_eq(game:get_shop_offer_price(offer), base + 5, "and the live price agrees")
+        else
+            T.assert_eq(offer.edition, nil, "consumables get no other edition")
+            T.assert_eq(offer.price, base)
+        end
+    end
+    T.assert_true(negative > 250 and negative < 350, "about 30% of shop consumables, got " .. negative)
+
+    local pack_negative = 0
+    for i = 1, 200 do
+        game.ante = i
+        for _, ch in ipairs(game:_booster_build_choices({ pack = "arcana", card_count = 5 })) do
+            if ch.consumable_def.edition == "negative" then pack_negative = pack_negative + 1 end
+        end
+        for _, ch in ipairs(game:_booster_build_choices({ pack = "standard", card_count = 5 })) do
+            local ed = ch.playing_data.modifier and ch.playing_data.modifier.edition
+            T.assert_true(ed ~= "negative", "playing cards are never made Negative")
+        end
+    end
+    T.assert_true(pack_negative > 200 and pack_negative < 400, "about 30% of pack cards, got " .. pack_negative)
+
+    -- On any other deck a consumable never rolls an edition, and no random number is drawn.
+    G = red
+    for _ = 1, 20 do T.assert_eq(red:_roll_shop_queue_consumable_offer("planet").edition, nil) end
+    for k in pairs(red._rng_streams or {}) do
+        T.assert_true(not tostring(k):find("edi_cons", 1, true), "no edition stream on a vanilla deck")
+    end
+    wipe_mods()
+end)
+
+suite.test("a wider Negative band shifts the other editions down rather than swallowing them", function()
+    local game = bootstrap.new_game(4603)
+    game.deck_negative_rate = 30
+    -- Negative above 0.70; then the vanilla widths below it: Polychrome 0.3 points (0.697),
+    -- Holo 1.4 (0.683), Foil 2.0 (0.663).
+    local rolls = { 0.71, 0.699, 0.69, 0.675, 0.66 }
+    local want = { "negative", "polychrome", "holo", "foil", "base" }
+    for i, r in ipairs(rolls) do
+        game.random = function() return r end
+        T.assert_eq(game:roll_joker_offer_edition("x"), want[i], "roll " .. r)
+    end
+    -- At the vanilla rate the bands are exactly the reference's.
+    game.deck_negative_rate = nil
+    local vanilla = { [0.9971] = "negative", [0.9969] = "polychrome", [0.993] = "holo", [0.97] = "foil", [0.95] = "base" }
+    for r, ed in pairs(vanilla) do
+        game.random = function() return r end
+        T.assert_eq(game:roll_joker_offer_edition("x"), ed, "vanilla roll " .. r)
+    end
+end)
+
+suite.test("a mod deck's stake progress is kept while its mod is off", function()
+    local game = install_decks()
+    game.unlocks.b_dk_rich.stakes.stake_white.defeated = true
+    game.unlocks.b_dk_rich.stakes.stake_red.unlocked = true
+    ModLoader.set_enabled("Decks", false)
+    game:apply_unlocks(game.unlocks)
+    T.assert_eq(DECK_DEFS_BY_ID.b_dk_rich, nil)
+    ModLoader.set_enabled("Decks", true)
+    game:apply_unlocks(game.unlocks)
+    T.assert_true(game:is_stake_unlocked("b_dk_rich", "stake_red"), "progress survived the mod being off")
+    T.assert_true(game.unlocks.b_dk_rich.stakes.stake_white.defeated)
+    wipe_mods()
+end)
+
+--------------------------------------------------------------------------------
+-- Editions
+--------------------------------------------------------------------------------
+
+local EDITION_MOD = [==[
+SMODS.Edition {
+    key = "Gilded",
+    loc_txt = { name = "Gilded", text = { "{C:chips}+#1#{} Chips, {X:mult,C:white}X#2#{} Mult", "{C:money}$#3#{} when scored" } },
+    config = { chips = 20, mult = 3, x_mult = 2, p_dollars = 1 },
+    extra_cost = 4,
+    in_shop = true,
+    weight = 200,
+    sound = { sound = "gold_seal", per = 1.1, vol = 0.5 },
+    fx = { tint = { 1, 0.9, 0.6 }, glow = { 1, 0.8, 0.3, 0.4 }, animation = "pulse" },
+    loc_vars = function(self, info_queue, card)
+        return { vars = { self.config.chips, self.config.x_mult, self.config.p_dollars } }
+    end,
+}
+
+calls = 0
+SMODS.Edition {
+    key = "lucky_shine",
+    loc_txt = { name = "Lucky Shine", text = { "X3 Mult" } },
+    fx = { animation = "rainbow" },
+    calculate = function(self, card, context)
+        calls = calls + 1
+        if context.post_joker or (context.main_scoring and context.cardarea == G.play) then
+            return { x_mult = 3 }
+        end
+    end,
+}
+]==]
+
+local function install_editions()
+    wipe_mods()
+    write_mod("Eds", { id = "Eds", prefix = "ed", main_file = "main.lua", version = "1" }, EDITION_MOD)
+    ModLoader.load_all()
+    local mod = ModLoader.by_id.Eds
+    T.assert_eq(mod.status, "loaded", tostring(mod.error))
+    local game = bootstrap.new_game(4701)
+    G = game
+    G.play = G.play or SMODS.PLAY
+    _G.Top = _G.Top or { addPopup = function() end }
+    return game, mod
+end
+
+suite.test("a mod edition registers as its own edition everywhere the game names one", function()
+    local game, mod = install_editions()
+    local Fx = require("fx")
+    T.assert_true(SMODS.Editions.e_ed_gilded ~= nil, "the id is lower case: e_<prefix>_<key>")
+    T.assert_eq(Joker.normalize_edition("e_ed_gilded"), "e_ed_gilded")
+    T.assert_eq(Joker.normalize_edition("E_ED_GILDED"), "e_ed_gilded")
+    T.assert_true(Fx.has_edition_fx("e_ed_gilded"), "it draws through the edition passes")
+    T.assert_eq(Fx.mod_edition_tint("e_ed_gilded")[2], 0.9, "the flat shelf tint is its tint")
+    T.assert_eq(Joker.edition_price_deltas("e_ed_gilded"), 4, "extra_cost")
+    T.assert_eq(#mod.registered.editions, 2)
+
+    local entries = require("collection_catalog").build_edition_entries()
+    T.assert_eq(entries[#entries - 1].edition, "e_ed_gilded", "mod editions follow the vanilla four")
+    T.assert_eq(entries[#entries].name, "Lucky Shine")
+
+    game.jokers = {}
+    T.assert_true(game:add_joker_by_def("j_joker", { edition = "e_ed_gilded" }))
+    local lines = game.jokers[1]:get_edition_tooltip_lines()
+    T.assert_eq(lines[1].text, "Gilded:")
+    local first = {}
+    for _, s in ipairs(lines[2].segments) do first[#first + 1] = s.text end
+    T.assert_eq(table.concat(first), "+20 Chips, X2 Mult", "loc_vars fill the description")
+
+    wipe_mods()
+    T.assert_eq(Joker.normalize_edition("e_ed_gilded"), "base", "unloading the mod takes it away")
+    T.assert_false(Fx.has_edition_fx("e_ed_gilded"))
+    T.assert_eq(Fx.has_edition_fx("foil"), true, "the vanilla passes stay")
+end)
+
+suite.test("a mod edition on a Joker scores chips and mult before it, xMult and money after", function()
+    local game = install_editions()
+    game.jokers = {}
+    game:add_joker_by_def("j_joker", { edition = "e_ed_gilded" })
+    local money = game.money
+    local ctx = { event = "on_hand_scored", event_name = "on_hand_scored", chips = 10, mult = 2 }
+    game:emit_joker_event("on_hand_scored", ctx)
+    T.assert_eq(ctx.chips, 30, "+20 chips")
+    T.assert_eq(ctx.mult, (2 + 3 + 4) * 2, "+3 Mult, then Joker's +4, then X2")
+    T.assert_eq(game.money, money + 1, "p_dollars")
+
+    -- calculate: X3 after the Joker, and nothing before it.
+    game.jokers = {}
+    game:add_joker_by_def("j_joker", { edition = "e_ed_lucky_shine" })
+    local mod = ModLoader.by_id.Eds
+    local ctx2 = { event = "on_hand_scored", event_name = "on_hand_scored", chips = 10, mult = 2 }
+    game:emit_joker_event("on_hand_scored", ctx2)
+    T.assert_eq(ctx2.mult, (2 + 4) * 3)
+    T.assert_eq(#mod.runtime_errors, 0, tostring(mod.runtime_errors[1]))
+    wipe_mods()
+end)
+
+suite.test("a mod edition on a playing card scores when the card does, its calculate once", function()
+    local game = install_editions()
+    local hand = game.hand or Hand(game)
+    local data = { rank = 5, suit = "Hearts", modifier = { edition = "e_ed_gilded" } }
+    local money = game.money
+    local chips, mult = hand:apply_playing_card_edition(10, 2, data)
+    T.assert_eq(chips, 30)
+    T.assert_eq(mult, (2 + 3) * 2)
+    T.assert_eq(game.money, money + 1)
+
+    local env = getfenv(SMODS.Centers.e_ed_lucky_shine.calculate)
+    env.calls = 0
+    local shiny = { rank = 5, suit = "Hearts", modifier = { edition = "e_ed_lucky_shine" } }
+    local node = Card(0, 0, nil, nil, shiny, nil, { face_up = true })
+    chips, mult = hand:apply_playing_card_edition(10, 2, shiny, node)
+    T.assert_eq(mult, 6, "X3 from calculate on main_scoring")
+    hand:announce_playing_card_edition(node, shiny)
+    T.assert_eq(env.calls, 1, "announcing the edition does not run calculate again")
+    T.assert_eq(node.card_data.modifier.edition, "e_ed_lucky_shine")
+    wipe_mods()
+end)
+
+suite.test("in_shop mod editions roll at their weight, under the vanilla bands", function()
+    local game = install_editions()
+    T.assert_eq(#SMODS.rollable_editions(), 1, "only the in_shop one rolls")
+    -- Weight 200 is a 20% band under Foil's, which ends at 4%.
+    local bands = { [0.97] = "foil", [0.95] = "e_ed_gilded", [0.77] = "e_ed_gilded", [0.75] = "base" }
+    for r, want in pairs(bands) do
+        game.random = function() return r end
+        T.assert_eq(game:roll_joker_offer_edition("x"), want, "shop roll " .. r)
+    end
+    -- Wheel of Fortune and Aura: 200 * 2.5 = 500 more on top of the vanilla 100, so out of 600:
+    -- Polychrome above 585 (0.975), Holo above 550 (0.917), Foil above 500 (0.833), then Gilded.
+    local polls = { [0.99] = "polychrome", [0.95] = "holo", [0.85] = "foil", [0.8] = "e_ed_gilded", [0.01] = "e_ed_gilded" }
+    for r, want in pairs(polls) do
+        game.random = function() return r end
+        T.assert_eq(game:poll_guaranteed_edition("wheel_of_fortune"), want, "guaranteed roll " .. r)
+    end
+    wipe_mods()
+
+    -- No mod editions: the vanilla bands, exactly.
+    local vanilla = bootstrap.new_game(4702)
+    for r, want in pairs({ [0.86] = "polychrome", [0.51] = "holo", [0.49] = "foil" }) do
+        vanilla.random = function() return r end
+        T.assert_eq(vanilla:poll_guaranteed_edition("aura"), want)
+    end
+    vanilla.random = function() return 0.5 end
+    T.assert_eq(vanilla:roll_joker_offer_edition("x"), "base")
+end)
+
+suite.test("a bad edition is a load error naming what is wrong", function()
+    wipe_mods()
+    write_mod("A", { id = "A", prefix = "a", main_file = "main.lua", version = "1" },
+        [[SMODS.Edition { key = "x", fx = { animation = "wobble" } }]])
+    write_mod("B", { id = "B", prefix = "b", main_file = "main.lua", version = "1" },
+        [[SMODS.Edition { key = "x", fx = { tint = { 2, 0, 0 } } }]])
+    write_mod("C", { id = "C", prefix = "c", main_file = "main.lua", version = "1" },
+        [[SMODS.Edition { key = "x", config = { x_mult = "lots" } }]])
+    ModLoader.load_all()
+    T.assert_true(ModLoader.by_id.A.error:find("animation", 1, true) ~= nil, ModLoader.by_id.A.error)
+    T.assert_true(ModLoader.by_id.B.error:find("tint", 1, true) ~= nil, ModLoader.by_id.B.error)
+    T.assert_true(ModLoader.by_id.C.error:find("x_mult", 1, true) ~= nil, ModLoader.by_id.C.error)
+    T.assert_eq(SMODS.Editions.e_a_x, nil, "a failed edition is rolled back")
+    wipe_mods()
+end)
+
+--------------------------------------------------------------------------------
 -- Turning mods off and on
 --------------------------------------------------------------------------------
 
@@ -510,6 +932,10 @@ suite.test("the example mod in dev/example_mods loads and scores", function()
     T.assert_eq(#mod.registered.jokers, 3)
     T.assert_eq(#mod.registered.consumables, 2)
     T.assert_eq(#mod.registered.vouchers, 2)
+    T.assert_eq(#mod.registered.decks, 1)
+    T.assert_eq(DECK_DEFS_BY_ID.b_exj_scholar.config.hand_size, 1)
+    T.assert_eq(#mod.registered.editions, 1)
+    T.assert_eq(SMODS.Editions.e_exj_gilded.config.p_dollars, 2)
     T.assert_eq(#mod.registered.deck_skins, 1)
     T.assert_eq(require("card_art").find("Spades", "exj_royal_court").name, "Royal Court")
     T.assert_eq(VOUCHER_DEFS.v_exj_biggest_hand.depends_on, "v_exj_bigger_hand")

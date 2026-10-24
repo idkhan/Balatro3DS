@@ -1417,7 +1417,11 @@ function Game:sync_shop_offer_nodes()
             elseif need_cons and Consumable and CONSUMABLE_DEFS then
                 local def = CONSUMABLE_DEFS[offer.id]
                 if type(def) == "table" and copy_table then
-                    node = Consumable(0, 0, copy_table(def))
+                    local shown = copy_table(def)
+                    -- The offer's own edition (a deck's `negative_rate`), so a Negative card on
+                    -- the shelf looks Negative.
+                    if offer.edition then shown.edition = offer.edition end
+                    node = Consumable(0, 0, shown)
                     self.shop_offer_nodes[i] = node
                     self:add(node)
                 end
@@ -2112,7 +2116,8 @@ function Game:build_unlocks()
             id = d.id,
             name = d.name,
             stakes = {},
-            unlocked = d.id == "b_red",
+            -- Mod decks have no unlock condition: they are playable from the start.
+            unlocked = d.id == "b_red" or d.mod_id ~= nil,
         }
         for _, s in ipairs(STAKE_DEFS or {}) do
             deck_entry.stakes[s.id] = {
@@ -2130,6 +2135,13 @@ end
 function Game:normalize_unlocks(data)
     local unlocks = self:build_unlocks()
     if type(data) ~= "table" then return unlocks end
+    -- A deck the profile knows but no catalog defines right now is a mod deck whose mod is
+    -- missing or turned off. Its stake progress is kept as saved, for when the mod is back.
+    for deck_id, saved_deck in pairs(data) do
+        if unlocks[deck_id] == nil and type(saved_deck) == "table" then
+            unlocks[deck_id] = saved_deck
+        end
+    end
     for deck_id, deck_entry in pairs(unlocks) do
         local saved_deck = data[deck_id]
         if type(saved_deck) == "table" then
@@ -2168,6 +2180,8 @@ function Game:apply_unlocks(unlocks)
 end
 
 function Game:is_deck_unlocked(deck_id)
+    local def = DECK_DEFS_BY_ID and DECK_DEFS_BY_ID[deck_id or ""]
+    if def and def.mod_id then return true end
     local deck = self.unlocks and self.unlocks[deck_id or ""]
     return deck and deck.unlocked == true
 end
@@ -2681,6 +2695,7 @@ function Game:restore_run_deck_stake_from_snapshot(snapshot)
             self.selected_deck_id = deck_id
         end
     end
+    self.deck_effect_config = copy_table(snapshot.deck_effect_config)
     local stake_id = snapshot.selected_stake_id
     if type(stake_id) == "string" and stake_id ~= "" then
         if self.apply_stake_config then
@@ -4982,6 +4997,8 @@ function Game:build_run_snapshot()
         resume_state = self:current_resume_state(),
         stage = self.STAGES.RUN,
         selected_deck_id = self:get_run_deck_id(),
+        -- A mod deck's `back.effect.config`, which its `calculate` may have changed.
+        deck_effect_config = copy_table(self.deck_effect_config),
         selected_stake_id = self:get_run_stake_id(),
         challenge_id = self.challenge_id,
         challenge_rules = copy_table(self.challenge_rules or {}),
@@ -5568,8 +5585,8 @@ function Game:get_base_requirement_for_ante(ante)
     local requested_ante = math.max(1, tonumber(ante) or 1)
     local stake_offset = tonumber(self._stake_ante_mult) or 0
     local max_ante = 8
-    local deckMult = 1
-    if self._deck_special == "plasma" then
+    local deckMult = tonumber(self.deck_ante_scaling) or 1
+    if self.deck_ante_scaling == nil and self._deck_special == "plasma" then
         deckMult = 2
     end
     local table_ante = requested_ante + (max_ante + 1) * stake_offset
@@ -11277,6 +11294,14 @@ function Game:_after_joker_trigger(j, ctx)
     end
 end
 
+--- A mod deck with `calculate` hears every joker event after the Jokers, as Steamodded
+--- evaluates the Back after the joker area. Appends it to `list` in place.
+function Game:_append_deck_participant(list, event_name)
+    local back = SMODS and SMODS.back_participant and SMODS.back_participant(self)
+    if back and back:matches_trigger(event_name) then list[#list + 1] = back end
+    return list
+end
+
 ---Emit a joker event to all jokers and apply their effects to the context.
 ---`ctx` is a mutable table that joker effects can update (e.g. ctx.chips/ctx.mult).
 ---@param event_name string
@@ -11287,7 +11312,7 @@ function Game:emit_joker_event(event_name, ctx)
     ctx = self:prepare_joker_event_ctx(event_name, ctx)
 
     if event_name == "on_hand_scored" then
-        for _, j in ipairs(self:collect_all_jokers_sorted()) do
+        for _, j in ipairs(self:_append_deck_participant(self:collect_all_jokers_sorted(), event_name)) do
             if j and j.apply_edition_on_hand_scored then
                 j:apply_edition_on_hand_scored(ctx)
             end
@@ -11308,7 +11333,7 @@ function Game:emit_joker_event(event_name, ctx)
         return
     end
 
-    for _, j in ipairs(self:collect_matching_jokers(event_name, ctx)) do
+    for _, j in ipairs(self:_append_deck_participant(self:collect_matching_jokers(event_name, ctx), event_name)) do
         self:_sync_joker_ctx(ctx)
         if j and j.apply_effect then
             j:apply_effect(ctx)
@@ -11426,8 +11451,14 @@ function Game:_apply_one_joker_emit()
         local edition_triggered = false
         if q.event_name == "on_hand_scored" and j.apply_edition_on_hand_scored then
             local edition = j.normalize_edition and j.normalize_edition(j.edition) or j.edition
-            edition_triggered = edition ~= nil and edition ~= "base" and edition ~= "negative"
-            j:apply_edition_on_hand_scored(q.ctx)
+            local applied = j:apply_edition_on_hand_scored(q.ctx)
+            -- A mod edition counts only when it changed something now; one with only an
+            -- after-effect gets its beat from the post pass below.
+            if SMODS and SMODS.edition and SMODS.edition(edition) then
+                edition_triggered = applied == true
+            else
+                edition_triggered = edition ~= nil and edition ~= "base" and edition ~= "negative"
+            end
         end
         self:_sync_joker_ctx(q.ctx)
         local joker_effect_triggered = false
@@ -11450,7 +11481,8 @@ function Game:_apply_one_joker_emit()
         if q.event_name == "on_hand_scored" and j.apply_edition_on_hand_scored then
             local edition = j.normalize_edition and j.normalize_edition(j.edition) or j.edition
             if edition == "polychrome" then edition_triggered = true end
-            j:apply_edition_on_hand_scored(q.ctx, true)
+            -- A mod edition's xMult or money lands here too, and buys its beat when it does.
+            if j:apply_edition_on_hand_scored(q.ctx, true) then edition_triggered = true end
             self:_sync_joker_ctx(q.ctx)
         end
         if edition_triggered and not joker_effect_triggered then
@@ -11492,6 +11524,7 @@ function Game:begin_joker_emit(event_name, ctx)
         list = self:collect_matching_jokers(event_name, ctx)
         pre_matched = true
     end
+    self:_append_deck_participant(list, event_name)
     if #list == 0 then return false end
 
     ctx = self:prepare_joker_event_ctx(event_name, ctx)
@@ -12132,7 +12165,8 @@ function Game:_roll_playing_card_data(with_modifiers, append, enhanced)
         local edition
         if edition_poll > 1 - rates.polychrome * 2 / 100 then edition = "polychrome"
         elseif edition_poll > 1 - rates.holo * 2 / 100 then edition = "holo"
-        elseif edition_poll > 1 - rates.foil * 2 / 100 then edition = "foil" end
+        elseif edition_poll > 1 - rates.foil * 2 / 100 then edition = "foil"
+        else edition = self:_roll_mod_edition_band(edition_poll, rates.foil * 2, 2) end
         if edition then data.modifier = { edition = edition } end
 
         if self:random("stdseal" .. ante) > 0.8 then
@@ -12521,8 +12555,9 @@ function Game:get_joker_edition_rates()
 
     local rates = {
         -- Negative is a flat 0.3% poll and is not affected by Hone/Glow Up
-        -- (reference common_events.lua:2055-2080).
-        negative = 0.3,
+        -- (reference common_events.lua:2055-2080). A mod deck can set its own
+        -- (`config.negative_rate`, `Game.deck_negative_rate`).
+        negative = tonumber(self.deck_negative_rate) or 0.3,
         polychrome = 0.6,
         holo = 2.0,
         foil = 4.0,
@@ -12545,11 +12580,50 @@ function Game:roll_joker_offer_edition(append)
     local rates = self:get_joker_edition_rates()
     local ante = tostring(tonumber(self.ante) or 1)
     local r = self:random("edi" .. tostring(append or "sho") .. ante)
-    if r > 1 - (tonumber(rates.negative) or 0) / 100 then return "negative" end
-    if r > 1 - (tonumber(rates.polychrome) or 0) / 100 then return "polychrome" end
-    if r > 1 - (tonumber(rates.holo) or 0) / 100 then return "holo" end
-    if r > 1 - (tonumber(rates.foil) or 0) / 100 then return "foil" end
-    return "base"
+    -- The editions are nested bands from the top of the roll, Negative's first. A deck that
+    -- widens Negative's band moves the others down by as much, so they keep their own chances
+    -- instead of being swallowed. At the vanilla 0.3% the shift is zero.
+    local negative = tonumber(rates.negative) or 0
+    local shift = math.max(0, negative - 0.3)
+    if r > 1 - negative / 100 then return "negative" end
+    if r > 1 - ((tonumber(rates.polychrome) or 0) + shift) / 100 then return "polychrome" end
+    if r > 1 - ((tonumber(rates.holo) or 0) + shift) / 100 then return "holo" end
+    if r > 1 - ((tonumber(rates.foil) or 0) + shift) / 100 then return "foil" end
+    return self:_roll_mod_edition_band(r, (tonumber(rates.foil) or 0) + shift, 1) or "base"
+end
+
+--- Mod editions that can appear in the shop (`SMODS.Edition` with `in_shop`), as bands under
+--- the vanilla ones: each `weight / 10` percent wide, times `scale`, from `top` percent down.
+--- Nil when `r` falls below them all. Without mod editions there are no bands, so every
+--- vanilla roll comes out exactly as before.
+---@param r number the roll already made, 0..1
+---@param top number percent where the vanilla bands end
+---@param scale number Standard Packs roll editions at twice the shop's rate
+---@return string|nil
+function Game:_roll_mod_edition_band(r, top, scale)
+    if not (SMODS and SMODS.rollable_editions) then return nil end
+    local edge = top
+    for _, e in ipairs(SMODS.rollable_editions()) do
+        edge = edge + e.weight / 10 * scale
+        if r > 1 - edge / 100 then return e.id end
+    end
+    return nil
+end
+
+--- Whether a Tarot, Planet or Spectral offered in the shop or a pack is Negative. Vanilla never
+--- gives these an edition, so without a deck's `negative_rate` nothing is rolled at all and
+--- every seed plays exactly as before. Negative only: consumables have no Foil, Holo or
+--- Polychrome in the reference.
+---@param append string stream suffix
+---@return string|nil "negative", or nil for none
+function Game:roll_consumable_offer_edition(append)
+    local rate = tonumber(self.deck_negative_rate)
+    if not rate or rate <= 0 then return nil end
+    local ante = tostring(tonumber(self.ante) or 1)
+    if self:random("edi_cons" .. tostring(append or "sho") .. ante) > 1 - rate / 100 then
+        return "negative"
+    end
+    return nil
 end
 
 function Game:_shop_joker_owned(id)
@@ -12773,11 +12847,13 @@ function Game:_roll_shop_queue_consumable_offer(wanted_kind)
     end
     if not pick then return nil end
     local def = CONSUMABLE_DEFS[pick]
+    local edition = self:roll_consumable_offer_edition("sho")
     return {
         kind = wanted_kind,
         id = pick,
         name = def and def.name or pick,
-        price = self:shop_price_for_consumable_offer(def, wanted_kind),
+        edition = edition,
+        price = self:shop_price_for_consumable_offer(def, wanted_kind, edition),
     }
 end
 
@@ -12850,7 +12926,7 @@ function Game:_build_joker_create_params(def, base_params, sticker_params)
     return next(params) ~= nil and params or nil
 end
 
-function Game:shop_price_for_consumable_offer(def, kind_fallback)
+function Game:shop_price_for_consumable_offer(def, kind_fallback, edition)
     local kind = (type(def) == "table" and def.kind) or kind_fallback
     if self:hasJoker("j_astronomer") and kind == "planet" then
         return 0
@@ -12862,7 +12938,9 @@ function Game:shop_price_for_consumable_offer(def, kind_fallback)
         spectral = 4,
     }
     local base = tonumber(def.cost) or by_kind[kind] or 3
-    local raw = base + (tonumber(self.inflation) or 0)
+    -- An edition costs the same on any card (`card.lua:set_cost`): +$5 for Negative.
+    local edition_cost = (edition and Joker and Joker.edition_price_deltas(edition)) or 0
+    local raw = base + edition_cost + (tonumber(self.inflation) or 0)
     return self:apply_shop_discount_to_price(raw)
 end
 
@@ -12882,7 +12960,7 @@ function Game:get_shop_offer_price(offer)
             return 0
         end
         local def = CONSUMABLE_DEFS and CONSUMABLE_DEFS[offer.id]
-        return self:shop_price_for_consumable_offer(def, k)
+        return self:shop_price_for_consumable_offer(def, k, offer.edition)
     elseif k == "playing_card" then
         return self:apply_shop_discount_to_price(4)
     end
@@ -13729,6 +13807,7 @@ function Game:_booster_build_choices(offer)
         if type(def) ~= "table" or not copy_table then return end
         local c = copy_table(def)
         c.id = id
+        c.edition = self:roll_consumable_offer_edition(pack) or c.edition
         choices[#choices + 1] = { kind = c.kind or kind, consumable_def = c, taken = false }
     end
 
@@ -15598,8 +15677,26 @@ end
 ---@return string "foil" | "holo" | "polychrome"
 function Game:poll_guaranteed_edition(stream)
     local roll = self:random(stream)
-    if roll > 1 - 0.006 * 25 then return "polychrome" end
-    if roll > 1 - 0.02 * 25 then return "holo" end
+    -- Mod editions in the shop join at their weight on the same scale (Foil's 20 is its
+    -- 50% here), sharing the roll with the vanilla three. With none, the total is 100 and
+    -- the bands are exactly the reference's.
+    local mods = SMODS and SMODS.rollable_editions and SMODS.rollable_editions() or {}
+    if #mods == 0 then
+        if roll > 1 - 0.006 * 25 then return "polychrome" end
+        if roll > 1 - 0.02 * 25 then return "holo" end
+        return "foil"
+    end
+    local total = 100
+    for _, e in ipairs(mods) do total = total + e.weight * 2.5 end
+    local x = roll * total
+    if x > total - 15 then return "polychrome" end
+    if x > total - 50 then return "holo" end
+    if x > total - 100 then return "foil" end
+    local edge = total - 100
+    for _, e in ipairs(mods) do
+        edge = edge - e.weight * 2.5
+        if x > edge then return e.id end
+    end
     return "foil"
 end
 

@@ -308,6 +308,8 @@ return {
     ["mods.count.jokers"] = "{count} 张小丑牌",
     ["mods.count.consumables"] = "{count} 张消耗牌",
     ["mods.count.vouchers"] = "{count} 张优惠券",
+    ["mods.count.decks"] = "{count} 副牌组",
+    ["mods.count.editions"] = "{count} 种版本",
     ["mods.count.deck_skins"] = "{count} 套卡面",
     ["mods.nothing_added"] = "未添加内容",
     ["mods.by"] = "  -  作者：{author}",

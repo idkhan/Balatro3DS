@@ -79,18 +79,12 @@ local function draw_undiscovered_collection_card(x, y, w, h)
 end
 
 local function draw_deck_collection_sprite(game, def, x, y, w, h)
-    if not game or not def then return end
-    local atlas = game.ensure_asset_atlas_loaded and game:ensure_asset_atlas_loaded("centers")
-    if not atlas or not atlas.image then return end
-
-    local index = tonumber(def.pos) or 0
-    local iw, ih = atlas.image:getDimensions()
+    if not game or not def or not game.get_deck_back_quad then return end
+    -- A mod deck's back is its own image, not a cell of `centers`.
+    local atlas, quad = game:get_deck_back_quad(def.id)
+    if not quad then return end
     local cell_w = tonumber(atlas.px) or 72
     local cell_h = tonumber(atlas.py) or 95
-    local cols = math.max(1, math.floor(iw / cell_w))
-    local col = index % cols
-    local row = math.floor(index / cols)
-    local quad = love.graphics.newQuad(col * cell_w, row * cell_h, cell_w, cell_h, iw, ih)
 
     local scale = math.min(w / cell_w, h / cell_h)
     if scale > 1 then scale = 1 end

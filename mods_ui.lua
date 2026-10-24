@@ -85,7 +85,7 @@ function ModsUI.lines(game)
         elseif ok then
             local reg = mod.registered or {}
             local parts = {}
-            for _, kind in ipairs({ { "jokers", "Joker" }, { "consumables", "Consumable" }, { "vouchers", "Voucher" }, { "deck_skins", "Card Art Set" } }) do
+            for _, kind in ipairs({ { "jokers", "Joker" }, { "consumables", "Consumable" }, { "vouchers", "Voucher" }, { "decks", "Deck" }, { "editions", "Edition" }, { "deck_skins", "Card Art Set" } }) do
                 local n = #(reg[kind[1]] or {})
                 if n > 0 then
                     parts[#parts + 1] = I18N.text("mods.count." .. kind[1], { count = n },
@@ -170,6 +170,9 @@ end
 function ModsUI.toggle(game, mod)
     if not ModLoader.can_toggle(mod) then return false end
     ModLoader.set_enabled(mod.id, not ModLoader.is_enabled(mod))
+    -- A deck a mod adds needs its stake ladder in the profile's unlocks; one it took away keeps
+    -- its progress there for when it comes back (`Game:normalize_unlocks`).
+    if game.apply_unlocks then game:apply_unlocks(game.unlocks) end
     local saved = game._mods_continue_saved
     if saved then game._mods_continue_block = ModLoader.compare(saved.mods) end
     Sfx.play_button()

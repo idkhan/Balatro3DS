@@ -307,6 +307,8 @@ return {
     ["mods.count.jokers"] = "{count} Jokers",
     ["mods.count.consumables"] = "{count} Consumables",
     ["mods.count.vouchers"] = "{count} Vouchers",
+    ["mods.count.decks"] = "{count} Decks",
+    ["mods.count.editions"] = "{count} Editions",
     ["mods.count.deck_skins"] = "{count} Card Art Sets",
     ["mods.nothing_added"] = "Nothing added",
     ["mods.by"] = "  -  by {author}",

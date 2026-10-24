@@ -89,6 +89,12 @@ function ScreenWipe.begin(game, steps, on_reveal)
     -- building. The button that asked is behind the cover anyway (see `ScreenWipe.active`).
     if game.screenwipe then return false end
 
+    -- The deck the player just picked, so the card under the cover is the one they chose.
+    -- Asked for by id rather than for the run's deck: `apply_deck_config` is several steps
+    -- away, so on the second run of a session that would still be the deck the last run used.
+    local back_atlas, back_index = "centers", 0
+    if game.get_deck_back_sprite then back_atlas, back_index = game:get_deck_back_sprite(game._pending_deck_id) end
+
     game.screenwipe = {
         phase = "in",
         t = 0,
@@ -99,11 +105,8 @@ function ScreenWipe.begin(game, steps, on_reveal)
         flip = nil,
         flip_sx = 1,
         face_shown = false,
-        -- The deck the player just picked, so the card under the cover is the one they chose.
-        -- Asked for by id rather than through `get_selected_deck_back_index`, which prefers the
-        -- *run's* deck: `apply_deck_config` is several steps away, so on the second run of a
-        -- session that would still be the deck the last run used.
-        back_index = (game.get_deck_back_index and game:get_deck_back_index(game._pending_deck_id)) or 0,
+        back_atlas = back_atlas,
+        back_index = back_index,
         face_index = FACE_CENTER_INDEX,
         rank_index = random_rank_index(),
     }
@@ -221,7 +224,14 @@ end
 ---@param cx number
 ---@param cy number
 local function draw_card(game, w, cx, cy)
-    local atlas = game.ASSET_ATLAS and game.ASSET_ATLAS.centers
+    -- The back can be a mod deck's own image; the face is always a cell of `centers`.
+    -- `centers` is drawn only once resident, as before; a mod back is one small image, loaded
+    -- on first use.
+    local atlas_name = (not w.face_shown and w.back_atlas) or "centers"
+    local atlas = game.ASSET_ATLAS and game.ASSET_ATLAS[atlas_name]
+    if atlas_name ~= "centers" and game.ensure_asset_atlas_loaded then
+        atlas = game:ensure_asset_atlas_loaded(atlas_name)
+    end
     if not (atlas and atlas.image and game.atlas_cell_quad) then return end
 
     local index = w.face_shown and w.face_index or w.back_index

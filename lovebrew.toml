@@ -2,7 +2,7 @@
 title = "Balatro" # title of the game
 author = "Gazpacho, rosematcha" # author(s) of the game
 description = "Balatro" # description of the game
-version = "2.0.5" # current version, obeying semver
+version = "2.0.6" # current version, obeying semver
 icons = { ctr = "game/resources/textures/1x/icon.png"} # custom icon paths
 
 [build]

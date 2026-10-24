@@ -102,11 +102,13 @@ function Card.play_materialize_sfx()
 end
 
 ---@param self Card
-local function selected_deck_back_index()
-    if G and G.get_selected_deck_back_index then
-        return G:get_selected_deck_back_index()
+--- The run's deck back: an atlas name and a cell (`Game:get_deck_back_sprite`). A mod deck's
+--- back is its own image rather than a cell of `centers`.
+local function selected_deck_back_sprite()
+    if G and G.get_deck_back_sprite then
+        return G:get_deck_back_sprite(nil)
     end
-    return 0
+    return "centers", 0
 end
 
 --- Standard playing-card face cell in `centers` (rank/suit come from `cards_2`). Deck backs use `DECK_DEFS.pos` independently.
@@ -121,7 +123,12 @@ local function apply_enhancement_center_indices(self)
     -- The back is the selected deck's cell for every playing card, enhanced or not: a face-down
     -- card is hidden, not modified, so a Stone or Steel card turned over by The Wheel shows the
     -- same backing as the rest of the hand.
-    self.back_index = self.params.back_index or selected_deck_back_index()
+    if self.params.back_index ~= nil then
+        self.back_index = self.params.back_index
+        self._deck_back_atlas_name = nil
+    else
+        self._deck_back_atlas_name, self.back_index = selected_deck_back_sprite()
+    end
     local enh = self.enhancement
     if enh and map[enh] then
         self.face_index = map[enh].face or DEFAULT_PLAYING_CARD_FACE_INDEX
@@ -320,8 +327,8 @@ function Card:refresh_quads()
     apply_enhancement_center_indices(self)
     apply_seal_indices(self)
 
-    -- resolve atlases
-    self.back_atlas = self:resolve_atlas(self.back_atlas_name)
+    -- resolve atlases. An explicit back atlas wins; otherwise the deck's back decides it.
+    self.back_atlas = self:resolve_atlas(self.params.back_atlas_name or self._deck_back_atlas_name or self.back_atlas_name)
     self.face_atlas = self:resolve_atlas(self.face_atlas_name)
     -- The rank layer follows the per-suit card art (`card_art.lua`): the suit's contrast picks
     -- the deck sheet, and a collab replaces J/Q/K with a cell of its own sheet. `rank_index`
@@ -498,6 +505,7 @@ local function card_edition_for_display(card)
     if ed == "foil" or ed == "holo" or ed == "polychrome" then
         return ed
     end
+    if SMODS and SMODS.edition and SMODS.edition(ed) then return ed end
     return nil
 end
 
@@ -506,12 +514,15 @@ end
 -- static tint has no shimmer carrying the read: foil cold, holo red-pink (it is the
 -- +Mult edition), polychrome violet.
 local function set_shop_edition_tint(edition)
+    local mod_tint = Fx and Fx.mod_edition_tint and Fx.mod_edition_tint(edition)
     if edition == "foil" then
         love.graphics.setColor(0.74, 0.72, 1.0, 1)
     elseif edition == "holo" then
         love.graphics.setColor(1.0, 0.78, 0.88, 1)
     elseif edition == "polychrome" then
         love.graphics.setColor(0.88, 0.72, 1.0, 1)
+    elseif mod_tint then
+        love.graphics.setColor(mod_tint[1], mod_tint[2], mod_tint[3], 1)
     else
         love.graphics.setColor(1, 1, 1, 1)
     end
@@ -847,8 +858,13 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
     end
     -- Badge order matches the reference's info queue: enhancement, then edition, then seal
     -- (`common_events.lua:2722-2736`).
-    add_named_section(EDITION_NAMES[edition] and I18N.content_name("edition", edition, EDITION_NAMES[edition]),
-        G.C.DARK_EDITION, translated_lines("edition", edition, edition_tooltip_lines(edition)))
+    if SMODS and SMODS.edition and SMODS.edition(edition) then
+        -- A mod edition names itself and reads its own loc_txt, in the live language.
+        add_named_section(SMODS.edition_name(edition), G.C.DARK_EDITION, SMODS.edition_plain_lines(edition))
+    else
+        add_named_section(EDITION_NAMES[edition] and I18N.content_name("edition", edition, EDITION_NAMES[edition]),
+            G.C.DARK_EDITION, translated_lines("edition", edition, edition_tooltip_lines(edition)))
+    end
     add_named_section(SEAL_NAMES[seal] and I18N.content_name("seal", seal, SEAL_NAMES[seal]),
         seal_colours[seal], translated_lines("seal", seal, seal_tooltip_lines(seal)))
 

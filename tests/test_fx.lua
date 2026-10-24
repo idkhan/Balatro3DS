@@ -373,6 +373,34 @@ suite.test("a missing pattern sheet falls back to the art", function()
     T.assert_eq(meshes[2]._texture, art, "the additive pass degrades to the art")
 end)
 
+suite.test("a registered mod edition draws its tint and glow through the same two passes", function()
+    for _, anim in ipairs({ "sweep", "shimmer", "pulse", "steady", "rainbow" }) do
+        Fx.register_edition("e_test_look", {
+            tint = { 0.5, 0.75, 1 }, glow = { 1, 0.5, 0, 0.4 }, animation = anim,
+        })
+        T.assert_true(Fx.has_edition_fx("e_test_look"), anim)
+        local img = fake_image(512, 512)
+        local from = mark()
+        Fx.draw_edition_cell(img, 0, 0, 72, 95, 0, 0, 72, 95, "e_test_look", 1.25, "card", 0, 0.3)
+        local meshes = since(from)
+        T.assert_eq(#meshes, 2, anim .. ": one base pass, one additive pass")
+        local base, add = meshes[1]._vertices[1], meshes[2]._vertices[1]
+        if anim ~= "rainbow" then
+            T.assert_eq(base[5], 0.5, anim .. ": the tint multiplies the art")
+            T.assert_eq(base[7], 1, anim)
+            T.assert_eq(add[5], 1, anim .. ": the glow's colour")
+        end
+        for _, v in ipairs(meshes[2]._vertices) do
+            T.assert_true(v[8] >= 0 and v[8] <= 0.4 + 1e-9, anim .. ": glow never beyond its strength")
+        end
+        Fx.unregister_edition("e_test_look")
+        T.assert_false(Fx.has_edition_fx("e_test_look"))
+    end
+    -- Unregistering a vanilla name does nothing.
+    Fx.unregister_edition("foil")
+    T.assert_true(Fx.has_edition_fx("foil"))
+end)
+
 suite.test("draw_edition_cell ignores unknown editions", function()
     local from = mark()
     Fx.draw_edition_cell(fake_image(512, 512), 0, 0, 71, 95, 0, 0, 71, 95, "negative", 0)

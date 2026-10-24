@@ -129,6 +129,8 @@ function Joker.normalize_edition(raw)
     if e == "e_polychrome" or e == "polychrome" then return "polychrome" end
     if e == "e_negative" or e == "negative" then return "negative" end
     if e == "holo" or e == "polychrome" or e == "negative" then return e end
+    -- A mod edition is its own id (`SMODS.Edition`).
+    if SMODS and SMODS.Editions and SMODS.Editions[e] then return e end
     return "base"
 end
 
@@ -139,6 +141,8 @@ function Joker.edition_price_deltas(ed)
     if ed == "holo" then return 3 end
     if ed == "polychrome" then return 5 end
     if ed == "negative" then return 5 end
+    local mod_ed = SMODS and SMODS.edition and SMODS.edition(ed)
+    if mod_ed then return mod_ed.extra_cost end
     return 0
 end
 
@@ -224,12 +228,15 @@ end
 --- tint has no shimmer carrying the read: foil cold, holo red-pink (it is the +Mult edition),
 --- polychrome violet.
 local function set_shop_edition_tint(edition)
+    local mod_tint = Fx and Fx.mod_edition_tint and Fx.mod_edition_tint(edition)
     if edition == "foil" then
         love.graphics.setColor(0.74, 0.72, 1.0, 1)
     elseif edition == "holo" then
         love.graphics.setColor(1.0, 0.78, 0.88, 1)
     elseif edition == "polychrome" then
         love.graphics.setColor(0.88, 0.72, 1.0, 1)
+    elseif mod_tint then
+        love.graphics.setColor(mod_tint[1], mod_tint[2], mod_tint[3], 1)
     else
         love.graphics.setColor(1, 1, 1, 1)
     end
@@ -884,6 +891,12 @@ function Joker:get_edition_tooltip_lines()
     if ed == "foil" or ed == "holo" or ed == "polychrome" or ed == "negative" then
         return { { kind = "text", text = I18N.t("edition." .. ed .. ".description") } }
     end
+    -- A mod edition: its name, then its loc_txt lines with their markup.
+    if SMODS and SMODS.edition and SMODS.edition(ed) then
+        local out = { { kind = "text", text = SMODS.edition_name(ed) .. ":" } }
+        for _, line in ipairs(SMODS.edition_tooltip_lines(ed, self) or {}) do out[#out + 1] = line end
+        return out
+    end
     return {}
 end
 
@@ -1348,15 +1361,39 @@ function Joker.play_edition_reveal_sfx(edition)
         Sfx.play("polychrome1", 1.2, 0.7)
     elseif ed == "negative" then
         Sfx.play("negative", 1.5, 0.4)
+    else
+        -- A mod edition's `sound` (a vanilla cue), or foil's when it names none.
+        local mod_ed = SMODS and SMODS.edition and SMODS.edition(ed)
+        if mod_ed then
+            local s = mod_ed.sound or { name = "foil1", per = 1.2, vol = 0.4 }
+            Sfx.play(s.name, s.per, s.vol)
+        end
     end
 end
 
 --- Apply foil/holo before the Joker, then polychrome after it (`reference/Balatro/functions/state_events.lua:880-943`).
 ---@param after_effect boolean|nil
+--- Returns true when the edition changed the score.
 function Joker:apply_edition_on_hand_scored(ctx, after_effect)
     if type(ctx) ~= "table" then return end
     local ed = Joker.normalize_edition(self.edition)
     if ed == "base" or ed == "negative" then return end
+    -- A mod edition: chips and mult before the Joker, xMult and money after, as the vanilla
+    -- ones split (`SMODS.edition_effect`).
+    if SMODS and SMODS.edition and SMODS.edition(ed) then
+        local chips, mult, x_mult, dollars = SMODS.edition_effect(ed, self,
+            after_effect == true and "post_joker" or "pre_joker")
+        if chips == 0 and mult == 0 and x_mult == 1 and dollars == 0 then return end
+        -- The popups rise from this Joker; before its own effect, `ctx.VT` is still the last one.
+        ctx.VT = self.VT
+        if chips ~= 0 then JokerEffects.add_chips(ctx, chips) end
+        if mult ~= 0 then JokerEffects.add_mult(ctx, mult) end
+        if x_mult ~= 1 then JokerEffects.mul_mult(ctx, x_mult) end
+        if dollars ~= 0 then JokerEffects.add_money(ctx, dollars) end
+        advance_ladder_for_joker()
+        self:juice_up(0.6, 0.1)
+        return true
+    end
     if (ed == "polychrome") ~= (after_effect == true) then return end
     if ed == "foil" then
         ctx.chips = (tonumber(ctx.chips) or 0) + 50
@@ -1374,6 +1411,7 @@ function Joker:apply_edition_on_hand_scored(ctx, after_effect)
     Sfx.play("foil2", scoring_pitch(), 0.3)
     advance_ladder_for_joker()
     self:juice_up(0.6, 0.1)
+    return true
 end
 
 function Joker:apply_effect(ctx)

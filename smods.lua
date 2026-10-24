@@ -16,9 +16,11 @@
 --- lets a mod sprite be loaded when a card appears and freed when the last one goes, exactly as a
 --- vanilla sprite is, instead of a whole sheet staying resident.
 ---
---- Editions stay the port's own: a mod Joker in foil, holo or polychrome is drawn with the same
---- additive texture passes as a vanilla one (`Fx.draw_edition_image`), since the PICA200 has no
---- fragment shaders to run a mod's. Negative needs its own image (`negative_sprite`).
+--- Editions are drawn with the port's own additive texture passes (`Fx.draw_edition_image`),
+--- since the PICA200 has no fragment shaders to run a mod's: a mod Joker in foil, holo or
+--- polychrome looks like a vanilla one, and a mod edition (`SMODS.Edition`) describes its look
+--- as a tint, a glow and an animation for those same passes. Negative needs its own image
+--- (`negative_sprite`).
 
 SMODS = SMODS or {}
 
@@ -722,10 +724,11 @@ end
 SMODS.plain_text = plain_text
 
 --- A mod's own translations: each language in a per-language `loc_txt` gets the card's name
---- (and, for vouchers, whose description is shown as one plain string, the description) in the
---- game's string tables, so the collection, the shop and the toasts find it like any other.
+--- (and, for vouchers and decks, whose description is shown as one plain string, the
+--- description) in the game's string tables, so the collection, the shop and the toasts find it
+--- like any other. `description_card` is what `loc_vars` gets as the card for that description.
 --- Tooltip text is read from `loc_txt` in the live language when drawn (`tooltip_lines_for`).
-function SMODS.register_translations(mod, kind, id, center, voucher_config)
+function SMODS.register_translations(mod, kind, id, center, description_card)
     if not (I18N and I18N.add_strings) then return end
     for _, code in ipairs(other_languages(center.loc_txt)) do
         local entry = center.loc_txt[code]
@@ -733,8 +736,8 @@ function SMODS.register_translations(mod, kind, id, center, voucher_config)
         if entry.name ~= nil then
             strings[kind .. "." .. id .. ".name"] = tostring(entry.name)
         end
-        if voucher_config then
-            strings[kind .. "." .. id .. ".description"] = plain_text(center, { ability = deep_copy(voucher_config) }, code)
+        if description_card then
+            strings[kind .. "." .. id .. ".description"] = plain_text(center, description_card, code)
         end
         for key in pairs(strings) do keys[#keys + 1] = key end
         I18N.add_strings(code, strings)
@@ -943,7 +946,7 @@ function SMODS.Voucher(t)
         mod_sprite = sprite,
     }
     SMODS.Centers[id] = t
-    SMODS.register_translations(mod, "voucher", id, t, config)
+    SMODS.register_translations(mod, "voucher", id, t, { ability = deep_copy(config) })
     mod.registered.vouchers[#mod.registered.vouchers + 1] = id
     return t
 end
@@ -957,6 +960,382 @@ function SMODS.redeem_voucher(id)
         SMODS.call(center.mod, center.redeem, center, { ability = deep_copy(def.config or {}) })
     end
     return true
+end
+
+--------------------------------------------------------------------------------
+-- Decks
+--------------------------------------------------------------------------------
+
+--- Mod decks sort after the vanilla ones, in the order they are defined.
+local deck_order = 100
+
+--- A Steamodded consumable key (`c_fool`, `c_planet_x`) as the port's id (`tarot_fool`,
+--- `planet_x`). A port id or a mod consumable's full id is taken as it is.
+local function consumable_id(key, mod)
+    key = tostring(key)
+    if CONSUMABLE_DEFS[key] then return key end
+    local own = "c_" .. mod.prefix .. "_" .. key
+    if CONSUMABLE_DEFS[own] then return own end
+    local bare = key:gsub("^c_", "")
+    for _, prefix in ipairs({ "tarot_", "planet_", "spectral_" }) do
+        if CONSUMABLE_DEFS[prefix .. bare] then return prefix .. bare end
+    end
+    if CONSUMABLE_DEFS[bare] then return bare end
+    return nil
+end
+
+local function voucher_id(key, mod)
+    key = VOUCHER_ALIAS[key] or tostring(key)
+    if VOUCHER_DEFS[key] then return key end
+    local own = "v_" .. mod.prefix .. "_" .. key
+    if VOUCHER_DEFS[own] then return own end
+    return nil
+end
+
+--- Steamodded's (and vanilla Balatro's) Back config, as the port's deck def reads it. Numbers
+--- the port reads under the same name pass straight through.
+local BACK_NUMBERS = { "dollars", "hands", "discards", "hand_size", "extra_hand_bonus",
+    "extra_discard_bonus", "spectral_rate", "ante_scaling",
+    -- A port extension: no vanilla deck changes the Negative chance.
+    "negative_rate" }
+
+local function back_def_fields(t, mod, config)
+    local what = "Back '" .. t.key .. "'"
+    local cfg = {}
+    for _, k in ipairs(BACK_NUMBERS) do
+        if config[k] ~= nil then
+            cfg[k] = tonumber(config[k])
+            check(cfg[k] ~= nil, what .. ": config." .. k .. " must be a number")
+        end
+    end
+    -- Steamodded names these in the singular; the port's own decks in the plural.
+    cfg.joker_slots = tonumber(config.joker_slot or config.joker_slots)
+    cfg.consumable_slots = tonumber(config.consumable_slot or config.consumable_slots)
+    cfg.no_interest = config.no_interest == true or nil
+    cfg.no_face_cards = config.remove_faces == true or nil
+
+    local vouchers, consumables = {}, {}
+    for _, v in ipairs(type(config.vouchers) == "table" and config.vouchers or {}) do
+        local id = voucher_id(v, mod)
+        check(id ~= nil, what .. ": unknown voucher '" .. tostring(v) .. "' in config.vouchers")
+        vouchers[#vouchers + 1] = id
+    end
+    for _, c in ipairs(type(config.consumables) == "table" and config.consumables or {}) do
+        local id = consumable_id(c, mod)
+        check(id ~= nil, what .. ": unknown consumable '" .. tostring(c) .. "' in config.consumables")
+        consumables[#consumables + 1] = id
+    end
+    return cfg, #vouchers > 0 and vouchers or nil, #consumables > 0 and consumables or nil,
+        config.randomize_rank_suit == true and "erratic" or nil
+end
+
+--- What a deck's `loc_vars`, `apply` and `calculate` receive as `back`: Steamodded reads the
+--- deck's numbers from `back.effect.config`.
+local function back_view(center, config)
+    return { effect = { center = center, config = config }, name = center.name, key = center.key }
+end
+
+--- `SMODS.Back { key, loc_txt, config, sprite, loc_vars, apply, calculate }`: a deck, offered
+--- on the deck-select screen after the vanilla ones and listed in the collection.
+---
+--- `sprite` is the card back, 72x95, worn by every playing card in a run with this deck.
+--- `config` takes the vanilla Back keys (see `back_def_fields`). `apply(self, back)` runs once
+--- when a run starts, after the config is applied. `calculate(self, back, context)` hears the
+--- same contexts a Joker does, after the Jokers; what it returns scores the same way, its popup
+--- shown where the deck would be.
+function SMODS.Back(t)
+    local mod = need_mod("SMODS.Back")
+    check(type(t) == "table", "SMODS.Back expects a table")
+    check(type(t.key) == "string" and t.key:match("^[%w_]+$"),
+        "SMODS.Back needs a 'key' of letters, digits and underscores")
+    local id = "b_" .. mod.prefix .. "_" .. t.key
+    check(DECK_DEFS_BY_ID[id] == nil, "Back '" .. t.key .. "' is defined twice (id " .. id .. ")")
+    check_functions(t, "Back", { "loc_vars", "apply", "calculate" })
+    no_atlas(t, "Back")
+    local sprite = register_sprite(mod, t.sprite, "Back", t.key, "sprite")
+
+    local config = deep_copy(type(t.config) == "table" and t.config or {})
+    local cfg, vouchers, consumables, special = back_def_fields(t, mod, config)
+
+    local loc = loc_for(t.loc_txt, "en") or {}
+    deck_order = deck_order + 1
+    t.mod = mod
+    t.original_key = t.key
+    t.key = id
+    t.config = config
+    t.name = tostring(loc.name or t.name or t.original_key)
+    local def = {
+        id = id,
+        name = t.name,
+        order = deck_order,
+        -- The port has no unlock conditions for mod decks, so a mod deck is always playable.
+        unlocked = true,
+        stake = 1,
+        config = cfg,
+        description = plain_text(t, back_view(t, deep_copy(config))),
+        start_vouchers = vouchers,
+        start_consumables = consumables,
+        special = special,
+        mod_id = mod.id,
+        mod_sprite = sprite,
+        smods = t,
+    }
+    DECK_DEFS[#DECK_DEFS + 1] = def
+    DECK_SELECT_DEFS[#DECK_SELECT_DEFS + 1] = def
+    DECK_DEFS_BY_ID[id] = def
+    SMODS.Centers[id] = t
+    SMODS.register_translations(mod, "deck", id, t, back_view(t, deep_copy(config)))
+    mod.registered.decks[#mod.registered.decks + 1] = id
+    return t
+end
+
+--- The `back` the run's mod deck hands its functions, built once per run around the run's own
+--- copy of the deck's config (`Game.deck_effect_config`, which saves with the run). Nil when the
+--- run's deck is not a mod's.
+function SMODS.run_back(game)
+    local def = game and DECK_DEFS_BY_ID[game.selected_deck_id or ""]
+    local center = def and def.smods
+    if not center then return nil end
+    if type(game.deck_effect_config) ~= "table" then game.deck_effect_config = deep_copy(center.config or {}) end
+    local back = game._smods_back
+    if not back or back.effect.center ~= center or back.effect.config ~= game.deck_effect_config then
+        back = back_view(center, game.deck_effect_config)
+        game._smods_back = back
+    end
+    return back
+end
+
+--- Run a mod deck's `apply` once, at the start of a run.
+function SMODS.apply_back(game)
+    local back = SMODS.run_back(game)
+    local center = back and back.effect.center
+    if center and type(center.apply) == "function" then
+        SMODS.call(center.mod, center.apply, center, back)
+    end
+end
+
+--- Where a deck's popups are shown. A run has no deck pile on screen, so they come up over the
+--- right end of the top screen's Joker row (y 114, x 0-266, `Game:get_top_inventory_dims`),
+--- the slot least often filled, after the Jokers, as the deck is evaluated after them.
+local BACK_POPUP_VT = { x = 210, y = 124, w = 48, h = 64, scale = 1 }
+
+--- The run's mod deck as one more entry in a joker event's list, so its `calculate` hears every
+--- context the Jokers do, after them, and is paced and scored by the same code. Nil when the
+--- run's deck has no `calculate`.
+function SMODS.back_participant(game)
+    local back = SMODS.run_back(game)
+    local center = back and back.effect.center
+    if not (center and type(center.calculate) == "function") then return nil end
+    local p = game._smods_back_participant
+    if p and p.back == back then return p end
+    p = { back = back, VT = BACK_POPUP_VT, def = DECK_DEFS_BY_ID[center.key], _smods_back = true }
+    function p:matches_trigger(event_name) return EVENT_CONTEXT[event_name] ~= nil end
+    function p:apply_effect(ctx)
+        ctx = ctx or {}
+        ctx.VT = self.VT
+        local event_name = ctx.event_name or ctx.event
+        local kind = EVENT_CONTEXT[event_name]
+        if not kind then return end
+        if JokerEffects.begin_apply_context then JokerEffects.begin_apply_context(ctx) end
+        local before_chips, before_mult = tonumber(ctx.chips), tonumber(ctx.mult)
+        local ret = SMODS.call(center.mod, center.calculate, center, self.back,
+            SMODS.build_context(event_name, ctx, self))
+        SMODS.apply_return(self, ctx, ret, kind)
+        if tonumber(ctx.chips) ~= before_chips or tonumber(ctx.mult) ~= before_mult then
+            JokerEffects.mark_effect_applied(ctx)
+        end
+    end
+    game._smods_back_participant = p
+    return p
+end
+
+--------------------------------------------------------------------------------
+-- Editions
+--------------------------------------------------------------------------------
+
+--- Every mod edition, by id (`e_<prefix>_<key>`, lower case): `{ id, name, center, config,
+--- extra_cost, in_shop, weight, sound, order }`. The id is what a card stores as its edition,
+--- exactly as a vanilla card stores `"foil"`.
+SMODS.Editions = SMODS.Editions or {}
+SMODS.EDITION_ORDER = SMODS.EDITION_ORDER or {}
+
+local FX_ANIMATIONS = { sweep = true, shimmer = true, rainbow = true, pulse = true, steady = true }
+
+local function colour_list(v, n, what)
+    if v == nil then return nil end
+    check(type(v) == "table" and #v >= 3, what .. " must be a colour: { r, g, b" .. (n == 4 and ", a" or "") .. " } from 0 to 1")
+    local out = {}
+    for i = 1, n do
+        local c = tonumber(v[i] or (i == 4 and 1) or nil)
+        check(c ~= nil and c >= 0 and c <= 1, what .. " must be a colour with values from 0 to 1")
+        out[i] = c
+    end
+    return out
+end
+
+--- `SMODS.Edition { key, loc_txt, config, extra_cost, in_shop, weight, sound, fx, calculate,
+--- loc_vars, get_weight }`.
+---
+--- `config` takes Steamodded's edition numbers, applied with no code: `chips` and `mult` when
+--- a playing card scores or before a Joker's own effect, `x_mult` and `p_dollars` after.
+--- `calculate(self, card, context)` hears `context.pre_joker` and `context.post_joker` for a
+--- Joker and `context.main_scoring` (with `cardarea == G.play`) for a scored playing card, and
+--- what it returns scores the same way.
+---
+--- The 3DS has no shaders, so `shader` is ignored and the look is described instead (`fx`):
+--- a `tint` multiplied over the art, a `glow` added on top, and an `animation` for the glow.
+--- They drive the same mesh passes the vanilla editions use (`fx.lua`).
+function SMODS.Edition(t)
+    local mod = need_mod("SMODS.Edition")
+    check(type(t) == "table", "SMODS.Edition expects a table")
+    check(type(t.key) == "string" and t.key:match("^[%w_]+$"),
+        "SMODS.Edition needs a 'key' of letters, digits and underscores")
+    local id = ("e_" .. mod.prefix .. "_" .. t.key):lower()
+    local what = "Edition '" .. t.key .. "'"
+    check(SMODS.Editions[id] == nil, what .. " is defined twice (id " .. id .. ")")
+    check_functions(t, "Edition", { "loc_vars", "calculate", "get_weight" })
+
+    local config = deep_copy(type(t.config) == "table" and t.config or {})
+    for _, k in ipairs({ "chips", "mult", "x_mult", "p_dollars" }) do
+        if config[k] ~= nil then
+            config[k] = tonumber(config[k])
+            check(config[k] ~= nil, what .. ": config." .. k .. " must be a number")
+        end
+    end
+    local weight = tonumber(t.weight or 0)
+    check(weight and weight >= 0, what .. ": weight must be a number, 0 or more")
+    local extra_cost = tonumber(t.extra_cost or 0)
+    check(extra_cost ~= nil, what .. ": extra_cost must be a number")
+
+    local fx = type(t.fx) == "table" and t.fx or {}
+    local animation = fx.animation or "sweep"
+    check(FX_ANIMATIONS[animation], what .. ": fx.animation must be sweep, shimmer, rainbow, pulse or steady")
+    local look = {
+        tint = colour_list(fx.tint, 3, what .. ": fx.tint") or { 1, 1, 1 },
+        glow = colour_list(fx.glow, 4, what .. ": fx.glow") or { 1, 1, 1, 0.3 },
+        animation = animation,
+    }
+
+    local sound
+    if type(t.sound) == "table" and type(t.sound.sound) == "string" then
+        sound = { name = t.sound.sound, per = tonumber(t.sound.per) or 1, vol = tonumber(t.sound.vol) or 0.4 }
+    end
+
+    local loc = loc_for(t.loc_txt, "en") or {}
+    t.mod = mod
+    t.original_key = t.key
+    t.key = id
+    t.config = config
+    t.name = tostring(loc.name or t.name or t.original_key)
+    local def = {
+        id = id, name = t.name, center = t, mod = mod, config = config,
+        extra_cost = extra_cost, in_shop = t.in_shop == true, weight = weight,
+        sound = sound, look = look, order = #SMODS.EDITION_ORDER + 1,
+    }
+    SMODS.Editions[id] = def
+    SMODS.EDITION_ORDER[#SMODS.EDITION_ORDER + 1] = id
+    require("fx").register_edition(id, look)
+    SMODS.Centers[id] = t
+    SMODS.register_translations(mod, "edition", id, t, { edition = { key = id }, ability = deep_copy(config) })
+    mod.registered.editions[#mod.registered.editions + 1] = id
+    return t
+end
+
+--- The mod edition `id` names, or nil for a vanilla one (or none).
+function SMODS.edition(id)
+    return type(id) == "string" and SMODS.Editions[id] or nil
+end
+
+--- How often an `in_shop` edition is rolled, on Steamodded's scale (Foil 20, Holographic 14,
+--- Polychrome 3, Negative 3), where 10 is one percent of shop Jokers. 0 for one never rolled.
+function SMODS.edition_weight(def)
+    if not (def and def.in_shop) then return 0 end
+    local w = def.weight
+    if type(def.center.get_weight) == "function" then
+        w = tonumber(SMODS.call(def.mod, def.center.get_weight, def.center)) or w
+    end
+    return math.max(0, tonumber(w) or 0)
+end
+
+--- The mod editions the shop and packs can roll, in the order they were defined, with weights.
+--- Empty without mods, which leaves every vanilla roll exactly as it was.
+function SMODS.rollable_editions()
+    local out = {}
+    for _, id in ipairs(SMODS.EDITION_ORDER) do
+        local def = SMODS.Editions[id]
+        local w = SMODS.edition_weight(def)
+        if w > 0 then out[#out + 1] = { id = id, weight = w } end
+    end
+    return out
+end
+
+--- What a mod edition does at one scoring step: its `config` numbers for that step, plus what
+--- its `calculate` returns. `step` is "pre_joker" or "post_joker" for a Joker, "main_scoring"
+--- for a scored playing card. Returns chips, mult, x_mult, dollars.
+function SMODS.edition_effect(id, card, step)
+    local def = SMODS.Editions[id]
+    if not def then return 0, 0, 1, 0 end
+    local cfg = def.config
+    local chips, mult, x_mult, dollars = 0, 0, 1, 0
+    if step ~= "post_joker" then
+        chips = cfg.chips or 0
+        mult = cfg.mult or 0
+    end
+    if step ~= "pre_joker" then
+        x_mult = cfg.x_mult or 1
+        dollars = cfg.p_dollars or 0
+    end
+    local center = def.center
+    if type(center.calculate) == "function" then
+        local context = { [step] = true, edition = true }
+        if step == "main_scoring" then context.cardarea = (G and G.play) or SMODS.PLAY end
+        if step ~= "main_scoring" then context.cardarea = G and G.jokers end
+        local ret = SMODS.call(def.mod, center.calculate, center, card, context)
+        if type(ret) == "table" then
+            chips = chips + (first_number(ret, "chips", "chip_mod") or 0)
+            mult = mult + (first_number(ret, "mult", "mult_mod") or 0)
+            x_mult = x_mult * (first_number(ret, "xmult", "x_mult", "Xmult", "x_mult_mod") or 1)
+            dollars = dollars + (first_number(ret, "dollars", "p_dollars") or 0)
+        end
+    end
+    return chips, mult, x_mult, dollars
+end
+
+--- A mod edition's description as tooltip lines (markup kept), in the live language.
+function SMODS.edition_tooltip_lines(id, card)
+    local def = SMODS.Editions[id]
+    if not def then return nil end
+    local center = def.center
+    local loc = loc_for(center.loc_txt, I18N and I18N.get_language() or "en") or {}
+    local text = loc.text
+    if type(text) == "string" then text = { text } end
+    if type(text) ~= "table" then return {} end
+    local vars = {}
+    if type(center.loc_vars) == "function" then
+        local ret = SMODS.call(def.mod, center.loc_vars, center, {}, card or { edition = { key = id } })
+        if type(ret) == "table" and type(ret.vars) == "table" then vars = ret.vars end
+    end
+    local lines = {}
+    for _, line in ipairs(text) do lines[#lines + 1] = SMODS.format_line(line, vars) end
+    return lines
+end
+
+--- The same description as plain strings, for the playing-card tooltip.
+function SMODS.edition_plain_lines(id, card)
+    local out = {}
+    for _, line in ipairs(SMODS.edition_tooltip_lines(id, card) or {}) do
+        local parts = {}
+        for _, s in ipairs(line.segments or {}) do parts[#parts + 1] = s.text end
+        out[#out + 1] = table.concat(parts)
+    end
+    return out
+end
+
+--- A mod edition's name in the live language.
+function SMODS.edition_name(id)
+    local def = SMODS.Editions[id]
+    if not def then return nil end
+    return I18N and I18N.content_name("edition", id, def.name) or def.name
 end
 
 --------------------------------------------------------------------------------
@@ -1196,6 +1575,25 @@ function SMODS.rollback(mod)
         if VOUCHER_DEFS then VOUCHER_DEFS[id] = nil end
         SMODS.Centers[id] = nil
     end
+    for _, id in ipairs(mod.registered.decks or {}) do
+        for _, list in ipairs({ DECK_DEFS, DECK_SELECT_DEFS }) do
+            for i = #list, 1, -1 do
+                if list[i].id == id then table.remove(list, i) end
+            end
+        end
+        DECK_DEFS_BY_ID[id] = nil
+        SMODS.Centers[id] = nil
+    end
+    mod.registered.decks = {}
+    for _, id in ipairs(mod.registered.editions or {}) do
+        SMODS.Editions[id] = nil
+        for i = #SMODS.EDITION_ORDER, 1, -1 do
+            if SMODS.EDITION_ORDER[i] == id then table.remove(SMODS.EDITION_ORDER, i) end
+        end
+        require("fx").unregister_edition(id)
+        SMODS.Centers[id] = nil
+    end
+    mod.registered.editions = {}
     for _, set in ipairs(mod.registered.strings or {}) do
         if I18N and I18N.remove_strings then I18N.remove_strings(set.language, set.keys) end
     end

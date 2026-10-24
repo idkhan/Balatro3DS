@@ -1,6 +1,6 @@
 # Modding Balatro3DS
 
-Balatro3DS loads mods written in the [Steamodded](https://github.com/Steamodded/smods) style: a folder with a `.json` manifest and a Lua file that calls `SMODS.Joker { ... }`, `SMODS.Consumable { ... }`, `SMODS.Voucher { ... }` and `SMODS.DeckSkin { ... }`. Simple Steamodded Jokers, such as the ones in [Steamodded's examples](https://github.com/Steamodded/examples/tree/master/Mods/JokerExamples), port with few changes. The main one is the art: here **every card is its own image file**, the way the game stores its own Jokers and consumables, instead of Steamodded's atlases. This is not Steamodded, though. There is no Lovely, no `G.GAME` and no shaders, and for now mods can add **Jokers, Tarots, Planets, Spectrals, Vouchers and face-card sets**.
+Balatro3DS loads mods written in the [Steamodded](https://github.com/Steamodded/smods) style: a folder with a `.json` manifest and a Lua file that calls `SMODS.Joker { ... }`, `SMODS.Consumable { ... }`, `SMODS.Voucher { ... }`, `SMODS.Back { ... }`, `SMODS.Edition { ... }` and `SMODS.DeckSkin { ... }`. Simple Steamodded Jokers, such as the ones in [Steamodded's examples](https://github.com/Steamodded/examples/tree/master/Mods/JokerExamples), port with few changes. The main one is the art: here **every card is its own image file**, the way the game stores its own Jokers and consumables, instead of Steamodded's atlases. This is not Steamodded, though. There is no Lovely, no `G.GAME` and no shaders, and for now mods can add **Jokers, Tarots, Planets, Spectrals, Vouchers, Decks, Editions and face-card sets**.
 
 A working example is in [`dev/example_mods/ExampleJokers`](dev/example_mods/ExampleJokers).
 
@@ -64,6 +64,7 @@ Use the same sizes as the game's own art:
 | Joker (and its soul and negative images) | 70 × 94 |
 | Tarot, Planet, Spectral | 64 × 128, with the card in the top 64 × 96 and the rest transparent |
 | Voucher | 72 × 95 |
+| Deck (its card back) | 72 × 95 |
 | Deck skin (face cards) | 216 × 95: three 72 × 95 cells, J, Q, K |
 
 Consumables are padded to 64 × 128 on purpose. A `.t3x` is stored at power-of-two sizes, and the game's own consumables use that exact layout so the card is never stretched. Copy it.
@@ -288,6 +289,100 @@ SMODS.Voucher {
 
 Mod vouchers join the shop's voucher pool after the vanilla ones. With no mods installed the pool, and so every seed, is exactly vanilla's.
 
+## Decks
+
+```lua
+SMODS.Back {
+    key = "scholar",         -- id is b_<prefix>_<key>
+    loc_txt = { name = "Scholar's Deck", text = { "{C:attention}+#1#{} hand size", "{C:mult}+#2#{} Mult on a {C:attention}High Card{}" } },
+    config = { hand_size = 1, extra = { mult = 10 } },
+    sprite = "scholar_back.png",   -- the card back, 72x95
+    loc_vars = function(self, info_queue, back)
+        return { vars = { back.effect.config.hand_size, back.effect.config.extra.mult } }
+    end,
+    calculate = function(self, back, context)
+        if context.joker_main and context.scoring_name == "High Card" then
+            return { mult = back.effect.config.extra.mult }
+        end
+    end,
+}
+```
+
+A mod deck appears on the deck-select screen after the vanilla decks, and in the collection. It is always unlocked, and it has its own stake ladder like any deck, starting at White Stake. Every playing card in a run with it wears its `sprite` as the back.
+
+**Built in.** As in Steamodded, a deck that only declares `config` needs no code. These are vanilla Balatro's Back keys:
+
+| `config` | Does |
+|---|---|
+| `dollars` | Starting money added (or taken away, if negative) |
+| `hands`, `discards`, `hand_size` | Changes to hands and discards per round, and hand size |
+| `joker_slot`, `consumable_slot` | Changes to Joker and consumable slots |
+| `extra_hand_bonus`, `extra_discard_bonus`, `no_interest` | End-of-round money per hand and discard left, and no interest (Green Deck) |
+| `vouchers = { "v_telescope" }` | Vouchers owned from the start: vanilla ids, Steamodded's names (`v_overstock_norm`), or your own voucher keys |
+| `consumables = { "c_fool" }` | Consumables in hand at the start: Steamodded's names (`c_fool`, `c_planet_x`), the port's ids (`tarot_fool`), or your own keys |
+| `spectral_rate` | Spectral cards in the shop (Ghost Deck uses 2) |
+| `remove_faces = true` | No face cards in the deck (Abandoned Deck) |
+| `randomize_rank_suit = true` | Every card's rank and suit randomised (Erratic Deck) |
+| `ante_scaling` | Blind requirements multiplied by this (Plasma Deck uses 2) |
+| `negative_rate` | Percent chance a Joker, Tarot, Planet or Spectral in the shop or a booster pack is Negative. Vanilla is 0.3 for Jokers, and consumables never get an edition. Playing cards are never affected. Foil, Holo and Polychrome Jokers keep their own chances. A Negative consumable costs $5 more and doesn't use a consumable slot. One taken from a pack is used straight away, so there only the art changes. A port extension: Steamodded has no such key |
+
+**Code:**
+- **`apply(self, back)`:** runs once when a run starts, after `config` is applied. The deck is built (`G.deck.cards` is the list of cards, each `{ rank, suit, enhancement, seal }`, with `rank` 2 to 14), the starting money is in `G.money`, and the starting consumables and vouchers are already given. Steamodded decks usually do this work in `G.E_MANAGER` events, which don't exist here; change the run directly instead.
+- **`calculate(self, back, context)`:** hears every [context](#calculate-contexts) a Joker hears, after all the Jokers. What it returns [scores like a Joker's](#return-values), and its popups appear over the right end of the Joker row on the top screen.
+- **State:** `back.effect.config` is this run's own copy of `config`. Change it freely: it is saved with the run and comes back on Continue.
+- **`loc_vars(self, info_queue, back)`:** fills the description, as for Jokers.
+
+**Not supported:** Steamodded's `unlocked = false` and `check_for_unlock` (there are no unlock conditions, so a locked mod deck could never be played), `atlas`/`pos` (use `sprite`), and `calc_dollar_bonus` on a deck (return `dollars` from `calculate` on `context.end_of_round` instead).
+
+If a mod with a deck is turned off or removed, that deck leaves the deck-select screen. Its stake progress is kept in the profile and comes back with the mod.
+
+## Editions
+
+```lua
+SMODS.Edition {
+    key = "gilded",          -- id is e_<prefix>_<key>, in lower case
+    loc_txt = { name = "Gilded", text = { "Earn {C:money}$#1#{} when", "this card scores" } },
+    config = { p_dollars = 2 },
+    extra_cost = 3,
+    in_shop = true,
+    weight = 10,
+    sound = { sound = "gold_seal", per = 1.2, vol = 0.4 },
+    fx = { tint = { 1.0, 0.92, 0.7 }, glow = { 1.0, 0.85, 0.35, 0.45 }, animation = "sweep" },
+    loc_vars = function(self, info_queue, card)
+        return { vars = { self.config.p_dollars } }
+    end,
+}
+```
+
+A mod edition works like Foil, Holographic and Polychrome. It can be on a Joker or a playing card. It shows in the tooltip and adds to a Joker's price, and it has its own page in the collection after the vanilla four. A card stores the edition's id, so `card.edition == "e_exj_gilded"` on a Joker, or `card_data.modifier.edition` on a playing card.
+
+**Built in.** Steamodded's edition numbers need no code:
+
+| `config` | Does |
+|---|---|
+| `chips`, `mult` | Added when a playing card scores, or before a Joker's own effect (like Foil and Holographic) |
+| `x_mult` | Multiplies Mult when a playing card scores, or after a Joker's own effect (like Polychrome) |
+| `p_dollars` | Money earned at the same point |
+
+| Field | Notes |
+|---|---|
+| `extra_cost` | Added to a Joker's price (and so its sell value), as Foil adds $2 |
+| `in_shop`, `weight` | With `in_shop = true`, Jokers in the shop and Buffoon Packs, cards in Standard Packs, and Wheel of Fortune and Aura can roll it. `weight` is on Steamodded's scale: Foil is 20, Holographic 14, Polychrome 3 and Negative 3, and 10 is a 1% chance on a shop Joker. Its chance is added below the vanilla editions', so theirs don't change. |
+| `get_weight(self)` | Return a weight to use instead of `weight`, worked out each time |
+| `sound` | `{ sound, per, vol }`: the game sound played when a card gets the edition. It must be one of the game's own sound names. Defaults to Foil's. |
+| `loc_vars(self, info_queue, card)` | Fills the description; `self.config` holds the numbers |
+| `calculate(self, card, context)` | For effects beyond `config`. It is asked with `context.pre_joker` (before a Joker's effect) and `context.post_joker` (after it), and with `context.main_scoring` and `context.cardarea == G.play` when a playing card scores. Return `chips`, `mult`, `x_mult` or `dollars`. It adds to `config`, it doesn't replace it. |
+
+**The look (`fx`).** The 3DS has no shaders, so `shader` is ignored. Describe the look instead. It is drawn with the same passes the vanilla editions use, so it animates the same way, and it is flat on an Old 3DS shop shelf:
+
+| `fx` | Does |
+|---|---|
+| `tint = { r, g, b }` | Multiplied over the card's art, from 0 to 1. `{ 1, 1, 1 }` leaves it unchanged. |
+| `glow = { r, g, b, a }` | A colour added on top; `a` is how strong it is (0.3 to 0.5 reads like the vanilla editions) |
+| `animation` | How the glow moves: `"sweep"` (a band across the card, like Foil; the default), `"shimmer"` (a rippling sheen, like Holographic), `"rainbow"` (shifting hues, like Polychrome; `tint` and the glow's colour are not used), `"pulse"` (fades in and out) or `"steady"` |
+
+**Not supported:** `shader` (use `fx`), `on_apply` and `on_remove`, and `config.card_limit` (Negative's extra slot). Consumables keep only Negative, as in vanilla. A mod edition never goes on a consumable.
+
 ## Card faces
 
 ```lua
@@ -317,9 +412,9 @@ This is why `version` matters: bump it when a change would break a run in progre
 
 ## What doesn't work (yet)
 
-- **No other content yet.** Decks, editions, seals, enhancements, blinds, booster packs and poker hands can't be added. Vouchers have no `calculate`, and deck skins cover only the face cards.
+- **No other content yet.** Seals, enhancements, blinds, booster packs and poker hands can't be added. Vouchers have no `calculate`, and deck skins cover only the face cards.
 - **No `G.GAME`, `G.jokers.cards`, `G.E_MANAGER`, `SMODS.destroy_cards`, `SMODS.calculate_effect`, hooks into `Game:init_game_object`, or `reset_game_globals`.** The port's game state is laid out differently. Code that touches these raises a runtime error. The error is caught: that Joker does nothing for that call, and the error appears on the Mods screen and in `mods_log.txt`.
-- **No shaders.** Foil, Holographic and Polychrome mod Jokers are drawn with the port's own additive texture passes, like vanilla Jokers. Negative needs its own art (see [Negative art](#negative-art)).
+- **No shaders.** Foil, Holographic and Polychrome mod Jokers are drawn with the port's own additive texture passes, like vanilla Jokers, and a mod edition describes its look with `fx` instead of a shader (see [Editions](#editions)). Negative needs its own art (see [Negative art](#negative-art)).
 - **`yes_pool_flag`, `no_pool_flag` and `info_queue` are ignored.** `in_pool` returns only whether the Joker can roll; a second `allow_duplicates` return is ignored.
 - **Contexts not raised yet:** `blind_disabled`, `debuff_card`, `debuff_hand`, `destroy_card` (`destroying_card`), `modify_scoring_hand`, `evaluate_poker_hand`, `check_enhancement`, `money_altered`, `initial_scoring_step`, `playing_card_end_of_round`, `change_rank` and `change_suit`. These need deeper changes to the port's scoring and deck code.
 
