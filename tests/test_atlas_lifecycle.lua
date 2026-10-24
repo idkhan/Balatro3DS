@@ -72,4 +72,50 @@ suite.test("the menu's own art is not freed out from under it", function()
     T.assert_not_nil(g.ASSET_ATLAS.chips.image, "chips belongs to the menu, not the run")
 end)
 
+--- A joker front loaded with nobody counted as its owner -- warmed for a pack choice, say --
+--- has no count to reach zero, and used to survive every trip back to the menu.
+suite.test("returning to the main menu frees joker fronts nobody owns", function()
+    local g = bootstrap.new_game(4246)
+    local key = "Jokers_0"
+    g:ensure_joker_sprite_loaded(key)
+    T.assert_not_nil(g.JOKER_SPRITES[key].image, "loads on demand")
+    T.assert_nil(g._atlas_owner_counts[key], "with no owner counted")
+
+    g:clear_run_assets_for_main_menu()
+    T.assert_nil(g.JOKER_SPRITES[key].image, "and is handed back with the rest of the run")
+end)
+
+--- Texture memory running out is what makes a sheet fail on hardware, and the draw path asks
+--- for it every frame. It used to re-read the sheet from SD on each of those frames.
+suite.test("a sheet that fails to load is not retried every frame", function()
+    local g = bootstrap.new_game(4247)
+    local real_new_image, real_get_time = love.graphics.newImage, love.timer.getTime
+    local now, calls = 100, 0
+    love.timer.getTime = function() return now end
+    love.graphics.newImage = function()
+        calls = calls + 1
+        error("out of memory")
+    end
+
+    local ok_atlas = pcall(function()
+        for _ = 1, 30 do g:ensure_asset_atlas_loaded("centers") end
+    end)
+    local calls_in_a_second = calls
+    now = now + 2
+    g:ensure_asset_atlas_loaded("centers")
+    local calls_after = calls
+    love.graphics.newImage = real_new_image
+    g:ensure_asset_atlas_loaded("centers")
+    love.timer.getTime = real_get_time
+
+    T.assert_true(ok_atlas, "a failed load is not an error")
+    T.assert_eq(calls_in_a_second, 2, "one attempt (and its fallback) for thirty frames")
+    T.assert_eq(calls_after, 4, "tried again once the wait is over")
+    now = now + 2
+    love.timer.getTime = function() return now end
+    g:ensure_asset_atlas_loaded("centers")
+    love.timer.getTime = real_get_time
+    T.assert_not_nil(g.ASSET_ATLAS.centers.image, "and it loads once memory is back")
+end)
+
 return suite

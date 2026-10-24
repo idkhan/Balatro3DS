@@ -303,7 +303,8 @@ function SMODS.build_context(event_name, ctx, joker)
     c.scoring_name = ctx.hand_type
     c.poker_hands = poker_hands_for(ctx)
     c.scoring_hand = card_views(ctx.cards)
-    c.full_hand = card_views(ctx.full_hand or ctx.played_cards)
+    -- Discard events carry the batch as `discarded_nodes`; Steamodded hands it over as `full_hand`.
+    c.full_hand = card_views(ctx.full_hand or ctx.played_cards or ctx.discarded_nodes)
     return c
 end
 

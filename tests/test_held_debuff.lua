@@ -38,6 +38,36 @@ suite.test("a boss-debuffed card in hand reports itself debuffed", function()
     T.assert_false(node_of(hand, 13, "Hearts"):is_debuffed(), "and leaves the heart King alone")
 end)
 
+suite.test("Smeared Joker widens a suit boss to the other suit of its colour", function()
+    local g = bootstrap.new_game(4104)
+    local hand = hand_with(g, {
+        { rank = 5, suit = "Hearts" },
+        { rank = 5, suit = "Diamonds" },
+        { rank = 5, suit = "Spades" },
+        { rank = 5, suit = "Clubs" },
+        { rank = 5, suit = "Clubs", enhancement = "stone" },
+    })
+    local function debuffed(suit) return node_of(hand, 5, suit):is_debuffed() end
+
+    g.get_active_boss_blind_id = function() return "bl_window" end
+    T.assert_true(debuffed("Diamonds"), "The Window debuffs Diamonds")
+    T.assert_false(debuffed("Hearts"), "and, without Smeared, not Hearts")
+
+    g:add_joker_by_def("j_smeared")
+    T.assert_true(debuffed("Hearts"), "with Smeared, a Heart is a Diamond too")
+    T.assert_false(debuffed("Spades"), "black cards stay live")
+    T.assert_false(debuffed("Clubs"), "black cards stay live")
+
+    g.get_active_boss_blind_id = function() return "bl_club" end
+    T.assert_true(debuffed("Spades"), "The Club takes the Spades with Smeared")
+    T.assert_false(debuffed("Hearts"), "and leaves the red cards")
+    local stone
+    for _, node in ipairs(hand.card_nodes) do
+        if node.card_data.enhancement == "stone" then stone = node end
+    end
+    T.assert_false(stone:is_debuffed(), "a Stone Card has no suit to debuff")
+end)
+
 suite.test("a debuffed Steel card pays no held-in-hand mult", function()
     local g = bootstrap.new_game(4102)
     local hand = hand_with(g, { { rank = 13, suit = "Clubs", enhancement = "steel" } })
@@ -54,20 +84,23 @@ suite.test("a debuffed Steel card pays no held-in-hand mult", function()
     T.assert_eq(debuffed_ctx.mult, 1, "and leaves the mult where it was")
 end)
 
---- Play a lone 2 of Spades with two Kings (one Club, one Heart) held and Baron out, and report
---- the highest mult the scoring sequence reached. The sequence zeroes the running total once it
---- has committed the score, so the peak is what says how many Kings Baron actually saw.
+--- Play a lone 2 of Spades with two cards of `rank` (one Club, one Heart) held and `joker_id`
+--- out, and report the highest mult the scoring sequence reached. The sequence zeroes the
+--- running total once it has committed the score, so the peak is what says how many of the held
+--- cards the Joker actually saw.
+---@param joker_id string
+---@param rank integer
 ---@param boss_id string|nil
 ---@return number peak mult
-local function baron_peak_mult(boss_id)
+local function held_peak_mult(joker_id, rank, boss_id)
     local g = bootstrap.new_game(4103)
     _G.Top = { addPopup = function() end }
     local hand = hand_with(g, {
-        { rank = 13, suit = "Clubs" },
-        { rank = 13, suit = "Hearts" },
+        { rank = rank, suit = "Clubs" },
+        { rank = rank, suit = "Hearts" },
         { rank = 2, suit = "Spades" },
     })
-    g:add_joker_by_def("j_baron")
+    g:add_joker_by_def(joker_id)
     g.STATE = g.STATES.SELECTING_HAND
     if boss_id then g.get_active_boss_blind_id = function() return boss_id end end
 
@@ -85,9 +118,18 @@ local function baron_peak_mult(boss_id)
 end
 
 suite.test("Baron skips debuffed Kings held in hand", function()
-    T.assert_near(baron_peak_mult(nil), 2.25, 1e-6, "both Kings feed Baron with no boss out")
-    T.assert_near(baron_peak_mult("bl_club"), 1.5, 1e-6,
+    T.assert_near(held_peak_mult("j_baron", 13, nil), 2.25, 1e-6, "both Kings feed Baron with no boss out")
+    T.assert_near(held_peak_mult("j_baron", 13, "bl_club"), 1.5, 1e-6,
         "The Club's debuffed King pays nothing, so only one X1.5 lands")
+end)
+
+suite.test("Shoot the Moon skips debuffed Queens held in hand", function()
+    T.assert_near(held_peak_mult("j_shoot_the_moon", 12, nil), 27, 1e-6,
+        "both Queens feed Shoot the Moon with no boss out")
+    T.assert_near(held_peak_mult("j_shoot_the_moon", 12, "bl_club"), 14, 1e-6,
+        "The Club's debuffed Queen pays nothing, so only one +13 lands")
+    T.assert_near(held_peak_mult("j_shoot_the_moon", 12, "bl_plant"), 1, 1e-6,
+        "The Plant debuffs both Queens")
 end)
 
 return suite

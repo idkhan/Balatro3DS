@@ -154,4 +154,17 @@ suite.test("the pop does not move the layout the info card is placed from", func
     T.assert_eq(h1, h0)
 end)
 
+suite.test("deck select still lays out when the deck sheet cannot load", function()
+    local g = deck_select(9109)
+    local def = (DECK_SELECT_DEFS or DECK_DEFS)[1]
+    local real_ensure = g.ensure_asset_atlas_loaded
+    g.ensure_asset_atlas_loaded = function() return nil end
+    local x, y, w, h = MainMenuUI.draw_deck_carousel_sprite(g, def, 4, 0, 64, 80, 0, true)
+    g.ensure_asset_atlas_loaded = real_ensure
+    T.assert_eq(x, 4, "the placeholder's rect comes back")
+    T.assert_eq(y, 0)
+    T.assert_eq(w, 64)
+    T.assert_eq(h, 80)
+end)
+
 return suite

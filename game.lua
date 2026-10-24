@@ -1167,10 +1167,22 @@ function Game:boss_is_card_debuffed_for_scoring(node)
     local rank = tonumber(d.rank) or 0
     local suit = d.suit
     local is_wild = d.enhancement == "wild"
-    if boss_id == "bl_club" and (suit == "Clubs" or is_wild) then return true end
-    if boss_id == "bl_goad" and (suit == "Spades" or is_wild) then return true end
-    if boss_id == "bl_window" and (suit == "Diamonds" or is_wild) then return true end
-    if boss_id == "bl_head" and (suit == "Hearts" or is_wild) then return true end
+    -- The reference tests `card:is_suit(debuff.suit, true)`, which Smeared Joker widens: with
+    -- it out, The Head takes the Diamonds too and The Club the Spades.
+    local smeared = self:hasJoker("j_smeared")
+    local function suit_hit(check)
+        if is_wild then return true end
+        if d.enhancement == "stone" or suit == nil then return false end
+        if smeared then
+            local red = check == "Hearts" or check == "Diamonds"
+            return (suit == "Hearts" or suit == "Diamonds") == red
+        end
+        return suit == check
+    end
+    if boss_id == "bl_club" and suit_hit("Clubs") then return true end
+    if boss_id == "bl_goad" and suit_hit("Spades") then return true end
+    if boss_id == "bl_window" and suit_hit("Diamonds") then return true end
+    if boss_id == "bl_head" and suit_hit("Hearts") then return true end
     if boss_id == "bl_plant" and ((rank >= 11 and rank <= 13) or self:hasJoker("j_pareidolia")) then return true end
     if boss_id == "bl_pillar" and d.uid and self._ante_played_card_uids[d.uid] then return true end
     if boss_id == "bl_final_leaf" and self.boss_runtime.verdant_leaf_active == true then return true end
@@ -9122,6 +9134,15 @@ function Game:clear_run_assets_for_main_menu()
             if self.unload_joker_sprite then
                 self:unload_joker_sprite(name)
             end
+        end
+    end
+    -- And every joker front still resident without a count: a sprite warmed for a pack
+    -- choice, or loaded for anything that never registered as its owner, has no count to
+    -- reach zero and otherwise stays loaded for the life of the process, one run's worth at
+    -- a time. They are lazy, so anything that draws one later just loads it again.
+    if type(self.JOKER_SPRITES) == "table" and self.unload_joker_sprite then
+        for key in pairs(self.JOKER_SPRITES) do
+            self:unload_joker_sprite(key)
         end
     end
 
@@ -18883,13 +18904,18 @@ function Game:unload_joker_sprite(key)
     return true
 end
 
-function Game:ensure_asset_atlas_loaded(name)
-    if not name or not self.ASSET_ATLAS then return nil end
-    local atlas = self.ASSET_ATLAS[name]
-    if not atlas then return nil end
-    if atlas.image then return atlas end
-    if not atlas.path then return atlas end
+--- Seconds a sheet that failed to load waits before it is tried again.
+---
+--- These are called from the draw path, so a sheet that cannot load (in practice: texture
+--- memory is full) used to be re-read from SD and re-decoded on every frame that wanted it --
+--- 2 to 4 MiB a frame, which is the frame rate falling through the floor on an Old 3DS.
+local ATLAS_RETRY_SECONDS = 1
 
+local function load_atlas_image(self, atlas)
+    if atlas.load_error and atlas._failed_at and love.timer
+        and love.timer.getTime() - atlas._failed_at < ATLAS_RETRY_SECONDS then
+        return atlas
+    end
     local ok, img = pcall(love.graphics.newImage, atlas.path, { dpiscale = atlas.dpiscale or self.SETTINGS.GRAPHICS.texture_scaling, mipmaps = false })
     local err = ok and nil or img
     if not ok then
@@ -18898,7 +18924,17 @@ function Game:ensure_asset_atlas_loaded(name)
     end
     atlas.image = ok and img or nil
     atlas.load_error = (not ok) and tostring(err) or nil
+    atlas._failed_at = (not ok) and love.timer and love.timer.getTime() or nil
     return atlas
+end
+
+function Game:ensure_asset_atlas_loaded(name)
+    if not name or not self.ASSET_ATLAS then return nil end
+    local atlas = self.ASSET_ATLAS[name]
+    if not atlas then return nil end
+    if atlas.image then return atlas end
+    if not atlas.path then return atlas end
+    return load_atlas_image(self, atlas)
 end
 
 function Game:ensure_animation_atlas_loaded(name)
@@ -18907,16 +18943,7 @@ function Game:ensure_animation_atlas_loaded(name)
     if not atlas then return nil end
     if atlas.image then return atlas end
     if not atlas.path then return atlas end
-
-    local ok, img = pcall(love.graphics.newImage, atlas.path, { dpiscale = atlas.dpiscale or self.SETTINGS.GRAPHICS.texture_scaling, mipmaps = false })
-    local err = ok and nil or img
-    if not ok then
-        ok, img = pcall(love.graphics.newImage, atlas.path, {})
-        if not ok then err = img end
-    end
-    atlas.image = ok and img or nil
-    atlas.load_error = (not ok) and tostring(err) or nil
-    return atlas
+    return load_atlas_image(self, atlas)
 end
 
 --- Source rectangle for one cell of a grid atlas, cached on the atlas itself.

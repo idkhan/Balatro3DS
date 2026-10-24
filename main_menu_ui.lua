@@ -1130,7 +1130,9 @@ function MainMenuUI.draw_deck_carousel_sprite(game, def, x, y, w, h, p, unlocked
     love.graphics.rectangle("fill", x, y, w, h, 8, 8)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.printf(I18N.text("menu.sprite_unavailable", nil, "Sprite unavailable"), x, y + math.floor(h * 0.5) - 6, w, "center")
-    return false
+    -- Still a rect: deck select lays the info card out from it, and the sheet goes missing
+    -- exactly when memory is short, which is no time to take the menu down with it.
+    return x, y, w, h
 end
 
 --- Tint for a stake chip. A locked stake is knocked back rather than greyed out: the chips are
@@ -1181,7 +1183,8 @@ function MainMenuUI.draw_stake_carousel_sprite(game, def, x, y, w, h, p, unlocke
     love.graphics.rectangle("fill", x, y, w, h, 8, 8)
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.printf(I18N.text("menu.sprite_unavailable", nil, "Sprite unavailable"), x, y + math.floor(h * 0.5) - 6, w, "center")
-    return false
+    -- A rect, for the same reason the deck sprite returns one.
+    return x, y, w, h
 end
 
 function MainMenuUI._start_run(game)

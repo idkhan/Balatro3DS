@@ -1017,6 +1017,8 @@ SMODS.Joker {
             if context[flag] then SEEN[flag] = context[flag] end
         end
         if context.card_added then SEEN.added_card = context.card end
+        if context.pre_discard then SEEN.pre_discard_hand = #context.full_hand end
+        if context.discard then SEEN.discard_hand = #context.full_hand end
         if context.final_scoring_step then return { xmult = 2 } end
     end,
 }
@@ -1134,6 +1136,22 @@ suite.test("lifecycle contexts fire from the game's own paths", function()
     game:roll_skips()
     game:skip_blind(1)
     T.assert_true(seen().skip_blind, "skip_blind from skip_blind")
+    wipe_mods()
+end)
+
+suite.test("discard contexts see the discarded batch as full_hand", function()
+    local game = install_hooks()
+    hold(game, { "j_hk_recorder" })
+    local nodes = {
+        Card(0, 0, 1, 1, { rank = 5, suit = "Spades" }),
+        Card(0, 0, 1, 1, { rank = 9, suit = "Hearts" }),
+    }
+    game:emit_joker_event("on_pre_discard", { discarded_nodes = nodes, discard_reason = "discard" })
+    T.assert_eq(seen().pre_discard_hand, 2, "pre_discard")
+    game:emit_joker_event("on_discard", {
+        discarded_nodes = nodes, card_node = nodes[1], discard_reason = "discard",
+    })
+    T.assert_eq(seen().discard_hand, 2, "discard")
     wipe_mods()
 end)
 

@@ -671,12 +671,17 @@ DEFS.j_ticket = {
     note = note_text("Gold"),
 }
 
--- Held-in-hand Jokers.
+-- Held-in-hand Jokers. A debuffed held card pays these nothing, as in scoring.
+local function held_rank(node, rank)
+    if node.is_debuffed and node:is_debuffed() then return false end
+    return tonumber((node.card_data or {}).rank) == rank
+end
+
 DEFS.j_baron = {
     main = function(_, ctx)
         local x = 1
         for _, node in ipairs(ctx.held) do
-            if tonumber((node.card_data or {}).rank) == 13 then x = x * 1.5 end
+            if held_rank(node, 13) then x = x * 1.5 end
         end
         return x, "xmult"
     end,
@@ -687,7 +692,7 @@ DEFS.j_shoot_the_moon = {
     main = function(_, ctx)
         local n = 0
         for _, node in ipairs(ctx.held) do
-            if tonumber((node.card_data or {}).rank) == 12 then n = n + 1 end
+            if held_rank(node, 12) then n = n + 1 end
         end
         return n * 13, "mult"
     end,

@@ -361,6 +361,21 @@ suite.test("the readouts match the mod's definitions joker for joker", function(
     end
 end)
 
+suite.test("held-in-hand readouts skip debuffed cards", function()
+    local g, hand = game_with_display(1235)
+    hand:add_card({ rank = 12, suit = "Clubs" })
+    hand:add_card({ rank = 12, suit = "Hearts" })
+    hand:add_card({ rank = 13, suit = "Clubs" })
+    hand:add_card({ rank = 13, suit = "Hearts" })
+    g.get_active_boss_blind_id = function() return "bl_club" end
+
+    g:add_joker_by_def("j_shoot_the_moon")
+    T.assert_eq(readout(g), "+13", "the debuffed club Queen adds nothing")
+    g:remove_owned_joker_at(1, true, true)
+    g:add_joker_by_def("j_baron")
+    T.assert_eq(readout(g), "X1.5", "the debuffed club King adds nothing")
+end)
+
 suite.test("the settings toggle round-trips through the save", function()
     local g = bootstrap.new_game(77)
     g.SETTINGS.JOKER_DISPLAY = false

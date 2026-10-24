@@ -149,7 +149,7 @@ SMODS.Joker {
 Also available on `context`:
 - `blueprint` and `blueprint_card`: set when Blueprint or Brainstorm is copying this Joker.
 - `poker_hands`: use `next(context.poker_hands["Flush"])` to check whether the played hand contains a Flush.
-- `scoring_name`, `scoring_hand` and `full_hand`.
+- `scoring_name`, `scoring_hand` and `full_hand`. In `pre_discard` and `discard`, `full_hand` is the cards being discarded.
 - `port`: the game's own event table, for anything not translated above.
 
 Playing cards support `:get_id()` (2 to 14, where Jack is 11 and Ace is 14), `:is_face()`, `:is_suit("Hearts")`, `.base.suit` and `.debuff`.
