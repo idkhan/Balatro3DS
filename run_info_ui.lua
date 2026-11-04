@@ -329,7 +329,9 @@ function RunInfoUI.draw_top(screen, game)
     love.graphics.print(I18N.text("deck_view.stake", nil, "Stake"), 270, 116)
     local stake_pos = tonumber(stake_def and stake_def.pos)
     if stake_pos then
-        draw_atlas_cell(game, "chips", stake_pos, 270, VOUCHER_Y, 1.3)
+        -- The chip cell is 30 px. At 1.3x the nearest filter made some of its pixels one screen
+        -- pixel wide and some two, so it goes down 1:1, centred in the 39 px slot it used to fill.
+        draw_atlas_cell(game, "chips", stake_pos, 274, VOUCHER_Y + 4, 1)
     end
     love.graphics.setColor(game.C.WHITE)
     love.graphics.printf(stake_def and I18N.content_name("stake", stake_def.id, stake_def.name) or I18N.text("deck_view.stake", nil, "Stake"),
