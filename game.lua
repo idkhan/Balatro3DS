@@ -19106,9 +19106,11 @@ function Game:draw_button_pip(button, x, y, size)
     local quad, cell_w, cell_h = self:atlas_cell_quad(atlas, index)
     if not quad then return false end
 
+    -- Always 1:1, centred on the `size` box the caller laid out (11-14 px). The sheet is baked at
+    -- pip size because nearest-filtered art scaled to 0.375 dropped five pixels in eight.
     size = tonumber(size) or 14
-    local scale = size / cell_w
-    love.graphics.draw(atlas.image, quad, x, y, 0, scale, scale)
+    local offset = math.floor((size - cell_w) / 2 + 0.5)
+    love.graphics.draw(atlas.image, quad, math.floor(x + offset + 0.5), math.floor(y + offset + 0.5))
     return true
 end
 
@@ -19210,9 +19212,10 @@ function Game:set_render_settings()
             -- `centers` + `cards_2` the way Card:draw does would pull 4 MiB of atlas onto the
             -- title screen for one 72x95 sprite, so it is pre-composited into its own sheet.
             {name = "title_ace", path = "resources/textures/1x/title_ace.png",px=72,py=95},
-            -- A 640x34 3DS-only strip. Its 20 cells retain Balatro's binding-pip order,
-            -- but declaring the single row is essential: CTR reports padded texture sizes.
-            {name = 'gamepad_ui_3ds', path = "resources/textures/gamepad_ui_3ds_opt_1x.png",px=32,py=34,cols=20,rows=1},
+            -- A 240x13 3DS-only strip, drawn 1:1 (`dev/bake_button_pips.py`). Its 20 cells keep
+            -- Balatro's binding-pip order, but declaring the single row is essential: CTR
+            -- reports padded texture sizes.
+            {name = 'gamepad_ui_3ds', path = "resources/textures/gamepad_ui_3ds_12px.png",px=12,py=13,cols=20,rows=1},
             {name = 'tags', path = "resources/textures/1x/tags.png",px=34,py=34,cols=10},
             {name = 'stickers', path = "resources/textures/1x/stickers.png",px=72,py=95},
             {name = 'chips', path = "resources/textures/1x/chips.png",px=30,py=30},
