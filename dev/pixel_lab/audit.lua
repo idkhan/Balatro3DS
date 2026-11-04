@@ -214,7 +214,10 @@ local function audit_rect(mode, x, y, w, h)
         record("rotated", x0, y0, x1 - x0, y1 - y0, math.atan2(ay - y0, ax - x0))
         return
     end
-    if frac_off(x0) or frac_off(y0) or frac_off(x1) or frac_off(y1) then
+    -- An outline is stroked centred on the edge: a 1 px line belongs on the half pixel, so it is
+    -- the stroke's outer edge that has to land on the grid.
+    local inset = (mode == "line") and (love.graphics.getLineWidth() / 2) or 0
+    if frac_off(x0 - inset) or frac_off(y0 - inset) or frac_off(x1 + inset) or frac_off(y1 + inset) then
         record("shape_subpixel", x0, y0, x1 - x0, y1 - y0, 0)
     end
 end

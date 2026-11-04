@@ -71,6 +71,13 @@ local SCORE_EASE_DURATION = 0.5
 function draw_rounded_rect(x, y, w, h, radius, padding, mode)
     padding = padding or 0
     mode = mode or "fill"
+    -- Edges on whole pixels. Layout here is arithmetic on the panel (`ih/3`, `ih/4 + 4`), and
+    -- a rect with a fractional edge is rasterised by coverage: in motion its width changes by a
+    -- pixel from frame to frame and it slides out from under the text drawn on it. The inner
+    -- bounds returned below inherit the snap, so content placed from them lands on the grid too.
+    local x1, y1 = math.floor(x + w + 0.5), math.floor(y + h + 0.5)
+    x, y = math.floor(x + 0.5), math.floor(y + 0.5)
+    w, h = x1 - x, y1 - y
     radius = math.min(radius or 0, w / 2, h / 2)
     if radius < 0 then radius = 0 end
 
