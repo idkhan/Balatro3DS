@@ -22,6 +22,7 @@ local PerformanceLab = require("performance_lab")
 local RenderProfiler = require("render_profiler")
 local Particles = require("particles")
 local Fonts = require("fonts")
+local PixelGrid = require("pixel_grid")
 local Localization = require("localization")
 local NumberFormat = require("number_format")
 local Tilt = require("tilt")
@@ -7828,9 +7829,12 @@ function Game:draw_blind_chip_sprite(sprite_row, center_x, center_y, scale)
     local sprite_index = (blind_row * frames_per_blind) + frame
     local quad, cell_w, cell_h = self:atlas_cell_quad(atlas, sprite_index)
     if not quad then return end
-    local s = scale or 1
+    -- Callers size the chip by eye (1.05, 1.1); at those scales the nearest filter doubles every
+    -- tenth row of the chip's lettering. Whole scales and a whole-pixel corner keep it even.
+    local s = PixelGrid.art_scale(scale or 1)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(atlas.image, quad, center_x - (cell_w * s * 0.5), center_y - (cell_h * s * 0.5), 0, s, s)
+    love.graphics.draw(atlas.image, quad, PixelGrid.snap(center_x - cell_w * s * 0.5),
+        PixelGrid.snap(center_y - cell_h * s * 0.5), 0, s, s)
 end
 
 function Game:draw_blind_chip_anim(blind_index, center_x, center_y, scale)
