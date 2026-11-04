@@ -14,13 +14,23 @@ magenta, so a reviewer can see at a glance that a fix touched only what it says 
 import argparse
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 BG = (24, 24, 24)
 FG = (235, 235, 235)
 DIM = (150, 150, 150)
 GAP = 10
-LABEL_H = 16
+LABEL_H = 22
+
+
+def font(size):
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 10.1 has one fixed-size bitmap font
+        return ImageFont.load_default()
+
+
+TITLE, TEXT = font(22), font(15)
 
 
 def load(d, capture, screen):
@@ -78,20 +88,20 @@ def main():
         rows.append((caption, tiles))
 
     width = max(3 * t[0].width + 4 * GAP for _, t in rows)
-    header_h = 28 + 16 * len(a.note)
+    header_h = 40 + 20 * len(a.note) + 6
     height = header_h + sum(LABEL_H * 2 + t[0].height + GAP for _, t in rows) + GAP
     sheet = Image.new("RGB", (width, height), BG)
     d = ImageDraw.Draw(sheet)
-    d.text((GAP, 8), a.title, fill=FG)
+    d.text((GAP, 8), a.title, fill=FG, font=TITLE)
     for i, n in enumerate(a.note):
-        d.text((GAP, 26 + 16 * i), n, fill=DIM)
+        d.text((GAP, 40 + 20 * i), n, fill=DIM, font=TEXT)
     y = header_h
     for caption, tiles in rows:
-        d.text((GAP, y), caption, fill=FG)
+        d.text((GAP, y), caption, fill=FG, font=TEXT)
         y += LABEL_H
         x = GAP
         for label, t in zip(("BEFORE", "AFTER", "CHANGED (magenta)"), tiles):
-            d.text((x, y), label, fill=DIM)
+            d.text((x, y), label, fill=DIM, font=TEXT)
             sheet.paste(t, (x, y + LABEL_H))
             x += t.width + GAP
         y += LABEL_H + tiles[0].height + GAP

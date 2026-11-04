@@ -58,6 +58,21 @@ Fonts.DESKTOP_MATCH = {
     [33] = { size = 32, line = 29 },
 }
 
+--- Where the letters actually are in each m6x11plus cell: `{ top, height }` of a digit or capital,
+--- in pixels from the top of the cell. A cell is mostly air -- the `h22` sheet's digits are 13 px
+--- tall from row 5 -- so a box that fits a readout by its *cell* height shrinks text that would
+--- have fitted, and centring by cell sits it visibly off centre. Measured off the glyph sheets
+--- `mkbcfnt` produces for PIXEL_FONT_SHEETS (`dev/pixel_lab/bake_hw_fonts.py` reproduces them);
+--- re-measure with the ladder.
+Fonts.INK = {
+    [9]  = { 2, 6 },
+    [13] = { 4, 7 },
+    [18] = { 4, 11 },
+    [22] = { 5, 13 },
+    [27] = { 6, 17 },
+    [33] = { 7, 21 },
+}
+
 --- Role -> requested pixel size.
 ---
 --- NATIVE is what ships. SHARED is the historical ladder, kept so toggling the experiment is
@@ -308,6 +323,48 @@ function Fonts.fit(game, font, text, max_w)
         candidate = smaller
     end
     return candidate
+end
+
+--- Top and height of the letters inside `font`'s cell (`Fonts.INK`). A face with no measured
+--- ink -- a language face, or one this table has never seen -- reports its whole cell, which is
+--- the old, conservative behaviour.
+---@param game table
+---@param font love.Font
+---@return number top, number height
+function Fonts.ink(game, font)
+    local pixel = game and game.FONTS and game.FONTS.PIXEL
+    if pixel and not pixel.LANGUAGE then
+        for _, role in ipairs(ROLES) do
+            if pixel[role] == font then
+                local ink = Fonts.INK[pixel[role .. "_HEIGHT"]]
+                if ink then return ink[1], ink[2] end
+                break
+            end
+        end
+    end
+    return 0, font:getHeight()
+end
+
+--- Largest face at or below `font` whose single line of `text` fits `max_w` wide with its
+--- letters (`Fonts.ink`) inside `max_h`, or the smallest there is. The one-line readout
+--- counterpart of `Fonts.fit`: stepping down the ladder keeps the text at a size a sheet was
+--- baked at, where scaling it to fit resamples a linear-filtered sheet into a blur.
+---@param game table
+---@param font love.Font
+---@param text string
+---@param max_w number
+---@param max_h number
+---@return love.Font
+function Fonts.fit_line(game, font, text, max_w, max_h)
+    text = tostring(text or "")
+    local candidate = font
+    while true do
+        local _, ink_h = Fonts.ink(game, candidate)
+        if candidate:getWidth(text) <= max_w and ink_h <= max_h then return candidate end
+        local smaller = Fonts.next_smaller(game, candidate)
+        if not smaller then return candidate end
+        candidate = smaller
+    end
 end
 
 --- Largest face at or below `font` whose *wrapped* block fits `max_w` x `max_h`.

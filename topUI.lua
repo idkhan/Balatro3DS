@@ -902,23 +902,36 @@ function TopUI.printf_juiced(text, x, y, w, align, scale)
     love.graphics.pop()
 end
 
---- `center_text` with a scale pop about the centre of its box. `scale` nil means idle, which is
---- every frame except the quarter second after a counter changes, and costs one nil test.
+--- One line of text centred in a box by its letters, with a scale pop about the box centre.
+--- `scale` nil means idle, which is every frame except the quarter second after a counter
+--- changes.
+---
+--- At rest the text is drawn 1:1 on whole pixels. Fonts are sampled linearly on hardware, so any
+--- other scale or a fractional origin is a blur. Text that does not fit steps down the font
+--- ladder (`Fonts.fit_line`) rather than being scaled. Only text that overflows even the
+--- smallest face is squeezed, as a last resort. The fit is by the letters (`Fonts.ink`), not the
+--- cell: fitting by cell is what drew the Hands, Discards, Ante and Round counters at 64%.
+--- The current font is left as it was.
 --- @param scale number|nil Pop scale from the baked curve
+--- @return number x, number y top left of the drawn text's cell
 function TopUI.center_text_juiced(string, x, y, iw, ih, scale)
     -- A readout is one line. printf would wrap a ratio or a large number out of its panel.
     local text = tostring(string or "")
-    local font = love.graphics.getFont()
-    local width, height = font:getWidth(text), font:getHeight()
-    local fit = math.min(1, iw / math.max(1, width), ih / math.max(1, height))
-    local pop = math.min(scale or 1, iw / math.max(1, width), ih / math.max(1, height))
-    if not scale then pop = fit end
-    local px, py = x + (iw - width * pop) / 2, y + (ih - height * pop) / 2
-    love.graphics.push()
-    love.graphics.translate(px, py)
-    love.graphics.scale(pop, pop)
-    love.graphics.print(text, 0, 0)
-    love.graphics.pop()
+    local caller_font = love.graphics.getFont()
+    local font = Fonts.fit_line(G, caller_font, text, iw, ih)
+    local ink_top, ink_h = Fonts.ink(G, font)
+    local width = font:getWidth(text)
+    local room = math.min(iw / math.max(1, width), ih / math.max(1, ink_h))
+    local pop = math.min(scale or 1, room)
+    local px = math.floor(x + (iw - width * pop) / 2 + 0.5)
+    local py = math.floor(y + (ih - ink_h * pop) / 2 - ink_top * pop + 0.5)
+    if font ~= caller_font then love.graphics.setFont(font) end
+    if pop == 1 then
+        love.graphics.print(text, px, py)
+    else
+        love.graphics.print(text, px, py, 0, pop, pop)
+    end
+    if font ~= caller_font then love.graphics.setFont(caller_font) end
     return px, py
 end
 
