@@ -19024,6 +19024,9 @@ local function load_atlas_image(self, atlas)
         ok, img = pcall(love.graphics.newImage, atlas.path, {})
         if not ok then err = img end
     end
+    -- A sheet that is only ever magnified as a soft image, never as pixel art, declares its
+    -- own filter (the menu backdrop).
+    if ok and atlas.filter then img:setFilter(atlas.filter, atlas.filter) end
     atlas.image = ok and img or nil
     atlas.load_error = (not ok) and tostring(err) or nil
     atlas._failed_at = (not ok) and love.timer and love.timer.getTime() or nil
@@ -19190,9 +19193,13 @@ function Game:set_render_settings()
             -- falls back to this prebaked 63-frame sheet: 1024x1024, 4 MiB resident, loaded
             -- on entry to the home screen and freed on leaving it. Where the field does draw,
             -- `path` is nil so `ensure_animation_atlas_loaded` never touches the card.
+            --
+            -- It is stretched 3.125x on the top screen and 2.5x on the bottom. Through the
+            -- nearest filter that is a mosaic of uneven 2-, 3- and 4-pixel blocks. The
+            -- reference draws this backdrop as a smooth shader, so it is magnified linearly.
             {name = "menu", path = (not require("backdrop").is_supported())
                 and "resources/textures/1x/menu.png" or nil,
-                px=128, py=128, cols=8, rows=8, frames = 63},
+                px=128, py=128, cols=8, rows=8, frames = 63, filter = "linear"},
         }
         self.asset_atli = {
             -- Edition pattern sheets: structure only, colour comes from the vertex field.
@@ -19302,6 +19309,7 @@ function Game:set_render_settings()
             self.ANIMATION_ATLAS[name].cols = entry.cols
             self.ANIMATION_ATLAS[name].rows = entry.rows
             self.ANIMATION_ATLAS[name].frames = entry.frames
+            self.ANIMATION_ATLAS[name].filter = entry.filter
             -- Lazy, like the asset atlases. These used to load during Game() for every
             -- sheet but `menu`, which meant BlindChips.png was resident before the title
             -- screen drew: 864x1008 pads to 1024x1024 on hardware, so 4 MiB of a 64 MB
