@@ -8088,11 +8088,12 @@ function Game:draw_bottom_blind_select()
                 love.graphics.setColor(self.C.WHITE)
                 love.graphics.setFont(effect_font)
                 love.graphics.push()
-                love.graphics.translate(x + (card_w - text_w * scale) / 2, y + 98)
+                -- Whole pixels at the usual scale of 1: fonts are sampled linearly on hardware.
+                love.graphics.translate(math.floor(x + (card_w - text_w * scale) / 2 + 0.5), y + 98)
                 love.graphics.scale(scale, scale)
                 for line_index, line in ipairs(lines) do
                     local line_w = effect_font:getWidth(line)
-                    love.graphics.print(line, (text_w - line_w) / 2, (line_index - 1) * effect_font:getHeight())
+                    love.graphics.print(line, math.floor((text_w - line_w) / 2), (line_index - 1) * effect_font:getHeight())
                 end
                 love.graphics.pop()
                 scorePosY = 98 + math.ceil(block_h * scale) + 4
@@ -8177,7 +8178,7 @@ function Game:draw_bottom_blind_select()
         local total_w = text_font:getWidth(reward_label .. money)
         local scale = math.min(1, (scoreWidth - 4) / math.max(1, total_w))
         love.graphics.push()
-        love.graphics.translate(tx + (scoreWidth - total_w * scale) / 2, ty + 2 * line_step)
+        love.graphics.translate(math.floor(tx + (scoreWidth - total_w * scale) / 2 + 0.5), ty + 2 * line_step)
         love.graphics.scale(scale, scale)
         love.graphics.setColor(self.C.WHITE)
         love.graphics.print(reward_label, 0, 0)
