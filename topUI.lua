@@ -491,14 +491,23 @@ function TopUI:draw(screen)
         I18N.text("hud.round_score_2", nil, "Score"),
     }
     local label_font = G.FONTS.PIXEL.LABEL
-    local label_w = math.max(label_font:getWidth(score_lines[1]), label_font:getWidth(score_lines[2]))
-    local paneOffset = math.min(62, label_w + 6)
-    love.graphics.setFont(label_font)
     local _, label_ink = Fonts.ink(G, label_font)
     local label_gap = 3
-    local label_top = iy + math.floor((ih - (label_ink * 2 + label_gap)) / 2)
-    TopUI.center_text_juiced(score_lines[1], ix, label_top, paneOffset - 4, label_ink)
-    TopUI.center_text_juiced(score_lines[2], ix, label_top + label_ink + label_gap, paneOffset - 4, label_ink)
+    local paneOffset
+    if label_ink * 2 + label_gap <= ih then
+        local label_w = math.max(label_font:getWidth(score_lines[1]), label_font:getWidth(score_lines[2]))
+        paneOffset = math.min(62, label_w + 6)
+        love.graphics.setFont(label_font)
+        local label_top = iy + math.floor((ih - (label_ink * 2 + label_gap)) / 2)
+        TopUI.center_text_juiced(score_lines[1], ix, label_top, paneOffset - 4, label_ink)
+        TopUI.center_text_juiced(score_lines[2], ix, label_top + label_ink + label_gap, paneOffset - 4, label_ink)
+    else
+        -- Chinese letters fill their cell, so two lines are taller than the row: one SMALL line.
+        local score_label = score_lines[1] .. (I18N.get_language() == "zh_CN" and "" or " ") .. score_lines[2]
+        love.graphics.setFont(G.FONTS.PIXEL.SMALL)
+        paneOffset = math.min(62, G.FONTS.PIXEL.SMALL:getWidth(score_label) + 4)
+        TopUI.center_text_juiced(score_label, ix, iy, paneOffset - 4, ih)
+    end
 
     love.graphics.setColor(G.C.PANEL)
     ix, iy, iw, ih = draw_rounded_rect(ix + paneOffset, iy, iw - paneOffset, ih, 2, 2, "fill")

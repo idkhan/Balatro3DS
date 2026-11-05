@@ -385,11 +385,14 @@ function RunInfoUI.draw_top(screen, game)
         end
     end
 
-    -- Centred in the strip under the vouchers, in the readable grey the other labels use.
-    love.graphics.setFont(label)
+    -- Centred in the strip under the vouchers, in the readable grey the other labels use, and
+    -- no wider than the voucher column: the stake column starts right after it.
+    local hint = I18N.text("run_info.hands_hint", nil, "Poker hands are on the touch screen")
+    local hint_font = Fonts.fit(game, label, hint, VOUCHER_AREA_W)
+    love.graphics.setFont(hint_font)
     love.graphics.setColor(game.C.JOKER_GREY)
-    TextCache.print(I18N.text("run_info.hands_hint", nil, "Poker hands are on the touch screen"), 10,
-        Fonts.centre_y(game, label, VOUCHER_Y + VOUCHER_H, TOP_H - VOUCHER_Y - VOUCHER_H))
+    TextCache.print(hint, VOUCHER_AREA_X,
+        Fonts.centre_y(game, hint_font, VOUCHER_Y + VOUCHER_H, TOP_H - VOUCHER_Y - VOUCHER_H))
     love.graphics.setColor(1, 1, 1, 1)
 end
 

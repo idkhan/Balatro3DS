@@ -168,4 +168,35 @@ suite.test("reward pips count dollars without an extra currency prefix",function
     T.assert_eq(ui:cached_reward_pips(5),"$$$$$+")
     T.assert_eq(ui:cached_reward_pips(0),"$0")
 end)
+suite.test("the round score label stays inside its row in Chinese",function()
+    local g=bootstrap.new_game(736);G=g;g.STATE=g.STATES.SELECTING_HAND;I18N.set_language("zh_CN")
+    -- The hardware faces: two lines of the Chinese label face are taller than the row.
+    g.FONTS.PIXEL=Fonts.build("native","zh_CN")
+    local first,second=I18N.text("hud.round_score_1"),I18N.text("hud.round_score_2")
+    local real_rect,real_print=draw_rounded_rect,love.graphics.print
+    local row,spans
+    draw_rounded_rect=function(...)
+        local ix,iy,iw,ih=real_rect(...);row={y=iy,h=ih};return ix,iy,iw,ih
+    end
+    love.graphics.print=function(text,x,y,...)
+        local t=tostring(text)
+        if t==first or t==second or t==first..second then
+            local top,ink=Fonts.ink(g,love.graphics.getFont())
+            spans=spans or {}
+            spans[#spans+1]={text=t,top=y+top,bottom=y+top+ink,row=row}
+        end
+        return real_print(text,x,y,...)
+    end
+    local top=TopUI()
+    local ok,err=pcall(top.draw,top,"top")
+    draw_rounded_rect,love.graphics.print=real_rect,real_print
+    I18N.set_language("en")
+    if not ok then error(err,0) end
+    T.assert_not_nil(spans,"the label is drawn")
+    for _,s in ipairs(spans) do
+        T.assert_true(s.top>=s.row.y and s.bottom<=s.row.y+s.row.h,
+            s.text.." spans rows "..s.top..".."..(s.bottom-1).." in a row of "..s.row.y..".."..(s.row.y+s.row.h-1))
+    end
+end)
+
 return suite
