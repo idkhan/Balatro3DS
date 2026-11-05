@@ -8125,18 +8125,9 @@ function Game:draw_bottom_blind_select()
         self._blind_select_tap_rects[i] = { x = btn_x, y = btn_y, w = selectWidth, h = selectHeight }
 
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
-        local tx = x + math.floor(card_w / 2) - math.floor(selectWidth / 2)
-        local select_prompt_w = 0
-        if selectable and self:gamepad_focus_visible() then
-            if self:draw_button_pip(self:get_button_for_role("confirm"), tx + 3, btn_y + math.floor((selectHeight - 13)/2), 12) then
-                select_prompt_w = 17
-            end
-        end
-        local select_label_w = selectWidth - select_prompt_w - 4
-        local select_font = Fonts.fit(self, self.FONTS.PIXEL.SMALL, selectText, select_label_w)
-        love.graphics.setFont(select_font)
-        love.graphics.printf(selectText, tx + select_prompt_w + 2, btn_y + math.floor((selectHeight-select_font:getHeight())/2), select_label_w, "center")
+        TopUI.button_caption(selectText, selectable and self:get_button_for_role("confirm") or nil,
+            btn_x, btn_y, selectWidth, selectHeight, self.FONTS.PIXEL.LABEL)
+        local tx
 
         -- Wide enough for the longest boss name ("Crimson Heart"), which overran the old 70 px
         -- pill. The card's inner border sits at x+8..x+90, so this keeps a 4 px margin inside it.
@@ -8144,11 +8135,13 @@ function Game:draw_bottom_blind_select()
         local label = self:get_blind_display_name(i)
         love.graphics.setColor(blind_color)
         tx = x + math.floor(card_w / 2) - math.floor(blindWidth / 2) + 2
-        love.graphics.rectangle("fill", tx, btn_y + selectHeight + 8, blindWidth - 4, selectHeight, 4, 4)
+        local pill_y = btn_y + selectHeight + 8
+        love.graphics.rectangle("fill", tx, pill_y, blindWidth - 4, selectHeight, 4, 4)
 
+        -- Centred in the pill as drawn (blindWidth - 4), not in blindWidth, which put every name
+        -- 2 px right of centre.
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, label, blindWidth - 4))
-        love.graphics.printf(label, tx, btn_y + selectHeight + 8 + 2, blindWidth, "center")
+        TopUI.button_caption(label, nil, tx, pill_y, blindWidth - 4, selectHeight, self.FONTS.PIXEL.SMALL)
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
         self:draw_blind_chip_anim(i, x + math.floor(card_w / 2), y + 80, 1.1)
         self._blind_info_tap_rects[i] = {
@@ -8167,22 +8160,32 @@ function Game:draw_bottom_blind_select()
         tx = x + math.floor((card_w - scoreWidth) / 2)
         love.graphics.rectangle("fill", tx, y + scorePosY + 2, scoreWidth, scoreHeight, 4, 4)
 
-        local ty = y + scorePosY + 5
+        -- Three rows laid out by their letters: label, target, reward. The target is the number
+        -- the player is here to read, so it gets the PRICE face (11 px capitals, up from SMALL's
+        -- 7); the box keeps its height.
+        local _, label_ink = Fonts.ink(self, text_font)
+        local req_font = Fonts.fit(self, self.FONTS.PIXEL.PRICE, NumberFormat.format(math.floor(tonumber(target) or 0)), scoreWidth - 4)
+        local _, req_ink = Fonts.ink(self, req_font)
+        local row_gap = 4
+        local rows_h = label_ink + row_gap + req_ink + row_gap + label_ink
+        local ty = y + scorePosY + 2 + math.floor((scoreHeight - rows_h) / 2)
         love.graphics.setColor(self.C.WHITE)
         TopUI.center_text_juiced(I18N.text("blind.score_at_least", nil, "Score at Least"),
-            tx + 2, ty, scoreWidth - 4, text_font:getHeight())
+            tx + 2, ty, scoreWidth - 4, label_ink)
         love.graphics.setColor(self.C.RED)
         local req = NumberFormat.format(math.floor(tonumber(target) or 0))
-        love.graphics.setFont(Fonts.fit(self, text_font, req, scoreWidth - 4))
-        TopUI.center_text_juiced(req, tx + 2, ty + line_step, scoreWidth - 4, text_font:getHeight())
+        love.graphics.setFont(req_font)
+        TopUI.center_text_juiced(req, tx + 2, ty + label_ink + row_gap, scoreWidth - 4, req_ink)
         love.graphics.setFont(text_font)
 
         local reward_label = I18N.text("blind.reward", nil, "Reward: ")
         local money = TopUI:cached_reward_pips(reward)
         local total_w = text_font:getWidth(reward_label .. money)
         local scale = math.min(1, (scoreWidth - 4) / math.max(1, total_w))
+        local reward_row_y = ty + label_ink + row_gap + req_ink + row_gap
         love.graphics.push()
-        love.graphics.translate(math.floor(tx + (scoreWidth - total_w * scale) / 2 + 0.5), ty + 2 * line_step)
+        love.graphics.translate(math.floor(tx + (scoreWidth - total_w * scale) / 2 + 0.5),
+            Fonts.centre_y(self, text_font, reward_row_y, label_ink))
         love.graphics.scale(scale, scale)
         love.graphics.setColor(self.C.WHITE)
         love.graphics.print(reward_label, 0, 0)
@@ -8197,13 +8200,17 @@ function Game:draw_bottom_blind_select()
             love.graphics.setColor(self.C.WHITE)
             local or_text = I18N.t("common.or")
             local w = love.graphics.getFont():getWidth(or_text)
-            love.graphics.print(or_text, tx + math.floor(blindWidth/2) - math.floor(w/2) + 4, ty + scoreHeight - 1)
+            -- Centred on the score box above it and in the gap down to the skip box.
+            local score_bottom = y + scorePosY + 2 + scoreHeight
+            local or_gap = text_font:getHeight() + 5
+            love.graphics.print(or_text, tx + math.floor((scoreWidth - w) / 2 + 0.5),
+                Fonts.centre_y(self, text_font, score_bottom, or_gap))
 
             -- Skip Box
             local p = 4
             local sx = x + p
             local sw = card_w - 2 * p
-            local sy = ty + scoreHeight + text_font:getHeight() + 2
+            local sy = score_bottom + or_gap
             local sh = 24 + 2 * p
             love.graphics.setColor(self.C.BLOCK.BACK)
             love.graphics.rectangle("fill", sx, sy, sw, sh, 4, 4)
@@ -8245,18 +8252,9 @@ function Game:draw_bottom_blind_select()
             self._blind_skip_tap_rects = self._blind_skip_tap_rects or {}
             self._blind_skip_tap_rects[i] = { x = buttonX, y = buttonY, w = buttonW, h = buttonH, blind_index = i }
             love.graphics.setColor(self.C.WHITE)
-            local buttonText = I18N.text("blind.skip_short", nil, "Skip")
-            local prompt_w = 0
-            if can_skip and self:gamepad_focus_visible() then
-                local button = self:get_button_for_role("cancel")
-                if self:draw_button_pip(button, buttonX + 3, buttonY + math.floor((buttonH - 13) / 2), 12) then
-                    prompt_w = 17
-                end
-            end
-            local label_w = buttonW - prompt_w - 4
-            local button_font = Fonts.fit(self, self.FONTS.PIXEL.SMALL, buttonText, label_w)
-            love.graphics.setFont(button_font)
-            love.graphics.print(buttonText, buttonX + prompt_w + 2 + math.floor((label_w - button_font:getWidth(buttonText))/2), buttonY + math.floor((buttonH - button_font:getHeight())/2))
+            TopUI.button_caption(I18N.text("blind.skip_short", nil, "Skip"),
+                can_skip and self:get_button_for_role("cancel") or nil,
+                buttonX, buttonY, buttonW, buttonH, self.FONTS.PIXEL.LABEL)
             love.graphics.setFont(self.FONTS.PIXEL.SMALL)
 
             love.graphics.pop()

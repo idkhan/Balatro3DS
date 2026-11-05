@@ -3,6 +3,7 @@
 --- Tarot/Spectral: hand drawn at the top, cards below; select hand first, then tap tarot, then Use.
 
 local PixelGrid = require("pixel_grid")
+local Fonts = require("fonts")
 local ShopUI = require("shop_ui")
 local Particles = require("particles")
 
@@ -362,19 +363,29 @@ function BoosterPackUI.draw_bottom(game)
     
     love.graphics.setColor(game.C.RED)
     PixelGrid.outline(math.floor(width/2) - math.floor(info_w/2), height - info_h, info_w, info_h + 10, 2)
-    love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
+    -- Title and picks stacked by their letters and centred in the panel's visible part (it
+    -- runs off the bottom of the screen); the picks count was SMALL, 7 px capitals.
     love.graphics.setColor(game.C.WHITE)
     local title = sess.title or I18N.text("booster.pack", nil, "Pack")
     local pr = tonumber(sess.picks_remaining) or 0
-    love.graphics.printf(title, math.floor(width/2) - math.floor(info_w/2), info_y + 6, info_w, "center")
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    love.graphics.printf(I18N.text("booster.picks_left_prefix", nil, "Picks left: ") .. tostring(pr), math.floor(width/2) - math.floor(info_w/2), info_y + 32, info_w, "center")
+    local picks = I18N.text("booster.picks_left_prefix", nil, "Picks left: ") .. tostring(pr)
+    local info_x = math.floor(width/2) - math.floor(info_w/2)
+    local title_font = Fonts.fit(game, game.FONTS.PIXEL.MEDIUM, title, info_w - 8)
+    local picks_font = Fonts.fit(game, game.FONTS.PIXEL.LABEL, picks, info_w - 8)
+    local title_top, title_ink = Fonts.ink(game, title_font)
+    local picks_top, picks_ink = Fonts.ink(game, picks_font)
+    local row_gap = 6
+    local rows_y = height - info_h + math.floor((info_h - (title_ink + row_gap + picks_ink)) / 2 + 0.5)
+    love.graphics.setFont(title_font)
+    love.graphics.printf(title, info_x, rows_y - title_top, info_w, "center")
+    love.graphics.setFont(picks_font)
+    love.graphics.printf(picks, info_x, rows_y + title_ink + row_gap - picks_top, info_w, "center")
 
     local skip_w = 60
     local skip_h = info_h - 4
     local skip_x = width - padding - skip_w
     local skip_y = info_y + 8
-    local skip_rect = { x = skip_x, y = skip_y, w = skip_w, h = skip_h, color = game.C.RED, text = I18N.text("common.skip", nil, "Skip"), lines = 1 }
+    local skip_rect = { x = skip_x, y = skip_y, w = skip_w, h = skip_h, color = game.C.RED, text = I18N.text("common.skip", nil, "Skip") }
     BoosterPackUI._draw_small_button(game, skip_rect)
     game._booster_skip_rect = { x = skip_x, y = skip_y, w = skip_w, h = skip_h }
 
@@ -393,11 +404,7 @@ function BoosterPackUI._draw_small_button(game, param)
     if _G.draw_rect_with_shadow then
         local ix, iy, iw, ih = draw_button_with_shadow(param.x, param.y, param.w, param.h, 4, 2, param.color, game.C.BLOCK.SHADOW, 2)
         love.graphics.setColor(game.C.WHITE)
-        love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
-        local textHeight = love.graphics.getFont():getHeight()
-        local lines = param.lines or 1
-        local textY = iy + math.floor(ih / 2) - math.floor((textHeight / 2) * lines)
-        love.graphics.printf(param.text, ix, textY, iw, "center")
+        TopUI.button_caption(param.text, nil, ix, iy, iw, ih, game.FONTS.PIXEL.MEDIUM)
     else
         love.graphics.setColor(param.color)
         love.graphics.rectangle("fill", param.x, param.y, param.w, param.h, 4, 4)
