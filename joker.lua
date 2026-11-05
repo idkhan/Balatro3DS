@@ -1046,7 +1046,7 @@ function Joker:draw_tooltip(draw_x, draw_y)
         title = I18N.t("term.not_discovered")
     end
     local lines = self:get_tooltip_body_lines()
-    local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local font = G.FONTS.PIXEL.TOOLTIP or love.graphics.getFont()
     local resolved_lines = {}
     for _, line in ipairs(lines) do
         table.insert(resolved_lines, self:resolve_tooltip_line_segments(line))

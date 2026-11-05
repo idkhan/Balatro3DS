@@ -513,7 +513,7 @@ function Consumable:draw_tooltip(draw_x, draw_y)
     if G and G.is_discovered and def.id and not G:is_discovered(def.id) then
         title = I18N.t("term.not_discovered")
     end
-    local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local font = G.FONTS.PIXEL.TOOLTIP or love.graphics.getFont()
 
     local resolved = {}
     for _, line in ipairs(lines) do

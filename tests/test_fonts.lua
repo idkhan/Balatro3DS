@@ -4,7 +4,7 @@ local bootstrap = require("tests.bootstrap")
 local suite = T.suite("fonts")
 
 local ROLES = {
-    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE",
+    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE", "TOOLTIP",
 }
 
 local function fresh()
@@ -34,7 +34,18 @@ suite.test("the shared profile is the historical ladder", function()
     T.assert_deep_eq(Fonts.PROFILES.shared, {
         MICRO = 8, TINY = 9, SMALL = 11, PRICE = 15,
         BUTTON = 18, MEDIUM = 22, BUTTON_PRICE = 26, LARGE = 33,
+        TOOLTIP = 11,
     })
+end)
+
+suite.test("tooltip text has 11 px capitals on hardware and costs no extra glyph sheet", function()
+    bootstrap.load()
+    local Fonts = fresh()
+    -- Players could not read tooltips at SMALL's 7 px capitals on an Old 3DS.
+    local ink = Fonts.INK[Fonts.PROFILES.native.TOOLTIP]
+    T.assert_true(ink and ink[2] >= 11, "TOOLTIP capitals are at least 11 px tall")
+    local pixel = Fonts.build("native")
+    T.assert_eq(pixel.TOOLTIP, pixel.BUTTON, "TOOLTIP reuses an already-loaded face")
 end)
 
 suite.test("every native size is a cell height mkbcfnt can produce", function()

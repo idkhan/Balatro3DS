@@ -6341,7 +6341,7 @@ function Game:_draw_shop_voucher_tooltip()
     if type(offer) ~= "table" or type(rect) ~= "table" then return end
     local title = tostring(I18N.content_name("voucher", offer.id, offer.name or "Voucher"))
     local desc = tostring(I18N.content_text("voucher", offer.id, offer.description or ""))
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
@@ -6351,7 +6351,7 @@ function Game:_draw_shop_booster_tooltip(offer, rect)
     local title = tostring(offer.pack and BoosterPackUI.pack_name(offer.pack, offer.size)
         or offer.name or I18N.text("booster.title", nil, "Booster Pack"))
     local desc = BoosterPackUI.shop_tooltip_description(offer)
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
@@ -8329,7 +8329,7 @@ function Game:_draw_blind_info_tooltip()
     if not rect then return end
     local title = self:get_blind_display_name(blind_index)
     local desc = self:get_blind_description(blind_index)
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
@@ -8344,7 +8344,7 @@ function Game:_draw_skip_tag_tooltip()
     if not info or not rect then return end
     local title = tostring(info.name or I18N.text("term.tag", nil, "Tag"))
     local desc = tostring(info.description or "")
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end

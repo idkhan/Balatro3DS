@@ -2,6 +2,7 @@
 Card = Moveable:extend()
 
 local PixelGrid = require("pixel_grid")
+local TooltipDraw = require("tooltip_draw")
 
 --- Stone cards retain their former face only as dormant restoration data. Their rank and
 --- suit must be absent from gameplay data, matching reference/Balatro/card.lua:957-981.
@@ -455,13 +456,13 @@ function Card:draw_layer(atlas, quad, cell_w, cell_h, ox, oy)
     )
 end
 
-local TOOLTIP_PAD_X = 8
-local TOOLTIP_HEADER_PAD_Y = 3
-local TOOLTIP_BODY_PAD_Y = 10
-local TOOLTIP_SPACING = 1
-local TOOLTIP_SECTION_GAP = 2
-local TOOLTIP_OUTER_PAD_X = 3
-local TOOLTIP_OUTER_PAD_Y = 3
+local TOOLTIP_PAD_X = TooltipDraw.LAYOUT.PAD_X
+local TOOLTIP_HEADER_PAD_Y = TooltipDraw.LAYOUT.HEADER_PAD_Y
+local TOOLTIP_BODY_PAD_Y = TooltipDraw.LAYOUT.BODY_PAD_Y
+local TOOLTIP_SPACING = TooltipDraw.LAYOUT.SPACING
+local TOOLTIP_SECTION_GAP = TooltipDraw.LAYOUT.SECTION_GAP
+local TOOLTIP_OUTER_PAD_X = TooltipDraw.LAYOUT.OUTER_PAD_X
+local TOOLTIP_OUTER_PAD_Y = TooltipDraw.LAYOUT.OUTER_PAD_Y
 local CARD_SHADOW_ALPHA = 0.5
 local CARD_SHADOW_DRAG_ALPHA = 0.45
 local CARD_SHADOW_Y = 1.5
@@ -877,7 +878,7 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
         if run.measure > body_max_w then body_max_w = run.measure end
     end
 
-    local line_h = font:getHeight()
+    local line_h, ink_off = TooltipDraw.line_box(font)
     local count = #runs
     local header_h_total = line_h + (TOOLTIP_HEADER_PAD_Y * 2)
     local body_h_total = (count * line_h) + ((count - 1) * TOOLTIP_SPACING) + (TOOLTIP_BODY_PAD_Y * 2)
@@ -903,6 +904,7 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
         header = header,
         runs = runs,
         line_h = line_h,
+        ink_off = ink_off,
         header_h_total = header_h_total,
         body_h_total = body_h_total,
         inner_w = inner_w,
@@ -934,7 +936,7 @@ function Card:draw_tooltip(draw_x, draw_y)
     local edition = card_edition_for_display(self)
     local seal = self.seal
 
-    local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local font = G.FONTS.PIXEL.TOOLTIP or love.graphics.getFont()
     local generation = tooltip_font_epoch(font)
 
     -- Nine scalar comparisons against a cached plan, all of them values that were being
@@ -999,13 +1001,14 @@ function Card:draw_tooltip(draw_x, draw_y)
     draw_rect_with_shadow(body_x + inner_pad, body_y + inner_pad -1, inner_w - (inner_pad * 2), inner_body_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
  
     -- Header: rank + suit, or anonymous Stone title
-    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5)
+    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5) + plan.ink_off
     draw_run(plan.header, font, header_x, inner_w, header_text_y)
 
-    local text_y = body_y + TOOLTIP_BODY_PAD_Y
+    -- Measured from the body's face, which sits a pixel above its panel.
+    local text_y = body_y + TOOLTIP_BODY_PAD_Y - 1
     local runs = plan.runs
     for i = 1, #runs do
-        draw_run(runs[i], font, body_x, inner_w, math.floor(text_y + 0.5))
+        draw_run(runs[i], font, body_x, inner_w, math.floor(text_y + 0.5) + plan.ink_off)
         text_y = text_y + line_h + TOOLTIP_SPACING
     end
 
