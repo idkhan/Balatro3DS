@@ -301,6 +301,12 @@ local function screen_width()
     return w
 end
 
+--- Widest body line a tooltip box can hold and still be placed on screen: boxes are clamped into
+--- [margin, sw - box_w - margin] with a 2 px margin, so anything past this is drawn off the edge.
+function M.body_limit()
+    return screen_width() - (2 * 2) - (TOOLTIP_OUTER_PAD_X * 2) - (TOOLTIP_PAD_X * 2)
+end
+
 --- Break one line's colour runs across as many lines as it takes to fit `limit`.
 ---
 --- Catalog descriptions arrive pre-broken for a measure that assumed the smallest font, so nothing
@@ -321,7 +327,7 @@ local function remember_wrap(segments, font, limit, lines)
     return lines
 end
 
-local function wrap_segments(font, segments, limit)
+function M.wrap_segments(font, segments, limit)
     -- A badge is a fixed-size pill, not prose; breaking it would just make a broken pill.
     if #segments == 1 and segments[1].rarity_badge then return { segments } end
 
@@ -403,13 +409,11 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
     love.graphics.setFont(font)
 
-    -- Widest body line the box can hold and still be placed on screen: the box is clamped into
-    -- [margin, sw - box_w - margin] below, so anything past this is drawn off the edge.
     local sw = screen_width()
-    local body_limit = sw - (2 * 2) - (TOOLTIP_OUTER_PAD_X * 2) - (TOOLTIP_PAD_X * 2)
+    local body_limit = M.body_limit()
     local wrapped = {}
     for _, segments in ipairs(resolved_lines) do
-        for _, line in ipairs(wrap_segments(font, segments, body_limit)) do
+        for _, line in ipairs(M.wrap_segments(font, segments, body_limit)) do
             wrapped[#wrapped + 1] = line
         end
     end

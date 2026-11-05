@@ -549,7 +549,9 @@ function TopUI:draw(screen)
     -- already are. The reference juices the whole hand-text area on every `update_hand_text`
     -- (`common_events.lua:553`), and this was the one readout on the panel that never moved -
     -- so building up to a Full House looked exactly like building up to a High Card.
-    local name_font = love.graphics.getFont()
+    -- The face the name is actually drawn in: a long name (most of them, in Chinese) steps down.
+    local name_font = Fonts.fit_line(G, love.graphics.getFont(), tostring(handSelected or ""),
+        iw -20, math.floor(ih/3))
     local _, posY = TopUI.center_text_juiced(handSelected, ix - sysDepth * textHeight, iy -2,
         iw -20, math.floor(ih/3), self.hand_juice)
     -- The level sits on the hand name's baseline. The old fixed drop put it 4 px above.

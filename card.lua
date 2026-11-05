@@ -871,11 +871,28 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
     add_named_section(SEAL_NAMES[seal] and I18N.content_name("seal", seal, SEAL_NAMES[seal]),
         seal_colours[seal], translated_lines("seal", seal, seal_tooltip_lines(seal)))
 
+    -- A line wider than the screen allows (the blue seal's, at TOOLTIP size) breaks onto more
+    -- lines; each piece keeps a section name's colour, and plain lines are re-badged per piece.
+    local limit = TooltipDraw.body_limit()
     local runs, body_max_w = {}, 0
     for i = 1, #lines do
-        local run = build_line_run(font, lines[i])
-        runs[i] = run
-        if run.measure > body_max_w then body_max_w = run.measure end
+        local line = lines[i]
+        local text = type(line) == "table" and line.text or line
+        local pieces = { line }
+        if font:getWidth(text) > limit then
+            pieces = {}
+            for _, segs in ipairs(TooltipDraw.wrap_segments(font, { { text = text } }, limit)) do
+                local parts = {}
+                for _, seg in ipairs(segs) do parts[#parts + 1] = seg.text end
+                local piece = table.concat(parts)
+                pieces[#pieces + 1] = type(line) == "table" and { text = piece, color = line.color } or piece
+            end
+        end
+        for _, piece in ipairs(pieces) do
+            local run = build_line_run(font, piece)
+            runs[#runs + 1] = run
+            if run.measure > body_max_w then body_max_w = run.measure end
+        end
     end
 
     local line_h, ink_off = TooltipDraw.line_box(font)
@@ -965,14 +982,21 @@ function Card:draw_tooltip(draw_x, draw_y)
     local tx = draw_x + (card_w - box_w) * 0.5
     local ty = draw_y - box_h - 3
     local margin = 2
-    local sw = 320
+    local sw, sh = 320, 240
     if love.graphics.getWidth then
         sw = love.graphics.getWidth("bottom")
         if not sw or sw <= 0 then sw = love.graphics.getWidth() end
         if not sw or sw <= 0 then sw = 320 end
     end
+    if love.graphics.getHeight then
+        sh = love.graphics.getHeight("bottom")
+        if not sh or sh <= 0 then sh = love.graphics.getHeight() end
+        if not sh or sh <= 0 then sh = 240 end
+    end
     tx = math.max(margin, math.min(tx, sw - box_w - margin))
     if ty < 2 then ty = draw_y + 2 end
+    -- Flipped below a hand card, a tall (wrapped) box can run past the bottom edge.
+    ty = math.max(margin, math.min(ty, sh - box_h - margin))
     tx = math.floor(tx + 0.5)
     ty = math.floor(ty + 0.5)
 

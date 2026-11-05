@@ -26,6 +26,57 @@ suite.test("blind skip and shop exit draw the live binding",function()
     T.assert_eq(parts[#parts].text,"长按")
     I18N.set_language("en")
 end)
+suite.test("shop button captions stay inside their buttons in Chinese",function()
+    local g=bootstrap.new_game(734);G=g;I18N.set_language("zh_CN")
+    -- The hardware faces: Chinese letters fill their cell, so the exit's three lines overflowed.
+    g.FONTS.PIXEL=Fonts.build("native","zh_CN");g._shop_ui_cache=nil
+    local buttons,lines,inside={},{},false
+    local real_button,real_print,real_draw=draw_button_with_shadow,love.graphics.print,ShopUI.draw_shop_button
+    ShopUI.draw_shop_button=function(...) inside=true;real_draw(...);inside=false end
+    draw_button_with_shadow=function(...)
+        local ix,iy,iw,ih=real_button(...);buttons[#buttons+1]={y=iy,h=ih};return ix,iy,iw,ih
+    end
+    love.graphics.print=function(text,x,y,...)
+        local top,ink=Fonts.ink(g,love.graphics.getFont())
+        if inside then lines[#lines+1]={text=tostring(text),top=y+top,bottom=y+top+ink,button=#buttons} end
+        return real_print(text,x,y,...)
+    end
+    g.STATE=g.STATES.SHOP;g:init_shop_gamepad_nav()
+    local ok,err=pcall(function() g:draw_bottom_shop() end)
+    draw_button_with_shadow,love.graphics.print,ShopUI.draw_shop_button=real_button,real_print,real_draw
+    I18N.set_language("en")
+    if not ok then error(err,0) end
+    local checked=0
+    for _,line in ipairs(lines) do
+        local b=buttons[line.button]
+        checked=checked+1
+            T.assert_true(line.top>=b.y and line.bottom<=b.y+b.h,
+                line.text.." spans rows "..line.top..".."..(line.bottom-1).." in a button of rows "..b.y..".."..(b.y+b.h-1))
+    end
+    T.assert_eq(checked,5,"three exit lines and two reroll lines")
+end)
+suite.test("the hand level sits on the hand name's baseline in Chinese",function()
+    local g=bootstrap.new_game(735);G=g;g.STATE=g.STATES.SELECTING_HAND;I18N.set_language("zh_CN")
+    -- The hardware faces: the Chinese name steps down to fit its row, so it is not the face it was set in.
+    g.FONTS.PIXEL=Fonts.build("native","zh_CN")
+    for i,h in ipairs(g.handlist) do if h=="Pair" then g.selectedHand=i end end
+    local name,baseline=I18N.hand_name("Pair"),{}
+    local real_print,real_printf=love.graphics.print,love.graphics.printf
+    local function note(text,y)
+        local top,ink=Fonts.ink(g,love.graphics.getFont())
+        local t=tostring(text)
+        if t==name then baseline.name=y+top+ink elseif t:find("^lvl") then baseline.level=y+top+ink end
+    end
+    love.graphics.print=function(text,x,y,...) note(text,y);return real_print(text,x,y,...) end
+    love.graphics.printf=function(text,x,y,...) note(text,y);return real_printf(text,x,y,...) end
+    local top=TopUI()
+    local ok,err=pcall(top.draw,top,"top")
+    love.graphics.print,love.graphics.printf=real_print,real_printf
+    I18N.set_language("en")
+    if not ok then error(err,0) end
+    T.assert_not_nil(baseline.name,"the hand name is drawn")
+    T.assert_eq(baseline.level,baseline.name,"the level's letters end on the name's bottom row")
+end)
 suite.test("Ectoplasm reports the next use's real hand-size penalty",function()
     local g=bootstrap.new_game(732);G=g;I18N.set_language("zh_CN")
     local card={def=CONSUMABLE_DEFS.spectral_ectoplasm}

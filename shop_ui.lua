@@ -448,15 +448,31 @@ function ShopUI.draw_shop_button(game, param)
         -- Lines are stacked by their letters (Fonts.ink), not by a fixed share of the cell, and
         -- the pip and the text block are centred together; pinning the pip to the left edge put
         -- the pair off-centre by half the pip's width.
-        local total, block_w = 0, 0
-        for i, part in ipairs(parts) do
-            local font = Fonts.fit(game, part.font or game.FONTS.PIXEL.SMALL, part.text, iw - 2 - prompt_w)
-            local ink_top, ink_h = Fonts.ink(game, font)
-            part.resolved_font, part.ink_top, part.ink_h = font, ink_top, ink_h
-            block_w = math.max(block_w, font:getWidth(part.text))
-            total = total + ink_h
-            if i > 1 then total = total + LINE_GAP end
+        for _, part in ipairs(parts) do
+            part.resolved_font = Fonts.fit(game, part.font or game.FONTS.PIXEL.SMALL, part.text, iw - 2 - prompt_w)
         end
+        -- Chinese letters fill their cell, so a stack can be taller than the button: the tallest
+        -- line that can still shrink steps down until the block fits, and if every line is at
+        -- the smallest size already the gaps between them go.
+        local total, block_w, gap
+        while true do
+            local tallest
+            total, block_w = 0, 0
+            for _, part in ipairs(parts) do
+                local font = part.resolved_font
+                part.ink_top, part.ink_h = Fonts.ink(game, font)
+                block_w = math.max(block_w, font:getWidth(part.text))
+                total = total + part.ink_h
+                if Fonts.next_smaller(game, font) and (not tallest or part.ink_h > tallest.ink_h) then
+                    tallest = part
+                end
+            end
+            gap = (total + LINE_GAP * (#parts - 1) <= ih - 2 or not tallest) and LINE_GAP or nil
+            if gap then break end
+            tallest.resolved_font = Fonts.next_smaller(game, tallest.resolved_font)
+        end
+        if total + gap * (#parts - 1) > ih - 2 then gap = 0 end
+        total = total + gap * (#parts - 1)
 
         local left = math.floor(ix + (iw - prompt_w - block_w) / 2 + 0.5)
         if show_pip then
@@ -473,7 +489,7 @@ function ShopUI.draw_shop_button(game, param)
             love.graphics.setFont(font)
             local line_x = left + prompt_w + math.floor((block_w - font:getWidth(part.text)) / 2 + 0.5)
             love.graphics.print(part.text, line_x, ink_y - part.ink_top)
-            ink_y = ink_y + part.ink_h + LINE_GAP
+            ink_y = ink_y + part.ink_h + gap
         end
     else
         love.graphics.setColor(color)
