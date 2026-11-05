@@ -8041,12 +8041,15 @@ function Game:draw_bottom_blind_select()
         end
         local card_h = 232 - y
 
+        -- Radius 6, not 4: the 3 px frame sits inside the panel, so its inner corner keeps a
+        -- radius of 3. At 4 it was 1 and read as square where the frame matches the backdrop
+        -- (Small Blind's blue).
         love.graphics.setColor(card_color)
-        love.graphics.rectangle("fill", x, y, card_w, card_h, 4, 4)
+        love.graphics.rectangle("fill", x, y, card_w, card_h, 6, 6)
         local blind_color = self:get_blind_color(i) or self.C.BLOCK.BACK
         love.graphics.setColor(blind_color)
         love.graphics.setLineWidth(3)
-        PixelGrid.outline(x, y, card_w, card_h, 4)
+        PixelGrid.outline(x, y, card_w, card_h, 6)
 
 
         local padding = 16
