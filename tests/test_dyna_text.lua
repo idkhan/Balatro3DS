@@ -113,7 +113,8 @@ suite.test("the cached decomposition draws the same glyphs in the same places", 
             T.assert_eq(first[i].glyph, cold[i].glyph, "glyph " .. i)
             T.assert_near(first[i].x, cold[i].x, 1e-9, "glyph " .. i .. " x")
             T.assert_near(first[i].y, cold[i].y, 1e-9, "glyph " .. i .. " y")
-            T.assert_near(first[i].r, cold[i].r, 1e-9, "glyph " .. i .. " rotation")
+            -- A glyph whose tilt is under half a pixel is printed square, with no rotation at all.
+            T.assert_near(first[i].r or 0, cold[i].r or 0, 1e-9, "glyph " .. i .. " rotation")
         end
     end)
 end)

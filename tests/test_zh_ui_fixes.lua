@@ -34,18 +34,22 @@ suite.test("Ectoplasm reports the next use's real hand-size penalty",function()
 end)
 suite.test("HUD ratios use one line and scale inside their panel",function()
     local g=bootstrap.new_game(733);G=g
-    local old_print,old_printf,old_scale=love.graphics.print,love.graphics.printf,love.graphics.scale
-    local printed,wrapped,scale=0,0,nil
-    love.graphics.print=function(t) if t=="1/8" then printed=printed+1 end end
+    local old_print,old_printf=love.graphics.print,love.graphics.printf
+    local printed,wrapped,drawn=0,0,nil
+    -- The readout may step down the font ladder and pops through print's own scale argument, so
+    -- record the face and scale the text is actually drawn with.
+    love.graphics.print=function(t,_,_,_,sx)
+        if t=="1/8" then printed=printed+1;drawn={font=love.graphics.getFont(),scale=sx or 1} end
+    end
     love.graphics.printf=function() wrapped=wrapped+1 end
-    love.graphics.scale=function(x) scale=x end
     love.graphics.setFont(g.FONTS.PIXEL.MEDIUM)
-    local font=love.graphics.getFont()
     TopUI.center_text_juiced("1/8",0,0,20,14,1.4)
-    love.graphics.print,love.graphics.printf,love.graphics.scale=old_print,old_printf,old_scale
+    love.graphics.print,love.graphics.printf=old_print,old_printf
     T.assert_eq(printed,1);T.assert_eq(wrapped,0)
-    T.assert_true(scale*font:getWidth("1/8")<=20)
-    T.assert_true(scale*font:getHeight()<=14)
+    T.assert_true(drawn.scale*drawn.font:getWidth("1/8")<=20)
+    -- Inside the panel means the letters; the empty rows of the cell may overhang.
+    local _,ink_h=Fonts.ink(g,drawn.font)
+    T.assert_true(drawn.scale*ink_h<=14)
 end)
 suite.test("Chinese toast keeps upstream geometry with the maintained font and text",function()
     local g=bootstrap.new_game(734);G=g

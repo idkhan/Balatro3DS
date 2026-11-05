@@ -334,4 +334,53 @@ suite.test("next_smaller is nil for the smallest face and for strangers", functi
     T.assert_nil(Fonts.next_smaller(game, nil))
 end)
 
+--- A three-step ladder of stub faces. A stub face is `h` px tall and `floor(h / 2)` px a letter.
+local function readout_ladder()
+    bootstrap.load()
+    local Fonts = fresh()
+    local small, button, medium =
+        love.graphics.newFont(13), love.graphics.newFont(18), love.graphics.newFont(22)
+    local game = { FONTS = { PIXEL = {
+        SMALL = small, SMALL_HEIGHT = 13,
+        BUTTON = button, BUTTON_HEIGHT = 18,
+        MEDIUM = medium, MEDIUM_HEIGHT = 22,
+    } } }
+    return Fonts, game, small, button, medium
+end
+
+suite.test("every cell height has measured letters that sit inside the cell", function()
+    local Fonts = fresh()
+    for _, h in ipairs(Fonts.CELL_HEIGHTS) do
+        local ink = Fonts.INK[h]
+        T.assert_not_nil(ink, string.format("no ink measured for the %d px sheet", h))
+        T.assert_true(ink[1] >= 0 and ink[2] > 0 and ink[1] + ink[2] <= h,
+            string.format("%d px sheet: letters at %d+%d leave the cell", h, ink[1], ink[2]))
+    end
+end)
+
+suite.test("a face with no measured letters reports its whole cell", function()
+    local Fonts, game = readout_ladder()
+    local stranger = love.graphics.newFont(17)
+    T.assert_deep_eq({ Fonts.ink(game, stranger) }, { 0, 17 })
+    game.FONTS.PIXEL.LANGUAGE = "zh_CN"
+    T.assert_deep_eq({ Fonts.ink(game, game.FONTS.PIXEL.MEDIUM) }, { 0, 22 },
+        "a language face is not m6x11plus, so its sheet measurements do not apply")
+end)
+
+suite.test("fit_line fits a readout by its letters, not its cell", function()
+    local Fonts, game, _, button, medium = readout_ladder()
+    -- A counter box 12 px tall. The 18 px face's cell overflows it but its 11 px digits fit; the
+    -- old fit-by-cell is what drew the Hands and Discards counters scaled to 64%.
+    T.assert_eq(Fonts.fit_line(game, medium, "4", 40, 12), button)
+    T.assert_eq(Fonts.fit_line(game, medium, "4", 40, 13), medium, "13 px digits fit 13 px")
+end)
+
+suite.test("fit_line steps down for width and stops at the smallest face", function()
+    local Fonts, game, small, button, medium = readout_ladder()
+    -- Five letters: 55 px in the 22 px face, 45 in the 18, 30 in the 13.
+    T.assert_eq(Fonts.fit_line(game, medium, "12345", 50, 40), button)
+    T.assert_eq(Fonts.fit_line(game, medium, "12345", 10, 40), small,
+        "nothing fits, so the smallest face rather than none")
+end)
+
 return suite
