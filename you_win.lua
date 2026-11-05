@@ -1,4 +1,5 @@
 local YouWinUI = {}
+local PixelGrid = require("pixel_grid")
 local NumberFormat = require("number_format")
 local TicketStrip = require("ticket_strip")
 
@@ -139,7 +140,7 @@ function YouWinUI.drawTop(game)
     love.graphics.setColor(C.BLOCK.BACK)
     love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
     love.graphics.setColor(C.BOOSTER)
-    love.graphics.rectangle("line", panel_x, panel_y, panel_w, panel_h, 4, 4)
+    PixelGrid.outline(panel_x, panel_y, panel_w, panel_h, 4)
 
     local new_count = #(game._newly_unlocked_jokers or {}) + #(game._newly_unlocked_vouchers or {})
     TicketStrip.draw(game, {
@@ -177,7 +178,7 @@ function YouWinUI.drawBottom(game)
     love.graphics.setColor(C.BLOCK.BACK)
     love.graphics.rectangle("fill", panel_x, panel_y, panel_w, panel_h, 4, 4)
     love.graphics.setColor(C.BOOSTER)
-    love.graphics.rectangle("line", panel_x, panel_y, panel_w, panel_h, 4, 4)
+    PixelGrid.outline(panel_x, panel_y, panel_w, panel_h, 4)
 
     local padding = 4
     local font_m = G.FONTS.PIXEL.MEDIUM

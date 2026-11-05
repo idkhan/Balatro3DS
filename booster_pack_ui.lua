@@ -2,6 +2,7 @@
 --- Cards are shown like shop items: tap to select (tooltip), then Pick/Use button next to selected.
 --- Tarot/Spectral: hand drawn at the top, cards below; select hand first, then tap tarot, then Use.
 
+local PixelGrid = require("pixel_grid")
 local ShopUI = require("shop_ui")
 local Particles = require("particles")
 
@@ -360,7 +361,7 @@ function BoosterPackUI.draw_bottom(game)
     love.graphics.rectangle("fill", math.floor(width/2) - math.floor(info_w/2), height - info_h, info_w, info_h, 4, 4)
     
     love.graphics.setColor(game.C.RED)
-    love.graphics.rectangle("line", math.floor(width/2) - math.floor(info_w/2), height - info_h, info_w, info_h + 10, 2, 2)
+    PixelGrid.outline(math.floor(width/2) - math.floor(info_w/2), height - info_h, info_w, info_h + 10, 2)
     love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
     love.graphics.setColor(game.C.WHITE)
     local title = sess.title or I18N.text("booster.pack", nil, "Pack")

@@ -1,5 +1,6 @@
 --- Bottom-screen shop panel, offer overlays, and shop-related touch targets.
 
+local PixelGrid = require("pixel_grid")
 local Fonts = require("fonts")
 local DynaText = require("dyna_text")
 
@@ -424,7 +425,7 @@ function ShopUI.draw_shop_button(game, param)
             local lw = love.graphics.getLineWidth()
             love.graphics.setLineWidth(2)
             love.graphics.setColor(0, 0, 0, 1)
-            love.graphics.rectangle("line", ix - 1, iy - 1, iw + 2, ih + 2, 4, 4)
+            PixelGrid.outline(ix - 2, iy - 2, iw + 4, ih + 4, 4)
             love.graphics.setLineWidth(lw)
             love.graphics.setColor(game.C.WHITE)
         end
@@ -633,7 +634,7 @@ function ShopUI.draw_bottom_shop(game)
     end
 
     love.graphics.setColor(game.C.RED)
-    love.graphics.rectangle("line", panel_x, panel_y, panel_w, panel_h, 4, 4)
+    PixelGrid.outline(panel_x, panel_y, panel_w, panel_h, 4)
 
     local padding = 4
     local cache = game._shop_ui_cache

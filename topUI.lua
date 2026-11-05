@@ -1,3 +1,4 @@
+local PixelGrid = require("pixel_grid")
 local GameOverUI = require("game_over_ui")
 local DynaText = require("dyna_text")
 local Fonts = require("fonts")
@@ -264,7 +265,7 @@ function TopUI:draw_inventory_tray(x, y, w, h, occupied, depth)
     love.graphics.rectangle("fill", x - (depth or 0), y, w, h, 4, 4)
     love.graphics.setColor(C and C.GREY or { 0.5, 0.5, 0.5, 1 })
     love.graphics.setLineWidth(1)
-    love.graphics.rectangle("line", x - (depth or 0) + 0.5, y + 0.5, w - 1, h - 1, 4, 4)
+    PixelGrid.outline(x - (depth or 0), y, w, h, 4)
 end
 
 function TopUI:draw(screen)
@@ -318,7 +319,7 @@ function TopUI:draw(screen)
     love.graphics.rectangle("fill", 0, panelY, 400, panelHeight)
 
     love.graphics.setColor(G.C.BLIND_COLORS.Big)
-    love.graphics.rectangle("line", 0, panelY, 401, panelHeight)
+    PixelGrid.outline(-1, panelY, 402, panelHeight)
 
     -- Title
     local titlePosX = 2

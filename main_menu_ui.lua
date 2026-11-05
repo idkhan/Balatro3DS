@@ -1,3 +1,4 @@
+local PixelGrid = require("pixel_grid")
 local Fonts = require("fonts")
 
 local MainMenuUI = {}
@@ -739,7 +740,7 @@ function MainMenuUI.draw_main(game)
         local r = focused.rect
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+        PixelGrid.outline(r.x, r.y, r.w, r.h)
     end
 
     if game._language_picker_open then MainMenuUI.draw_language_picker(game) end
@@ -822,7 +823,7 @@ function MainMenuUI.draw_language_picker(game)
             r.y + math.floor((r.h - font:getHeight()) / 2), r.w, "center")
         if i == focus then
             love.graphics.setLineWidth(2)
-            love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+            PixelGrid.outline(r.x, r.y, r.w, r.h)
         end
     end
 end
@@ -1337,7 +1338,7 @@ function MainMenuUI.draw_deck_select(game)
         love.graphics.rectangle("fill", markerX, my, w, markerH, 4, 4)
         if stake_idx == i then
             love.graphics.setColor(C.WHITE)
-            love.graphics.rectangle("line", markerX, my, w, markerH, 2, 2)
+            PixelGrid.outline(markerX, my, w, markerH, 2)
         end
     end
 

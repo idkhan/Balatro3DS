@@ -1,5 +1,6 @@
 --- Main-menu Profile screen: slot tabs, renaming, progress readout, and slot actions.
 local ProfileUI = {}
+local PixelGrid = require("pixel_grid")
 local NumberFormat = require("number_format")
 
 local SCREEN_W, SCREEN_H = 320, 240
@@ -438,8 +439,7 @@ function ProfileUI.draw_bottom(game)
     if focused and focused.rect and not ProfileUI.is_renaming(game) then
         love.graphics.setColor(C.WHITE)
         love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", focused.rect.x + 0.5, focused.rect.y + 0.5,
-            focused.rect.w - 1, focused.rect.h - 1)
+        PixelGrid.outline(focused.rect.x, focused.rect.y, focused.rect.w, focused.rect.h)
     end
 end
 
@@ -489,8 +489,8 @@ function ProfileUI.draw_stats(game)
     draw_button(game._stats_back_rect, I18N.text("common.back", nil, "Back"), C.MULT, C, font_s)
     love.graphics.setColor(C.WHITE)
     love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", game._stats_back_rect.x + 0.5, game._stats_back_rect.y + 0.5,
-        game._stats_back_rect.w - 1, game._stats_back_rect.h - 1)
+    PixelGrid.outline(game._stats_back_rect.x, game._stats_back_rect.y,
+        game._stats_back_rect.w, game._stats_back_rect.h)
 end
 
 function ProfileUI.handle_stats_touch(game, x, y)

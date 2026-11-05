@@ -8046,7 +8046,7 @@ function Game:draw_bottom_blind_select()
         local blind_color = self:get_blind_color(i) or self.C.BLOCK.BACK
         love.graphics.setColor(blind_color)
         love.graphics.setLineWidth(3)
-        love.graphics.rectangle("line", x, y, card_w, card_h, 4, 4)
+        PixelGrid.outline(x, y, card_w, card_h, 4)
 
 
         local padding = 16
@@ -8453,7 +8453,7 @@ function Game:draw_bottom_pause()
         if focused then
             love.graphics.setColor(1, 1, 1, 1)
             love.graphics.setLineWidth(2)
-            love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+            PixelGrid.outline(r.x, r.y, r.w, r.h)
         end
         love.graphics.setColor(self.C.WHITE)
         local btn_font = (r.h and r.h <= 20) and self.FONTS.PIXEL.SMALL or self.FONTS.PIXEL.MEDIUM
@@ -8474,7 +8474,7 @@ function Game:draw_bottom_pause()
         if focused or listening then
             love.graphics.setColor(1, 1, 1, 1)
             love.graphics.setLineWidth(2)
-            love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+            PixelGrid.outline(r.x, r.y, r.w, r.h)
         end
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
         love.graphics.setColor(self.C.WHITE)
@@ -8822,7 +8822,7 @@ function Game:draw_bottom_pause()
                 local r = self._art_carousel_rect
                 love.graphics.setColor(1, 1, 1, 1)
                 love.graphics.setLineWidth(2)
-                love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+                PixelGrid.outline(r.x, r.y, r.w, r.h)
             end
 
             love.graphics.setFont(self.FONTS.PIXEL.SMALL)
@@ -8839,7 +8839,7 @@ function Game:draw_bottom_pause()
             local bx, by = cr.x + 6, cr.y + math.floor((cr.h - box) / 2)
             love.graphics.setColor(self.C.WHITE)
             love.graphics.setLineWidth(1)
-            love.graphics.rectangle("line", bx + 0.5, by + 0.5, box - 1, box - 1)
+            PixelGrid.outline(bx, by, box, box)
             if contrast then
                 love.graphics.setColor(self.C.GREEN)
                 love.graphics.rectangle("fill", bx + 2, by + 2, box - 4, box - 4)
@@ -8888,7 +8888,7 @@ function Game:draw_bottom_pause()
                 if is_pause_focused("speed", i) then
                     love.graphics.setColor(1, 1, 1, 1)
                     love.graphics.setLineWidth(2)
-                    love.graphics.rectangle("line", rx + 0.5, sb_y + 0.5, sb_w - 1, sb_h - 1)
+                    PixelGrid.outline(rx, sb_y, sb_w, sb_h)
                 end
             end
 

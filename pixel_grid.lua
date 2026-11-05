@@ -32,4 +32,26 @@ function PixelGrid.art_scale(s)
     return math.floor(s + 0.5)
 end
 
+--- Stroke a rectangle's outline inside its edges, at the current line width.
+---
+--- LÖVE centres a stroke on the path. Traced on whole-pixel edges, a 1 or 3 px line straddles
+--- them by half a pixel and the rasteriser picks a side per edge: the top panel's border sat one
+--- row above its fill and its bottom border one row inside, and the PICA200 is free to choose
+--- differently again. The old `x + 0.5, w - 1` workaround only fits a 1 px line; at 2 px it put
+--- the stroke back across the edge. Insetting by half the width, whatever it is, keeps every
+--- stroke on whole pixels inside `x, y, w, h`. The radius is the outer corner's, so the border
+--- follows a fill drawn with the same rectangle.
+---@param x number
+---@param y number
+---@param w number
+---@param h number
+---@param radius number|nil
+function PixelGrid.outline(x, y, w, h, radius)
+    local x1, y1 = math.floor(x + w + 0.5), math.floor(y + h + 0.5)
+    x, y = math.floor(x + 0.5), math.floor(y + 0.5)
+    local inset = love.graphics.getLineWidth() / 2
+    local r = math.max(0, (radius or 0) - inset)
+    love.graphics.rectangle("line", x + inset, y + inset, x1 - x - 2 * inset, y1 - y - 2 * inset, r, r)
+end
+
 return PixelGrid
