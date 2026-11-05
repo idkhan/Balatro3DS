@@ -896,12 +896,18 @@ end
 --- right-aligned label grows leftwards instead of sliding. `scale` nil means idle.
 --- @param scale number|nil Pop scale from the baked curve
 function TopUI.printf_juiced(text, x, y, w, align, scale)
+    local font = love.graphics.getFont()
+    if scale then
+        local text_w = math.min(w, font:getWidth(tostring(text)))
+        local reach = (align == "center") and text_w * 0.5 or text_w
+        if PixelGrid.at_rest(scale, math.max(reach, font:getHeight() * 0.5)) then scale = nil end
+    end
     if not scale then
         love.graphics.printf(text, x, y, w, align)
         return
     end
     local anchor_x = (align == "right" and x + w) or (align == "center" and x + w * 0.5) or x
-    local anchor_y = y + love.graphics.getFont():getHeight() * 0.5
+    local anchor_y = y + font:getHeight() * 0.5
     love.graphics.push()
     love.graphics.translate(anchor_x, anchor_y)
     love.graphics.scale(scale, scale)
@@ -931,6 +937,7 @@ function TopUI.center_text_juiced(string, x, y, iw, ih, scale)
     local width = font:getWidth(text)
     local room = math.min(iw / math.max(1, width), ih / math.max(1, ink_h))
     local pop = math.min(scale or 1, room)
+    if PixelGrid.at_rest(pop, math.max(width, ink_h) * 0.5) then pop = 1 end
     local px = math.floor(x + (iw - width * pop) / 2 + 0.5)
     local py = math.floor(y + (ih - ink_h * pop) / 2 - ink_top * pop + 0.5)
     if font ~= caller_font then love.graphics.setFont(font) end

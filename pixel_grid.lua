@@ -32,6 +32,17 @@ function PixelGrid.art_scale(s)
     return math.floor(s + 0.5)
 end
 
+--- Whether a scale about an anchor is too close to 1 to show. If no point within `extent`
+--- pixels of the anchor moves half a pixel, the scaled draw covers the same pixels as a plain
+--- one, except that text is resampled off the grid and blurs. The settling tail of a pop (0.99,
+--- 1.015, ...) is drawn plain instead; the pop itself, which visibly moves edges, is not.
+---@param scale number
+---@param extent number farthest drawn pixel from the scale's anchor
+---@return boolean
+function PixelGrid.at_rest(scale, extent)
+    return math.abs(scale - 1) * extent < 0.5
+end
+
 --- Stroke a rectangle's outline inside its edges, at the current line width.
 ---
 --- LÖVE centres a stroke on the path. Traced on whole-pixel edges, a 1 or 3 px line straddles

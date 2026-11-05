@@ -6,6 +6,7 @@
 --- transform and draw; callers must keep it to short, static headlines.
 local DynaText = {}
 local Utf8 = require("utf8_text")
+local PixelGrid = require("pixel_grid")
 
 local PI = math.pi
 local TWO_PI = PI * 2
@@ -229,7 +230,8 @@ function DynaText.draw(state, value, x, y, width, align, time)
         -- at 240p, only as blur (the glyph sheet is resampled linearly), so the letter goes down
         -- square, on whole pixels, and the float moves it in one-pixel steps.
         local tilt = rotation * glyph_height * 0.5
-        if scale == 1 and tilt < 0.5 and tilt > -0.5 then
+        if tilt < 0.5 and tilt > -0.5
+            and PixelGrid.at_rest(scale, math.max(glyph_width, glyph_height) * 0.5) then
             love.graphics.print(glyph, math.floor(pen_x + 0.5), math.floor(y + offset_y + 0.5))
         else
             love.graphics.print(glyph, pen_x + glyph_width * 0.5, y + glyph_height * 0.5 + offset_y,
