@@ -92,16 +92,20 @@ Fonts.INK = {
 --- on hardware in a box that is read up close and has the screen to itself while it is open. The
 --- 18 px sheet (11 px capitals) is already loaded for BUTTON and PRICE, so it costs no memory. The
 --- shared profile keeps SMALL's historical size so the A/B still compares against what shipped.
+---
+--- LABEL is the same move for the short labels that have room for it: button captions, tab
+--- names, panel headers, hints. They were SMALL too. Anything that does not fit at LABEL stays
+--- SMALL rather than being squeezed.
 Fonts.PROFILES = {
     shared = {
         MICRO = 8, TINY = 9, SMALL = 11, PRICE = 15,
         BUTTON = 18, MEDIUM = 22, BUTTON_PRICE = 26, LARGE = 33,
-        TOOLTIP = 11,
+        TOOLTIP = 11, LABEL = 11,
     },
     native = {
         MICRO = 9, TINY = 9, SMALL = 13, PRICE = 18,
         BUTTON = 18, MEDIUM = 22, BUTTON_PRICE = 27, LARGE = 33,
-        TOOLTIP = 18,
+        TOOLTIP = 18, LABEL = 18,
     },
 }
 
@@ -114,7 +118,7 @@ Fonts.DEFAULT_PROFILE = "native"
 --- set. It is not a size ordering: `next_smaller` sorts by height, because the roles collapse
 --- onto shared faces differently in each profile.
 local ROLES = {
-    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE", "TOOLTIP",
+    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE", "TOOLTIP", "LABEL",
 }
 
 --- Faces for languages m6x11plus cannot draw (`localization.lua`).
@@ -351,6 +355,20 @@ function Fonts.ink(game, font)
         end
     end
     return 0, font:getHeight()
+end
+
+--- The y to print `font` at so its capitals sit centred in a box `h` tall starting at `y`, on a
+--- whole pixel. Centring the cell instead (`y + (h - getHeight()) / 2`) puts small text about a
+--- pixel low, because the cell is mostly air above the letters, and a hand-tuned `y + 3` only
+--- holds for the one face it was tuned against.
+---@param game table
+---@param font love.Font
+---@param y number
+---@param h number
+---@return number
+function Fonts.centre_y(game, font, y, h)
+    local top, ink_h = Fonts.ink(game, font)
+    return math.floor(y + (h - ink_h) / 2 - top + 0.5)
 end
 
 --- Largest face at or below `font` whose single line of `text` fits `max_w` wide with its

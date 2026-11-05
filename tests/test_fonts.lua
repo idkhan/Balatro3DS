@@ -4,7 +4,7 @@ local bootstrap = require("tests.bootstrap")
 local suite = T.suite("fonts")
 
 local ROLES = {
-    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE", "TOOLTIP",
+    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE", "TOOLTIP", "LABEL",
 }
 
 local function fresh()
@@ -34,7 +34,7 @@ suite.test("the shared profile is the historical ladder", function()
     T.assert_deep_eq(Fonts.PROFILES.shared, {
         MICRO = 8, TINY = 9, SMALL = 11, PRICE = 15,
         BUTTON = 18, MEDIUM = 22, BUTTON_PRICE = 26, LARGE = 33,
-        TOOLTIP = 11,
+        TOOLTIP = 11, LABEL = 11,
     })
 end)
 
