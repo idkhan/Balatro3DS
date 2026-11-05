@@ -241,13 +241,12 @@ local LOGO_SCALE = 7 / 8
 --- Idle motion for the title ace, from the single-card branch of `cardarea.lua:466-471`:
 --- `T.r = 0.02*sin(2t)` and `T.y = base + 0.03*sin(0.666t)`, both in game units.
 ---
---- The rotation ports over unchanged. The bob does not: 0.03 units is 2.2 px against the
---- reference's 73 px tile on a 720p window, which is 0.83% of the card's height. The same
---- fraction of an 83 px card here is 0.7 px -- below the threshold where anything reads as
---- moving on a 240p panel. So the amplitude is set in pixels to keep the *visible* travel the
---- reference has, and the periods are kept exactly.
-local ACE_TILT_RAD = 0.02
-local ACE_TILT_HZ = 2.0
+--- The bob is set in pixels: 0.03 units is 2.2 px against the reference's 73 px tile on a 720p
+--- window, which is 0.83% of the card's height. The same fraction of an 83 px card here is
+--- 0.7 px, below the threshold where anything reads as moving on a 240p panel. So the amplitude
+--- keeps the *visible* travel the reference has, the period is kept exactly, and the ace moves
+--- in whole pixels. The rotation does not port: 0.02 rad moves the ace's corners about a pixel,
+--- which at 240p only slides shear seams through the art (`PixelGrid.turn`).
 local ACE_BOB_PX = 1.2
 local ACE_BOB_HZ = 0.666
 
@@ -308,23 +307,21 @@ function MainMenuUI.draw_top(screen, game)
         -- Centred in the strip above the build stamp rather than pinned to the top, so shrinking
         -- the logo takes slack off both ends instead of leaving it all at the bottom.
         local dy = math.floor((222 - draw_h) * 0.5 + 0.5)
-        local depth = titleDepth * sysDepth
+        -- Parallax in whole pixels, so the logo and the ace on it step together as the 3D
+        -- slider moves instead of each picking its own pixel.
+        local lx = PixelGrid.snap(dx - titleDepth * sysDepth)
         love.graphics.setColor(game.C.WHITE)
-        love.graphics.draw(atlas.image, dx - depth, dy, 0, s, s)
+        love.graphics.draw(atlas.image, lx, dy, 0, s, s)
 
         local ace = game.ensure_asset_atlas_loaded and game:ensure_asset_atlas_loaded("title_ace")
         if ace and ace.image then
             local t = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
-            local r = ACE_TILT_RAD * math.sin(ACE_TILT_HZ * t)
-            local bob = ACE_BOB_PX * math.sin(ACE_BOB_HZ * t)
-            -- Rotate about the card's centre, which is where the reference's transform origin
-            -- sits, so the tilt reads as a hinge rather than a swing from the corner. The ace
-            -- shares the logo's parallax offset: it is a card lying on the logo, not in front
-            -- of it, and a separate depth would need hardware to tune.
+            local bob = PixelGrid.snap(ACE_BOB_PX * math.sin(ACE_BOB_HZ * t))
+            -- The ace shares the logo's parallax offset: it is a card lying on the logo, not in
+            -- front of it, and a separate depth would need hardware to tune.
             love.graphics.draw(ace.image,
-                dx - depth + (ACE_X + ACE_W * 0.5) * s,
-                dy + (ACE_Y + ACE_H * 0.5) * s + bob,
-                r, s, s, ACE_W * 0.5, ACE_H * 0.5)
+                lx + PixelGrid.snap(ACE_X * s), dy + PixelGrid.snap(ACE_Y * s) + bob,
+                0, s, s)
         end
     end
 

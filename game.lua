@@ -4280,10 +4280,8 @@ end
 --- for the suit being edited; nothing changes until Set, so browsing never redraws a run.
 
 --- The preview is three live playing cards, not three sprites, so it moves the way a hand does:
---- the same idle sway as `Hand:apply_idle_sway` (`hand.lua`), the same spring, juice on a tap,
+--- the same idle bob as `Hand:apply_idle_sway` (`hand.lua`), the same spring, juice on a tap,
 --- and a real flip when the choice changes, with the art swapping edge-on as a card turned over.
-local ART_SWAY_R_AMP = 0.02
-local ART_SWAY_R_RATE = 2
 local ART_SWAY_Y_AMP = 0.03 * CardArt.CELL_H / (2.4 * 47 / 41) -- the hand's units, in px
 local ART_SWAY_Y_RATE = 0.666
 local ART_SWAY_PHASE_PER_PX = 20 / 320
@@ -4381,7 +4379,6 @@ function Game:update_card_art_preview(dt)
         local base = card._art_base
         if base then
             local phase = base.x * ART_SWAY_PHASE_PER_PX
-            card.T.r = ART_SWAY_R_AMP * math.sin(ART_SWAY_R_RATE * t + phase)
             card.T.y = base.y + ART_SWAY_Y_AMP * math.sin(ART_SWAY_Y_RATE * t + phase)
         end
         card:update(dt)
@@ -18252,10 +18249,15 @@ function Game:draw_node_gamepad_focus_outline(node)
     else
         love.graphics.setColor(0, 0, 0, 1)
     end
+    -- Follow the art: its whole pixels, a joker's idle bob, and the node's angle step
+    -- (`PixelGrid.turn`), so the outline moves with the art instead of flickering along its edge.
+    r.x, r.y = PixelGrid.snap(r.x), PixelGrid.snap(r.y)
+    if node.idle_bob then r.y = r.y + node:idle_bob() end
     love.graphics.push()
-    local rot = (node.VT and node.VT.r) or 0
     local cx = r.x + r.w / 2
     local cy = r.y + r.h / 2
+    local scale = (node.VT and node.VT.scale) or 1
+    local rot = PixelGrid.turn((node.VT and node.VT.r) or 0, node.VT.w * scale, node.VT.h * scale)
     love.graphics.translate(cx, cy)
     love.graphics.rotate(rot)
     love.graphics.translate(-cx, -cy)

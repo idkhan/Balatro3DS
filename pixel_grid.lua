@@ -10,9 +10,11 @@
 ---  * Glyph sheets are always sampled linearly (LovePotion `font.cpp`), so text off the grid
 ---    or at any scale but 1 is blurred.
 ---
---- These helpers are for *layout*, meaning positions and scales that hold still. An animation
---- that eases a scale (a juice pop, a card being dealt) still moves through fractional values.
---- Snapping that would make it step visibly, which is worse.
+--- Positions and angles snap even while they animate. Nearest-filtered art cannot be shown
+--- between pixels anyway, so a snapped slide steps exactly as the unsnapped one would appear,
+--- and every layer of an object steps together. An animation that eases a *scale* (a juice pop,
+--- a card being dealt) still moves through fractional values. Snapping that would make it step
+--- visibly, which is worse.
 local PixelGrid = {}
 
 --- Nearest whole pixel.
@@ -41,6 +43,28 @@ end
 ---@return boolean
 function PixelGrid.at_rest(scale, extent)
     return math.abs(scale - 1) * extent < 0.5
+end
+
+--- The angle to draw a `w` x `h` sprite at when it rotates about its centre.
+---
+--- Nearest-filtered art rotated by a small angle is sheared, not turned: each row is shifted by a
+--- whole pixel where the rotation crosses half a pixel, so a seam runs across the art. While the
+--- angle eases (a sway, a lean, a wobble), those seams slide through the art every frame and the
+--- sprite shimmers, even though its outline moves less than a pixel. Rounding the angle to steps
+--- that move the corners one whole pixel keeps the seams still between steps, so the art changes
+--- only when its outline visibly moves. Under half a step it rounds to 0 and draws square.
+---
+--- Snap the sprite's position too: a rotation about a pivot that drifts between pixels moves the
+--- seams just the same.
+---@param r number radians
+---@param w number drawn width
+---@param h number drawn height
+---@return number
+function PixelGrid.turn(r, w, h)
+    if r == 0 then return 0 end
+    -- One step turns the corners, half the diagonal from the centre, by one pixel.
+    local step = 2 / math.sqrt(w * w + h * h)
+    return math.floor(r / step + 0.5) * step
 end
 
 --- Stroke a rectangle's outline inside its edges, at the current line width.

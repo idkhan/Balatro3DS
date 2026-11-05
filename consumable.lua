@@ -1,6 +1,7 @@
 ---@class Consumable : Moveable
 Consumable = Moveable:extend()
 
+local PixelGrid = require("pixel_grid")
 local TooltipDraw = require("tooltip_draw")
 -- Tarots.png starts its negative variants at cell 56. Cells 24-27 are card backs,
 -- so the offset is larger than the number of base consumables.
@@ -281,8 +282,10 @@ end
 function Consumable:draw()
     if not self.states.visible then return end
 
-    local draw_x = self.VT.x + self.collision_offset.x
-    local draw_y = self.VT.y + self.collision_offset.y
+    -- Whole pixels, and whole-pixel angle steps below, so a leaning or wobbling card holds its
+    -- art still between steps instead of sliding shear seams through it (`PixelGrid.turn`).
+    local draw_x = PixelGrid.snap(self.VT.x + self.collision_offset.x)
+    local draw_y = PixelGrid.snap(self.VT.y + self.collision_offset.y)
     local draw_w = (self.VT and self.VT.w) or (self.T and self.T.w) or 72
     local draw_h = (self.VT and self.VT.h) or (self.T and self.T.h) or 95
 
@@ -297,7 +300,7 @@ function Consumable:draw()
     -- flinching first. This transform is already centre-anchored, so the pop needs no
     -- re-centring the way `Card:draw` does.
     local scale = self.VT.scale * (self.juice_scale or 1)
-    local rot = self.VT.r + (self.juice_r or 0)
+    local rot = PixelGrid.turn(self.VT.r + (self.juice_r or 0), self.VT.w * scale, self.VT.h * scale)
 
     -- The plain path draws exactly one quad, so the pivot transform goes into that draw's own
     -- arguments instead of onto the stack: translate/rotate/scale/translate about (cx, cy) and
@@ -316,8 +319,8 @@ function Consumable:draw()
             local t = Fx and Fx.time and Fx.time() or 0
             love.graphics.setBlendMode("add")
             love.graphics.setColor(0.45, 0.2, 0.8, 0.22)
-            love.graphics.draw(self.atlas.image, self.quad, cx + math.sin(t * 1.4) * 1.2,
-                cy + math.cos(t * 1.1) * 1.2, rot, scale * 1.025, scale * 1.025,
+            love.graphics.draw(self.atlas.image, self.quad, cx + PixelGrid.snap(math.sin(t * 1.4) * 1.2),
+                cy + PixelGrid.snap(math.cos(t * 1.1) * 1.2), rot, scale * 1.025, scale * 1.025,
                 cx - draw_x, cy - draw_y)
             love.graphics.setBlendMode("alpha")
         end

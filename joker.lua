@@ -2,6 +2,7 @@
 Joker = Moveable:extend()
 require "joker_effects"
 local TooltipDraw = require("tooltip_draw")
+local PixelGrid = require("pixel_grid")
 
 -- Basic 2-layer joker: back sprite (centers atlas) and front sprite (individual PNG).
 
@@ -1105,7 +1106,7 @@ function Joker:draw_sub_pos_overlay(draw_x, draw_y, alpha)
     local id = self.def and self.def.id
     local t = Fx and Fx.time and Fx.time() or 0
     local seed = self.edition_seed and self:edition_seed() or 0
-    local ox, oy, rotation = 0, 0, 0
+    local ox, oy = 0, 0
     local tint_r, tint_g, tint_b = 1, 1, 1
     if id == "j_hologram" then
         -- Reference animates this layer through the hologram shader. PICA200 cannot accept
@@ -1117,18 +1118,22 @@ function Joker:draw_sub_pos_overlay(draw_x, draw_y, alpha)
         tint_g = 0.88
         tint_b = 1
     elseif self.def and tonumber(self.def.rarity) == 4 then
-        -- The five Legendary floating layers use the same cheap transform stand-in.
+        -- The five Legendary floating layers use the same cheap transform stand-in. The
+        -- reference also tilts them; at 240p a 0.012 rad tilt moves the art's corners under a
+        -- pixel and only crawls seams through it (`PixelGrid.turn`), so they float untilted.
         ox = math.sin(t * 0.8 + seed * 11) * 0.75
         oy = math.cos(t * 0.65 + seed * 7) * 1.25
-        rotation = math.sin(t * 0.55 + seed * 9) * 0.012
     end
+    -- Float in whole pixels: a fractional offset makes the GPU pick a pixel for the layer
+    -- apart from the face under it, and the two drift a pixel apart and back.
+    local x, y = draw_x + PixelGrid.snap(ox), draw_y + PixelGrid.snap(oy)
     love.graphics.setColor(tint_r, tint_g, tint_b, alpha or 1)
     if self.sub_sprite and self.sub_sprite.image then
-        love.graphics.draw(self.sub_sprite.image, draw_x + ox, draw_y + oy, rotation, 1, 1)
+        love.graphics.draw(self.sub_sprite.image, x, y, 0, 1, 1)
         return
     end
     if not self.sub_atlas or not self.sub_atlas.image or not self.sub_quad then return end
-    love.graphics.draw(self.sub_atlas.image, self.sub_quad, draw_x + ox, draw_y + oy, rotation, 1, 1)
+    love.graphics.draw(self.sub_atlas.image, self.sub_quad, x, y, 0, 1, 1)
 end
 
 function Joker:draw_sticker_overlays(draw_x, draw_y)
@@ -1152,6 +1157,20 @@ function Joker:draw_sticker_overlays(draw_x, draw_y)
     end
 end
 
+--- Ambient idle motion, in whole pixels down from the slot.
+---
+--- The reference's resting board is never still: every card breathes through `ambient_tilt`
+--- (`reference/Balatro/card.lua:4370-4383`), a shader tilt. A tilt that small moves a joker's
+--- corners under a pixel at 240p, so it cannot show as motion, only as shear seams crawling
+--- through the art (`PixelGrid.turn`). The joker rises and settles by one pixel instead. It is
+--- phased off x, so no two jokers move together, like the hand's sway. A dragged joker is held.
+---@return integer
+function Joker:idle_bob()
+    if self.states and self.states.drag and self.states.drag.is then return 0 end
+    local t = (G and G.TIMERS and G.TIMERS.REAL) or 0
+    return PixelGrid.snap(math.sin(1.2 * t + self.VT.x * 0.045))
+end
+
 function Joker:draw()
     if not self.states.visible then return end
 
@@ -1165,18 +1184,16 @@ function Joker:draw()
     local base_scale = self.VT.scale or 1
     local render_scale = self:get_render_scale()
     local rot = self.VT.r
-    -- Ambient idle sway: the reference's resting board is never still (every card breathes
-    -- through `ambient_tilt`, `reference/Balatro/card.lua:4370-4383` — shader-driven there,
-    -- plain rotation here). Phase off x so no two jokers align, like the hand's sway.
-    if not (self.states and self.states.drag and self.states.drag.is) then
-        local tR = (G and G.TIMERS and G.TIMERS.REAL) or 0
-        rot = rot + 0.015 * math.sin(1.2 * tR + draw_x * 0.045)
-    end
+    draw_y = draw_y + self:idle_bob()
     -- Trigger pop rides on top of the render scale; this transform is already centre-anchored.
     if self.juice_scale then
         render_scale = render_scale * self.juice_scale
         rot = rot + self.juice_r
     end
+    -- Whole pixels and whole-pixel angle steps, so a leaning or wobbling joker holds its art
+    -- still between steps instead of sliding shear seams through it (`PixelGrid.turn`).
+    draw_x, draw_y = PixelGrid.snap(draw_x), PixelGrid.snap(draw_y)
+    rot = PixelGrid.turn(rot, self.VT.w * render_scale, self.VT.h * render_scale)
     -- A destroyed Joker keeps its size: the reference's dissolve happens inside the sprite,
     -- not to the node's transform (`reference/Balatro/card.lua:2130`). The front goes through
     -- the mask below; the stickers and the debuff wash over it ride a plain fade.

@@ -1,6 +1,8 @@
 ---@class Card : Moveable
 Card = Moveable:extend()
 
+local PixelGrid = require("pixel_grid")
+
 --- Stone cards retain their former face only as dormant restoration data. Their rank and
 --- suit must be absent from gameplay data, matching reference/Balatro/card.lua:957-981.
 ---@param data table|nil
@@ -1086,6 +1088,10 @@ function Card:draw()
         s = s * js
         r = r + self.juice_r
     end
+    -- Whole pixels and whole-pixel angle steps, so a swaying, leaning or wobbling card holds its
+    -- art still between steps instead of sliding shear seams through it (`PixelGrid.turn`).
+    draw_x, draw_y = PixelGrid.snap(draw_x), PixelGrid.snap(draw_y)
+    r = PixelGrid.turn(r, w * s, h * s)
 
     -- The reference draws a parallaxed silhouette before the card (`reference/Balatro/card.lua:4359-4363`).
     -- Limit it to one base-atlas pass: alpha fill rate is precious on the Old 3DS's 268 MHz GPU.
@@ -1230,12 +1236,16 @@ function Card:draw()
             love.graphics.setLineWidth(2)
             love.graphics.setColor(0, 0, 0, 1)
             love.graphics.push()
-            local cx = r.x + r.w / 2
-            local cy = r.y + r.h / 2
+            -- The card's own whole pixels and angle step (`Card:draw`), so the outline moves
+            -- with the art instead of flickering along its edge.
+            local x, y = PixelGrid.snap(r.x), PixelGrid.snap(r.y)
+            local cx = x + r.w / 2
+            local cy = y + r.h / 2
             love.graphics.translate(cx, cy)
-            love.graphics.rotate(self.VT.r)
+            local s = self.VT.scale or 1
+            love.graphics.rotate(PixelGrid.turn(self.VT.r, self.VT.w * s, self.VT.h * s))
             love.graphics.translate(-cx, -cy)
-            love.graphics.rectangle("line", r.x, r.y, r.w, r.h)
+            love.graphics.rectangle("line", x, y, r.w, r.h)
             love.graphics.pop()
             love.graphics.setLineWidth(lw)
         end
