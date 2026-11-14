@@ -110,4 +110,46 @@ suite.test("the tray stays put when the row is pulled to the bottom screen", fun
         "the consumable tray goes with it")
 end)
 
+
+--- Every slot count ("1/5", "0/2") the top screen draws, with the face it was drawn in.
+local function capture_counts(top)
+    local TextCache = require("text_cache")
+    local counts = {}
+    local real = TextCache.printf
+    TextCache.printf = function(text, x, y, limit, align)
+        if tostring(text):match("^%d+/%d+$") then
+            counts[#counts + 1] = { text = text, y = y, font = love.graphics.getFont() }
+        end
+        return real(text, x, y, limit, align)
+    end
+    local ok, err = pcall(top.draw, top, "top")
+    TextCache.printf = real
+    T.assert_true(ok, tostring(err))
+    return counts
+end
+
+suite.test("slot counts use the label face and step down to stay clear of the screen edge", function()
+    local Fonts = require("fonts")
+    local g, top = fresh_game()
+    -- The hardware faces: under the shared profile LABEL is SMALL's size, so nothing steps down.
+    g.FONTS.PIXEL = Fonts.build("native")
+    T.assert_true(g:add_joker_by_def("j_joker"), "own a joker")
+
+    local plain = capture_counts(top)
+    T.assert_eq(#plain, 2, "a joker count and a consumable count")
+    T.assert_eq(plain[1].font, g.FONTS.PIXEL.LABEL, "the count has room for the label face")
+
+    -- Joker readouts hang under the cards and push the counts towards the bottom edge.
+    g.SETTINGS.JOKER_DISPLAY = true
+    local pushed = capture_counts(top)
+    T.assert_eq(#pushed, 2)
+    T.assert_true(pushed[1].y > plain[1].y, "the readouts take the room under the tray")
+    for _, c in ipairs(pushed) do
+        local ink_top, ink_h = Fonts.ink(g, c.font)
+        -- Letters end at least 2 px above the 240 px screen's bottom edge, not on it.
+        T.assert_true(c.y + ink_top + ink_h <= 238,
+            c.text .. "'s letters end at row " .. (c.y + ink_top + ink_h - 1))
+    end
+end)
+
 return suite

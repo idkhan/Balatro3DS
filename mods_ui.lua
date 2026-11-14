@@ -11,6 +11,7 @@
 --- switch. A switch takes effect at once (`ModLoader.set_enabled` reloads every mod): the page
 --- is only reachable from the main menu, so no run is in memory to be pulled out from under.
 
+local PixelGrid = require("pixel_grid")
 local ModLoader = require("mod_loader")
 
 local ModsUI = {}
@@ -217,7 +218,7 @@ function ModsUI.draw(game)
             if focus and row.mod.id == focus.id then
                 love.graphics.setColor(C.WHITE)
                 love.graphics.setLineWidth(2)
-                love.graphics.rectangle("line", rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1)
+                PixelGrid.outline(rect.x, rect.y, rect.w, rect.h)
             end
         end
         y = y + row[4]
@@ -243,7 +244,7 @@ function ModsUI.draw(game)
     local font = love.graphics.getFont()
     love.graphics.printf(I18N.text("common.back", nil, "Back"), r.x, r.y + math.floor((r.h - font:getHeight()) / 2), r.w, "center")
     love.graphics.setLineWidth(2)
-    love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+    PixelGrid.outline(r.x, r.y, r.w, r.h)
 end
 
 function ModsUI.scroll(game, delta)

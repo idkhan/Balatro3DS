@@ -1,6 +1,9 @@
 ---@class Card : Moveable
 Card = Moveable:extend()
 
+local PixelGrid = require("pixel_grid")
+local TooltipDraw = require("tooltip_draw")
+
 --- Stone cards retain their former face only as dormant restoration data. Their rank and
 --- suit must be absent from gameplay data, matching reference/Balatro/card.lua:957-981.
 ---@param data table|nil
@@ -453,13 +456,13 @@ function Card:draw_layer(atlas, quad, cell_w, cell_h, ox, oy)
     )
 end
 
-local TOOLTIP_PAD_X = 8
-local TOOLTIP_HEADER_PAD_Y = 3
-local TOOLTIP_BODY_PAD_Y = 10
-local TOOLTIP_SPACING = 1
-local TOOLTIP_SECTION_GAP = 2
-local TOOLTIP_OUTER_PAD_X = 3
-local TOOLTIP_OUTER_PAD_Y = 3
+local TOOLTIP_PAD_X = TooltipDraw.LAYOUT.PAD_X
+local TOOLTIP_HEADER_PAD_Y = TooltipDraw.LAYOUT.HEADER_PAD_Y
+local TOOLTIP_BODY_PAD_Y = TooltipDraw.LAYOUT.BODY_PAD_Y
+local TOOLTIP_SPACING = TooltipDraw.LAYOUT.SPACING
+local TOOLTIP_SECTION_GAP = TooltipDraw.LAYOUT.SECTION_GAP
+local TOOLTIP_OUTER_PAD_X = TooltipDraw.LAYOUT.OUTER_PAD_X
+local TOOLTIP_OUTER_PAD_Y = TooltipDraw.LAYOUT.OUTER_PAD_Y
 local CARD_SHADOW_ALPHA = 0.5
 local CARD_SHADOW_DRAG_ALPHA = 0.45
 local CARD_SHADOW_Y = 1.5
@@ -868,14 +871,31 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
     add_named_section(SEAL_NAMES[seal] and I18N.content_name("seal", seal, SEAL_NAMES[seal]),
         seal_colours[seal], translated_lines("seal", seal, seal_tooltip_lines(seal)))
 
+    -- A line wider than the screen allows (the blue seal's, at TOOLTIP size) breaks onto more
+    -- lines; each piece keeps a section name's colour, and plain lines are re-badged per piece.
+    local limit = TooltipDraw.body_limit()
     local runs, body_max_w = {}, 0
     for i = 1, #lines do
-        local run = build_line_run(font, lines[i])
-        runs[i] = run
-        if run.measure > body_max_w then body_max_w = run.measure end
+        local line = lines[i]
+        local text = type(line) == "table" and line.text or line
+        local pieces = { line }
+        if font:getWidth(text) > limit then
+            pieces = {}
+            for _, segs in ipairs(TooltipDraw.wrap_segments(font, { { text = text } }, limit)) do
+                local parts = {}
+                for _, seg in ipairs(segs) do parts[#parts + 1] = seg.text end
+                local piece = table.concat(parts)
+                pieces[#pieces + 1] = type(line) == "table" and { text = piece, color = line.color } or piece
+            end
+        end
+        for _, piece in ipairs(pieces) do
+            local run = build_line_run(font, piece)
+            runs[#runs + 1] = run
+            if run.measure > body_max_w then body_max_w = run.measure end
+        end
     end
 
-    local line_h = font:getHeight()
+    local line_h, ink_off = TooltipDraw.line_box(font)
     local count = #runs
     local header_h_total = line_h + (TOOLTIP_HEADER_PAD_Y * 2)
     local body_h_total = (count * line_h) + ((count - 1) * TOOLTIP_SPACING) + (TOOLTIP_BODY_PAD_Y * 2)
@@ -901,6 +921,7 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
         header = header,
         runs = runs,
         line_h = line_h,
+        ink_off = ink_off,
         header_h_total = header_h_total,
         body_h_total = body_h_total,
         inner_w = inner_w,
@@ -932,7 +953,7 @@ function Card:draw_tooltip(draw_x, draw_y)
     local edition = card_edition_for_display(self)
     local seal = self.seal
 
-    local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local font = G.FONTS.PIXEL.TOOLTIP or love.graphics.getFont()
     local generation = tooltip_font_epoch(font)
 
     -- Nine scalar comparisons against a cached plan, all of them values that were being
@@ -961,14 +982,21 @@ function Card:draw_tooltip(draw_x, draw_y)
     local tx = draw_x + (card_w - box_w) * 0.5
     local ty = draw_y - box_h - 3
     local margin = 2
-    local sw = 320
+    local sw, sh = 320, 240
     if love.graphics.getWidth then
         sw = love.graphics.getWidth("bottom")
         if not sw or sw <= 0 then sw = love.graphics.getWidth() end
         if not sw or sw <= 0 then sw = 320 end
     end
+    if love.graphics.getHeight then
+        sh = love.graphics.getHeight("bottom")
+        if not sh or sh <= 0 then sh = love.graphics.getHeight() end
+        if not sh or sh <= 0 then sh = 240 end
+    end
     tx = math.max(margin, math.min(tx, sw - box_w - margin))
     if ty < 2 then ty = draw_y + 2 end
+    -- Flipped below a hand card, a tall (wrapped) box can run past the bottom edge.
+    ty = math.max(margin, math.min(ty, sh - box_h - margin))
     tx = math.floor(tx + 0.5)
     ty = math.floor(ty + 0.5)
 
@@ -997,13 +1025,14 @@ function Card:draw_tooltip(draw_x, draw_y)
     draw_rect_with_shadow(body_x + inner_pad, body_y + inner_pad -1, inner_w - (inner_pad * 2), inner_body_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
  
     -- Header: rank + suit, or anonymous Stone title
-    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5)
+    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5) + plan.ink_off
     draw_run(plan.header, font, header_x, inner_w, header_text_y)
 
-    local text_y = body_y + TOOLTIP_BODY_PAD_Y
+    -- Measured from the body's face, which sits a pixel above its panel.
+    local text_y = body_y + TOOLTIP_BODY_PAD_Y - 1
     local runs = plan.runs
     for i = 1, #runs do
-        draw_run(runs[i], font, body_x, inner_w, math.floor(text_y + 0.5))
+        draw_run(runs[i], font, body_x, inner_w, math.floor(text_y + 0.5) + plan.ink_off)
         text_y = text_y + line_h + TOOLTIP_SPACING
     end
 
@@ -1086,6 +1115,10 @@ function Card:draw()
         s = s * js
         r = r + self.juice_r
     end
+    -- Whole pixels and whole-pixel angle steps, so a swaying, leaning or wobbling card holds its
+    -- art still between steps instead of sliding shear seams through it (`PixelGrid.turn`).
+    draw_x, draw_y = PixelGrid.snap(draw_x), PixelGrid.snap(draw_y)
+    r = PixelGrid.turn(r, w * s, h * s)
 
     -- The reference draws a parallaxed silhouette before the card (`reference/Balatro/card.lua:4359-4363`).
     -- Limit it to one base-atlas pass: alpha fill rate is precious on the Old 3DS's 268 MHz GPU.
@@ -1230,12 +1263,16 @@ function Card:draw()
             love.graphics.setLineWidth(2)
             love.graphics.setColor(0, 0, 0, 1)
             love.graphics.push()
-            local cx = r.x + r.w / 2
-            local cy = r.y + r.h / 2
+            -- The card's own whole pixels and angle step (`Card:draw`), so the outline moves
+            -- with the art instead of flickering along its edge.
+            local x, y = PixelGrid.snap(r.x), PixelGrid.snap(r.y)
+            local cx = x + r.w / 2
+            local cy = y + r.h / 2
             love.graphics.translate(cx, cy)
-            love.graphics.rotate(self.VT.r)
+            local s = self.VT.scale or 1
+            love.graphics.rotate(PixelGrid.turn(self.VT.r, self.VT.w * s, self.VT.h * s))
             love.graphics.translate(-cx, -cy)
-            love.graphics.rectangle("line", r.x, r.y, r.w, r.h)
+            love.graphics.rectangle("line", x, y, r.w, r.h)
             love.graphics.pop()
             love.graphics.setLineWidth(lw)
         end

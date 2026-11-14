@@ -3,6 +3,7 @@ Hand = Object:extend()
 
 local Particles = require("particles")
 local JokerDisplay = require("joker_display")
+local PixelGrid = require("pixel_grid")
 
 local SCREEN_W = 320
 local SCREEN_H = 240
@@ -42,8 +43,10 @@ local HAND_BOTTOM_MARGIN = 38
 --- folded in, phase-shifted by the card's own x so the hand ripples rather than pulsing in
 --- unison, and lets the spring lag behind them. It is barely a pixel of travel and it is most
 --- of the difference between a hand that is resting and a hand that is a screenshot.
-local SWAY_R_AMP = 0.02
-local SWAY_R_RATE = 2
+---
+--- Only the bob ports over. The reference also rocks each card by 0.02 rad, which moves a 71 x 95
+--- card's corners 1.2 px: at 240p that cannot read as a rock, only as shear seams sliding through
+--- the art every frame (`PixelGrid.turn`). The cards keep their fan angle and bob a pixel.
 local SWAY_Y_AMP = 0.03 * PX_PER_UNIT
 local SWAY_Y_RATE = 0.666
 --- The reference phases off x in tiles; the port's playfield is 320 px over the same 20 tiles.
@@ -229,6 +232,9 @@ local function set_card_target(node, x, y, r, scale)
     -- draw time it snapped up in a single frame with no bounce and no tilt, on the interaction
     -- the player performs more than any other.
     if node.selected then y = y - SELECTED_LIFT end
+    -- Rest on whole pixels. The card is drawn snapped (`Card:draw`), and from a fractional rest
+    -- the idle bob's crest grazes a rounding edge, so the card blips up a pixel for one frame.
+    x, y = PixelGrid.snap(x), PixelGrid.snap(y)
     node.T.x = x
     node.T.y = y
     node.T.r = r
@@ -2106,7 +2112,6 @@ function Hand:apply_idle_sway()
         local base = node._layout_base
         if base and not (node.states and node.states.drag and node.states.drag.is) then
             local phase = base.x * SWAY_PHASE_PER_PX
-            node.T.r = base.r + SWAY_R_AMP * math.sin(SWAY_R_RATE * t + phase)
             node.T.y = base.y + SWAY_Y_AMP * math.sin(SWAY_Y_RATE * t + phase)
         end
     end
