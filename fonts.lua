@@ -110,6 +110,11 @@ Fonts.LANGUAGE_FACES = {
         source = "resources/fonts/zh_CN.ttf",
         min_size = 13,
     },
+    ja = {
+        native = "resources/fonts/lang/ja_h%d.ttf",
+        source = "resources/fonts/ja.ttf",
+        min_size = 13,
+    },
 }
 
 --- Cell heights the language sheets are baked at -- the ones `mkbcfnt` can actually produce from
