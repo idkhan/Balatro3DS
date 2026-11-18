@@ -2,6 +2,7 @@ return {
     ["language.en"] = "Engelsk",
     ["language.zh_CN"] = "Simplificeret Kinesisk",
     ["language.da"] = "Dansk",
+    ["language.it"] = "Italiensk",
     ["common.back"] = "Tilbage",
     ["common.continue"] = "Fortsæt",
     ["common.none"] = "ingen",
@@ -85,6 +86,7 @@ return {
 
     ["round.won"] = "Runde vundet!",
     ["round.reward.blind"] = "Blind belønning",
+    ["round.reward.saved"] = "Reddet af Mr. Bones",
     ["round.reward.interest"] = "1 rente per $5 (%d max)",
     ["game_over.title"] = "Spil Slut",
     ["game_over.reason"] = "Du løb tør for kort før du vandt denne Blind.",

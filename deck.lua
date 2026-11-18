@@ -193,11 +193,16 @@ end
 
 --- Return a card to the draw area. The next reference shuffle restores creation order before
 --- shuffling, so spending a separate random draw on the temporary insertion point is incorrect.
+---
+--- It goes to the bottom of the pile, though, not the top: `CardArea:emplace` puts anything
+--- entering a deck at the front of `cards` while draws come off the end. Until the next
+--- shuffle that is what the player sees -- a second Arcana or Spectral Pack in the same shop
+--- deals fresh cards rather than the hand the first pack just put back (issue #80).
 ---@param card_data table|nil
 function Deck:insert_random(card_data)
     local c = Deck.copy_card_data(card_data)
     if not c then return end
-    self.cards[#self.cards + 1] = c
+    table.insert(self.cards, 1, c)
 end
 
 function Deck:empty()

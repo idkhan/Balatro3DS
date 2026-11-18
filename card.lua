@@ -392,15 +392,28 @@ end
 --- Set or clear enhancement (updates `card_data.enhancement` and back/face sprites in the centers atlas).
 ---@param name string|nil
 function Card:set_enhancement(name)
+    local leaving_stone = false
     if self.card_data then
         if self.card_data.enhancement == "stone" and name ~= "stone" then
             Card.restore_gameplay_data(self.card_data)
+            leaving_stone = true
         end
         self.card_data.enhancement = name
         Card.normalize_gameplay_data(self.card_data)
     end
     self.enhancement = name
+    if leaving_stone then
+        -- The face comes back, so its sprite cell has to as well. A card that was created as
+        -- Stone never had one, and drew as cell 0 -- the 2 of Hearts -- until the next round
+        -- rebuilt the node (issue #80).
+        self:sync_visual_from_card_data()
+        return self:_after_enhancement_change()
+    end
     self:refresh_quads()
+    return self:_after_enhancement_change()
+end
+
+function Card:_after_enhancement_change()
     -- Deck composition drives seven unlocks, and a Gold Card that also carries a Gold Seal
     -- drives an eighth (`card.lua:144`, `:305`). The reference re-checks on every card
     -- mutation, which is exactly what this is.

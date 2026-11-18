@@ -3,6 +3,7 @@ return {
     ["language.es"] = "Spagnolo",
     ["language.zh_CN"] = "Cinese Semplificato",
     ["language.da"] = "Danese",
+    ["language.it"] = "Italiana",
     ["common.back"] = "Indietro",
     ["common.continue"] = "Continua",
     ["common.none"] = "Nessuno",
@@ -86,6 +87,7 @@ return {
 
     ["round.won"] = " ラウンド vinto!", -- (o "Round vinto!")
     ["round.reward.blind"] = "Ricompensa buio",
+    ["round.reward.saved"] = "Salvataggio del Signor Scheletro",
     ["round.reward.interest"] = "1 interesse ogni $5 (max %d)",
     ["game_over.title"] = "Game Over",
     ["game_over.reason"] = "Hai esaurito le mani prima di battere questo buio.",

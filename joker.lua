@@ -773,6 +773,9 @@ local LIVE_MULT_TEXT = {
     j_green_joker = function(j) return I18N.t("term.current_mult", { value = math.floor(tonumber(j.stored_mult) or 0) }) end,
     j_red_card = function(j) return I18N.t("term.current_mult", { value = math.floor(tonumber(j.stored_mult) or 0) }) end,
     j_erosion = function()
+        -- No run deck (the collection, the main menu): the reference shows 0, since its
+        -- `G.playing_cards` guard fails (`card.lua:878`), not 52 cards' worth of shrinkage.
+        if not (G and G.deck) then return I18N.t("term.current_mult", { value = 0 }) end
         local cnt = count_full_deck()
         local start_size = get_full_deck_starting_size()
         return I18N.t("term.current_mult", { value = math.max(0, (start_size - cnt) * 4) })

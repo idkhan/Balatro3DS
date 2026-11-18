@@ -4,6 +4,7 @@ return {
     ["language.es"] = "西班牙语",
     ["language.zh_CN"] = "简体中文",
     ["language.da"] = "丹麦语",
+    ["language.it"] = "意大利语",
     ["common.back"] = "返回",
     ["common.continue"] = "继续",
     ["common.none"] = "无",
@@ -87,6 +88,7 @@ return {
 
     ["round.won"] = "回合胜利！",
     ["round.reward.blind"] = "盲注奖励",
+    ["round.reward.saved"] = "被骷髅先生救了",
     ["round.reward.interest"] = "每 $5 获得 1 利息（最多 %d）",
     ["game_over.title"] = "游戏结束",
     ["game_over.reason"] = "出牌次数耗尽，未能击败本次盲注。",

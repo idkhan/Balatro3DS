@@ -169,30 +169,39 @@ local function ctx_card(ctx)
     return ctx.card_node or ctx.suit
 end
 
---- Fill one suit per card the way Flower Pot and Seeing Double do: non-Wild cards first, each
---- taking the first still-empty suit of `order` it counts as, then the Wild Cards in
---- `wild_order`. So a Smeared Spade and Club fill Spades and Clubs, not both suits twice
---- (`reference/Balatro/card.lua`, `Flower Pot` / `Seeing Double`).
+--- Give `card` the first still-empty suit of `suits` it counts as.
+local function place_in_suit(filled, card, suits)
+    for _, s in ipairs(suits) do
+        if not filled[s] and is_suit(card, s) then
+            filled[s] = true
+            return
+        end
+    end
+end
+
+--- The Wild Card pass both jokers share: each Wild fills one empty suit, in `wild_order`.
+---@return table<string, boolean> filled
+local function fill_wild_suits(cards, wild_order, filled)
+    filled = filled or {}
+    for _, card in ipairs(cards or {}) do
+        local data = card and (card.card_data or card)
+        if data and data.enhancement == "wild" then place_in_suit(filled, card, wild_order) end
+    end
+    return filled
+end
+
+--- Fill one suit per card the way Flower Pot does: non-Wild cards first, each taking the
+--- first still-empty suit of `order` it counts as, then the Wild Cards in `wild_order`. So a
+--- Smeared Spade and Club fill Spades and Clubs, not both suits twice
+--- (`reference/Balatro/card.lua`, `Flower Pot`). Seeing Double counts differently; see it.
 ---@return table<string, boolean>
 local function fill_suits(cards, order, wild_order)
     local filled = {}
-    local function place(card, suits)
-        for _, s in ipairs(suits) do
-            if not filled[s] and is_suit(card, s) then
-                filled[s] = true
-                return
-            end
-        end
-    end
     for _, card in ipairs(cards or {}) do
         local data = card and (card.card_data or card)
-        if data and data.enhancement ~= "wild" then place(card, order) end
+        if data and data.enhancement ~= "wild" then place_in_suit(filled, card, order) end
     end
-    for _, card in ipairs(cards or {}) do
-        local data = card and (card.card_data or card)
-        if data and data.enhancement == "wild" then place(card, wild_order) end
-    end
-    return filled
+    return fill_wild_suits(cards, wild_order, filled)
 end
 
 local function discarded_card_is_debuffed(ctx, index, card)
@@ -356,10 +365,13 @@ local function delegate_joker_retrigger(delegator, src, ctx, method)
     return tonumber(resolved[method](resolved, ctx)) or 0
 end
 
+--- The reference's `scoring_hand[1]` -- Hanging Chad's target. A debuffed card stays in the
+--- scoring hand there, just scoring nothing, so a debuffed first card soaks up the retriggers
+--- rather than handing them to the next card (`card.lua:3353`).
 local function first_scoring_play_node(played_cards)
     if type(played_cards) ~= "table" then return nil end
     for _, n in ipairs(played_cards) do
-        if n and n.counts_for_play_score == true then
+        if n and (n.counts_for_play_score == true or n.debuffed_for_scoring == true) then
             return n
         end
     end
@@ -731,10 +743,12 @@ local SPECIAL = {
     j_popcorn = {
         matches_trigger = function(_, e) return e == "on_round_end" or e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
-            if j.runtime_counter == 0 and not ctx.blueprint then
-                j.stored_mult = 20 
-                j.runtime_counter = 1
+            -- A new Popcorn starts at +20 from its catalog config. This only repairs one saved
+            -- by an older build, which started at 0 and set itself to 20 on first use.
+            if j.runtime_counter == 0 and (tonumber(j.stored_mult) or 0) == 0 and not ctx.blueprint then
+                j.stored_mult = 20
             end
+            if not ctx.blueprint then j.runtime_counter = 1 end
             if ctx.event_name == "on_round_end" and not ctx.blueprint then
                 j.stored_mult = math.max(0, (tonumber(j.stored_mult) or 0) - 4)
                 if j.stored_mult <= 0 then
@@ -890,11 +904,21 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_blind_selected" end,
         apply_effect = function(_, ctx)
             if not (G and G.add_joker_by_def and G._pick_joker_id_shop_rarity_distribution) then return end
-            for _ = 1, 2 do
+            -- The batch is sized from the free slots before anything is made
+            -- (`card.lua:2529-2530`, `jokers_to_create = math.min(2, limit - #cards)`), so a
+            -- Negative first pick does not open room for a second.
+            local negatives = 0
+            for _, owned in ipairs(G.jokers or {}) do
+                if owned and Joker.normalize_edition(owned.edition) == "negative" then
+                    negatives = negatives + 1
+                end
+            end
+            local free = G:joker_base_capacity() + negatives - #(G.jokers or {})
+            for _ = 1, math.min(2, math.max(0, free)) do
                 local id = G:_pick_joker_id_shop_rarity_distribution(
                     function() return 1 end, "rif", nil, 1, false)
                 if not id then break end
-                if G:add_joker_by_def(id) then
+                if G:add_created_joker(id, "rif") then
                     mark_effect_applied(ctx)
                     mark_created_item(ctx)
                 end
@@ -920,7 +944,19 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(_, ctx)
             local order = { "Hearts", "Diamonds", "Spades", "Clubs" }
-            local has = fill_suits(ctx and ctx.cards, order, order)
+            -- Over the whole scoring hand, debuffed cards included: the reference reads a
+            -- normal card with `is_suit(suit, true)`, which ignores the debuff, but a Wild with
+            -- plain `is_suit`, which a debuffed Wild fails (`card.lua:3816-3827`).
+            local cards = {}
+            for _, card in ipairs((ctx and (ctx.scoring_hand or ctx.cards)) or {}) do
+                local data = card and (card.card_data or card)
+                local debuffed = type(card) == "table" and (card.debuffed_for_scoring == true
+                    or (card.is_debuffed and card:is_debuffed()))
+                if data and not (data.enhancement == "wild" and debuffed) then
+                    cards[#cards + 1] = card
+                end
+            end
+            local has = fill_suits(cards, order, order)
             if has.Hearts and has.Clubs and has.Diamonds and has.Spades then
                 mul_mult(ctx, 3)
             end
@@ -966,7 +1002,8 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(_, ctx)
             local cnt = count_full_deck()
-            add_mult(ctx, math.max(0, (52 - cnt) * 4))
+            local start = tonumber(G and G.STARTING_DECK_SIZE) or 52
+            add_mult(ctx, math.max(0, (start - cnt) * 4))
         end
     },
     j_drivers_license = {
@@ -1459,7 +1496,8 @@ local SPECIAL = {
                 local discarded = ctx.discarded_cards
                 local faceCount = 0
                 for n,c in ipairs(discarded) do
-                    if rank_is_face(c.rank) then
+                    -- `Card:is_face()` answers nothing for a debuffed card (`card.lua:965`).
+                    if rank_is_face(c.rank) and not discarded_card_is_debuffed(ctx, n, c) then
                         faceCount = faceCount + 1
                     end
                 end
@@ -1874,10 +1912,20 @@ local SPECIAL = {
         matches_trigger = function(_, e) return e == "on_hand_scored" end,
         apply_effect = function(j, ctx)
             if ctx.event_name == "on_hand_scored" then
-                -- A Wild Card fills Clubs first, since that is the suit this one needs.
-                local has = fill_suits(ctx.cards,
-                    { "Hearts", "Diamonds", "Spades", "Clubs" },
-                    { "Clubs", "Diamonds", "Spades", "Hearts" })
+                -- Unlike Flower Pot, a non-Wild card counts toward every suit it matches
+                -- (four independent `if`s in `reference/Balatro/card.lua`), so under Smeared
+                -- Joker a Club is a Spade too and a Club with any Heart or Diamond triggers.
+                -- Wild Cards then fill one empty suit each, Clubs first.
+                local has = {}
+                for _, card in ipairs(ctx.cards or {}) do
+                    local data = card and (card.card_data or card)
+                    if data and data.enhancement ~= "wild" then
+                        for _, s in ipairs({ "Hearts", "Diamonds", "Spades", "Clubs" }) do
+                            if is_suit(card, s) then has[s] = true end
+                        end
+                    end
+                end
+                fill_wild_suits(ctx.cards, { "Clubs", "Diamonds", "Spades", "Hearts" }, has)
                 if has.Clubs and (has.Hearts or has.Diamonds or has.Spades) then
                     mul_mult(ctx, 2)
                 end

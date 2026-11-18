@@ -177,8 +177,9 @@ EVALUATORS.chip_score = function(game, cond, data)
 end
 
 EVALUATORS.ante_up = function(_, cond, data)
-    -- The reference matches the ante exactly, since it fires once per ante-up.
-    return (tonumber(data and data.ante) or 0) >= (tonumber(cond.ante) or 0)
+    -- The reference matches the ante exactly, since it fires once per ante-up
+    -- (`common_events.lua:1524`, `args.ante == card.unlock_condition.ante`).
+    return (tonumber(data and data.ante) or 0) == (tonumber(cond.ante) or 0)
 end
 
 EVALUATORS.money = function(game, cond)
@@ -190,7 +191,9 @@ EVALUATORS.modify_deck = function(game, cond)
     local count = 0
     for _, c in ipairs(cards) do
         if cond.suit then
-            if c.suit == cond.suit then count = count + 1 end
+            -- `v.base.suit`: a Stone Card keeps its printed suit in the reference, where this
+            -- port parks it in `_stone_suit` (`common_events.lua:1396`).
+            if (c.suit or c._stone_suit) == cond.suit then count = count + 1 end
         elseif cond.enhancement then
             if c.enhancement == cond.enhancement then count = count + 1 end
         elseif cond.enhanced_tally then
@@ -217,21 +220,43 @@ end
 EVALUATORS.double_gold = function() return true end
 EVALUATORS.continue_game = function() return true end
 
-EVALUATORS.play_all_hearts = function(game)
-    -- Every Heart gone from both the deck and the hand. Stone cards have no suit and so
-    -- cannot hold one back (`common_events.lua:1344-1355`).
-    for _, c in ipairs(run_playing_cards(game)) do
-        if c.enhancement ~= "stone" and c.suit == "Hearts" then return false end
+EVALUATORS.play_all_hearts = function(game, _, data)
+    -- No Heart left in the draw pile or among the cards still held, checked while the hand
+    -- just played is on the table (`state_events.lua:521`, `common_events.lua:1342-1358`).
+    -- The cards being played and the discard pile do not count: the Hearts there are the ones
+    -- already played or thrown away. Stone cards cannot hold one back.
+    local played = {}
+    for _, c in ipairs((data and data.played) or {}) do
+        played[(type(c) == "table" and c.card_data) or c] = true
+    end
+    local function holds_heart(c)
+        return type(c) == "table" and not played[c] and c.enhancement ~= "stone" and c.suit == "Hearts"
+    end
+    local deck = game and game.deck
+    local hand = game and game.hand
+    for _, list in ipairs({ deck and deck.cards, hand and hand.cards, hand and hand._draw_queue }) do
+        for _, c in ipairs(list or {}) do
+            if holds_heart(c) then return false end
+        end
     end
     return true
 end
 
-EVALUATORS.hand_contents = function(_, cond, data)
+EVALUATORS.hand_contents = function(game, cond, data)
     local cards = card_data_list(data and data.cards)
     if cond.rule == "four_sevens_of_clubs" then
+        -- `get_id() == 7 and is_suit('Clubs')` (`common_events.lua:1534`): a Wild 7 counts, a
+        -- Smeared Spade 7 counts, a debuffed or Stone 7 does not.
+        local smeared = game and game.hasJoker and game:hasJoker("j_smeared")
         local tally = 0
-        for _, c in ipairs(cards) do
-            if tonumber(c.rank) == 7 and c.suit == "Clubs" then tally = tally + 1 end
+        for i, c in ipairs(cards) do
+            local node = data and data.cards and data.cards[i]
+            local debuffed = type(node) == "table" and node.is_debuffed and node:is_debuffed()
+            local clubs = c.enhancement == "wild"
+                or c.suit == "Clubs" or (smeared and c.suit == "Spades")
+            if tonumber(c.rank) == 7 and c.enhancement ~= "stone" and clubs and not debuffed then
+                tally = tally + 1
+            end
         end
         return tally >= 4
     end
@@ -303,7 +328,10 @@ end
 EVALUATORS.win_custom = function(game, cond)
     if cond.rule == "any_win" then return true end
     if cond.rule == "max_four_joker_slots" then
-        return (tonumber(game.joker_capacity) or 5) <= 4
+        -- Never more than four Jokers held at once this run (`G.GAME.max_jokers`, raised in
+        -- `CardArea:emplace`), not four slots.
+        local most = tonumber(game.run_max_jokers) or #(game.jokers or {})
+        return most <= 4
     end
     return false
 end

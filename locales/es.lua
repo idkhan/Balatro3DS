@@ -3,6 +3,7 @@ return {
     ["language.es"] = "Español",
     ["language.zh_CN"] = "Chino Simplificado",
     ["language.da"] = "Danés",
+    ["language.it"] = "Italiana",
     ["common.back"] = "Atrás",
     ["common.continue"] = "Continuar",
     ["common.none"] = "Ninguno",
@@ -86,6 +87,7 @@ return {
 
     ["round.won"] = "¡Ronda ganada!",
     ["round.reward.blind"] = "Recompensa de ciega",
+    ["round.reward.saved"] = "Te salvó el Sr. Huesos",
     ["round.reward.interest"] = "1 de interés por cada $5 (%d máx)",
     ["game_over.title"] = "Fin del Juego",
     ["game_over.reason"] = "Te quedaste sin manos antes de superar esta ciega.",

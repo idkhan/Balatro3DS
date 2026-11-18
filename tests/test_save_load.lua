@@ -368,8 +368,9 @@ end)
 suite.test("arriving at a stable state autosaves the run", function()
     local g = bootstrap.new_game(4101)
     g.STAGE = g.STAGES.RUN
+    -- Counted at the check-point itself; the card write follows later (`flush_pending_saves`).
     local writes = 0
-    g.write_run_snapshot = function() writes = writes + 1 return true end
+    g.queue_run_save = function() writes = writes + 1 end
 
     g.STATE = g.STATES.MENU
     g:set_state(g.STATES.BLIND_SELECT)

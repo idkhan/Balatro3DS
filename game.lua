@@ -33,6 +33,7 @@ local TicketStrip = require("ticket_strip")
 local Milestones = require("milestone_queue")
 local CardArt = require("card_art")
 local ModLoader = require("mod_loader")
+local SaveIO = require("save_io")
 
 --- Seconds between revealing each payout line on the round-win screen.
 ---
@@ -135,8 +136,25 @@ local function table_array_deep_copy(src)
     return out
 end
 
+--- Memo for `encode_lua_string` and `encode_string_key`. A run snapshot repeats the same few
+--- hundred strings (ids, suits, field names) on every save, and `%q` was a large share of the
+--- encode. Flushed whole when it grows past the cap, so stray one-off strings (seeds, profile
+--- names) cannot accumulate.
+local ENCODE_CACHE_CAP = 4096
+local encoded_strings, encoded_string_count = {}, 0
+local encoded_keys, encoded_key_count = {}, 0
+
 local function encode_lua_string(s)
-    return string.format("%q", tostring(s))
+    s = tostring(s)
+    local code = encoded_strings[s]
+    if code then return code end
+    code = string.format("%q", s)
+    if encoded_string_count >= ENCODE_CACHE_CAP then
+        encoded_strings, encoded_string_count = {}, 0
+    end
+    encoded_strings[s] = code
+    encoded_string_count = encoded_string_count + 1
+    return code
 end
 
 --- Identifier-shaped strings that are still reserved, so they cannot be emitted as a bare
@@ -151,36 +169,90 @@ local LUA_KEYWORDS = {
     ["until"] = true, ["while"] = true,
 }
 
-local function serialize_lua_value(v)
+--- `key=` for a string key: bare when it is a usable identifier, bracketed otherwise.
+local function encode_string_key(k)
+    local code = encoded_keys[k]
+    if code then return code end
+    if k:match("^[%a_][%w_]*$") and not LUA_KEYWORDS[k] then
+        code = k .. "="
+    else
+        code = "[" .. encode_lua_string(k) .. "]="
+    end
+    if encoded_key_count >= ENCODE_CACHE_CAP then
+        encoded_keys, encoded_key_count = {}, 0
+    end
+    encoded_keys[k] = code
+    encoded_key_count = encoded_key_count + 1
+    return code
+end
+
+local function encode_scalar(v)
     local tv = type(v)
-    if tv == "nil" then return "nil" end
     if tv == "number" then
         if v ~= v or v == math.huge or v == -math.huge then
             return "0"
         end
         return tostring(v)
     end
-    if tv == "boolean" then return v and "true" or "false" end
     if tv == "string" then return encode_lua_string(v) end
-    if tv ~= "table" then return "nil" end
+    if tv == "boolean" then return v and "true" or "false" end
+    return "nil"
+end
 
-    local parts = {}
-    local n = #v
-    for i = 1, n do
-        parts[#parts + 1] = serialize_lua_value(v[i])
+local serialize_lua_value
+
+--- Append the encoding of `v` to `buf` after index `n`; returns the new length. Everything
+--- goes into one buffer and is joined once at the end. The previous encoder joined a table per
+--- nesting level, so a deep snapshot was copied once per level -- issue #94 measured 70-90 ms
+--- per run save for that on an Old 3DS. The output is byte-for-byte what it produced.
+local function serialize_into(buf, n, v)
+    if type(v) ~= "table" then
+        n = n + 1
+        buf[n] = encode_scalar(v)
+        return n
+    end
+
+    n = n + 1
+    buf[n] = "{"
+    local first = true
+    local len = #v
+    for i = 1, len do
+        if first then
+            first = false
+        else
+            n = n + 1
+            buf[n] = ","
+        end
+        n = serialize_into(buf, n, v[i])
     end
     for k, val in pairs(v) do
-        if not (type(k) == "number" and k >= 1 and k <= n and math.floor(k) == k) then
-            local key_expr
-            if type(k) == "string" and k:match("^[%a_][%w_]*$") and not LUA_KEYWORDS[k] then
-                key_expr = k
+        local tk = type(k)
+        if not (tk == "number" and k >= 1 and k <= len and math.floor(k) == k) then
+            if first then
+                first = false
             else
-                key_expr = "[" .. serialize_lua_value(k) .. "]"
+                n = n + 1
+                buf[n] = ","
             end
-            parts[#parts + 1] = key_expr .. "=" .. serialize_lua_value(val)
+            n = n + 1
+            if tk == "string" then
+                buf[n] = encode_string_key(k)
+            else
+                buf[n] = "[" .. serialize_lua_value(k) .. "]="
+            end
+            n = serialize_into(buf, n, val)
         end
     end
-    return "{" .. table.concat(parts, ",") .. "}"
+    n = n + 1
+    buf[n] = "}"
+    return n
+end
+
+serialize_lua_value = function(v)
+    if type(v) ~= "table" then return encode_scalar(v) end
+    local buf = {}
+    local n = serialize_into(buf, 0, v)
+    return table.concat(buf, "", 1, n)
 end
 
 ---@param seed string|nil Optional eight-character run seed.
@@ -941,6 +1013,11 @@ end
 
 --- Every queued draw has landed: the hand is whole again.
 function Game:boss_on_hand_deal_complete()
+    -- The Fish only turns over the draw that follows a play. Its count is a hand's worth, but
+    -- a play draws back just the cards it spent, so the remainder flipped the next draws too,
+    -- discards included (issue #80). The reference clears `prepped` once the draw lands
+    -- (`blind.lua`, `Blind:drawn_to_hand`).
+    if self.boss_runtime then self.boss_runtime.fish_face_down_draws = 0 end
     self:_boss_select_forced_card_if_needed()
     local drawn = self._cards_drawn_this_deal
     self._cards_drawn_this_deal = nil
@@ -1011,6 +1088,10 @@ function Game:boss_after_discard_or_play(reason)
     if reason == "play" and boss_id == "bl_fish" then
         self.boss_runtime.fish_face_down_draws = self:get_effective_hand_size_limit()
         self:notify_boss_effect_triggered({ reason = "fish_after_play" })
+    elseif boss_id == "bl_fish" then
+        -- A discard's draw is face up, even if the play's draw found the deck empty and so
+        -- never reached its deal-complete.
+        self.boss_runtime.fish_face_down_draws = 0
     end
 end
 
@@ -1125,7 +1206,8 @@ function Game:boss_apply_on_hand_submitted(selected_nodes)
     if boss_id == "bl_tooth" then
         local n = type(selected_nodes) == "table" and #selected_nodes or 0
         local before = tonumber(self.money) or 0
-        self.money = tonumber(self.money) or 0 - n
+        -- No floor: the reference keeps taking $1 a card into debt (`ease_dollars(-1)`).
+        self.money = before - n
         if (tonumber(self.money) or 0) < before then
             self:notify_boss_effect_triggered({ reason = "tooth_money_loss", amount = before - (tonumber(self.money) or 0) })
         end
@@ -2082,7 +2164,10 @@ function Game:sync_backdrop_state(state_id)
     if name then Backdrop.set_state(name) end
 end
 
-function Game:set_state(state_id)
+---@param state_id integer
+---@param opts? { skip_autosave?: boolean } `skip_autosave` for a caller that check-points
+---   itself once it is done (the blind deal) or knows nothing changed (leaving pause).
+function Game:set_state(state_id, opts)
     local prev = self.STATE
     local menu = self.STATES and self.STATES.MENU
     if menu and prev == menu and state_id ~= menu then
@@ -2095,13 +2180,18 @@ function Game:set_state(state_id)
     -- Check-point on arrival at a stable state, the way the reference saves on every state
     -- transition. Without this the only saves were deck-select, save-and-quit and victory,
     -- so closing the lid mid-run lost the run.
-    if prev ~= state_id and self.autosave_run then
+    if prev ~= state_id and self.autosave_run and not (opts and opts.skip_autosave) then
         for name in pairs(AUTOSAVE_STATES) do
             if self.STATES and state_id == self.STATES[name] then
                 self:autosave_run()
                 break
             end
         end
+    end
+    -- The end of a run is where deferred writes stop waiting: nothing after it check-points.
+    if prev ~= state_id and self.STATES
+        and (state_id == self.STATES.GAME_OVER or state_id == self.STATES.YOU_WIN) then
+        self:flush_pending_saves()
     end
 end
 
@@ -2982,7 +3072,7 @@ function Game:enter_pause_menu()
     -- Load this tiny sheet as the pause modal opens, before its Controls page can draw.
     -- CTR image construction reads from SD and can stall a visible frame.
     self:warm_atlases({ "gamepad_ui_3ds" })
-    self.dragging = nil
+    self:drop_drag()
     self._pause_save_error = nil
     self._pause_continue_rect = nil
     self._pause_new_run_rect = nil
@@ -3010,6 +3100,15 @@ function Game:enter_pause_menu()
     self._pause_joker_display_rect = nil
     self._pause_skip_tutorial_rect = nil
     self._pause_focus_index = 1
+    -- Check-point on the way in rather than on the way out. Leaving pause used to re-enter
+    -- the previous state, which is an autosave state, so every unpause cost a full save
+    -- (~140 ms, or over a second on a card in the slow state of issue #94). Saving here
+    -- captures the same moment, at a point where a stall reads as the menu opening, and lets
+    -- anything still deferred go out with it.
+    if self.STATE ~= self.STATES.PAUSED then
+        self:autosave_run()
+    end
+    self:flush_pending_saves()
     self:set_state(self.STATES.PAUSED)
     return true
 end
@@ -3440,7 +3539,8 @@ function Game:exit_pause_menu()
     self._pause_controls_reset_rect = nil
     self._pause_speed_rects = {}
     self:_clear_pause_sliders()
-    self:set_state(resume)
+    -- Already check-pointed on the way into pause; nothing in the run moved since.
+    self:set_state(resume, { skip_autosave = true })
     return true
 end
 
@@ -3552,7 +3652,7 @@ function Game:save_active_profile()
         names[i] = self:get_profile_name(i)
     end
     local encoded = "return " .. serialize_lua_value({ profile = self:get_profile_id(), names = names })
-    local ok = love.filesystem.write(ACTIVE_PROFILE_PATH, encoded)
+    local ok = SaveIO.write(ACTIVE_PROFILE_PATH, encoded)
     return ok and true or false
 end
 
@@ -3619,8 +3719,9 @@ function Game:delete_profile(profile_id)
     end
 
     if love and love.filesystem and love.filesystem.remove then
-        love.filesystem.remove(self:settings_path_for_profile(id))
-        love.filesystem.remove(self:run_save_path_for_profile(id))
+        self:drop_pending_run_save(self:run_save_path_for_profile(id))
+        SaveIO.remove(self:settings_path_for_profile(id))
+        SaveIO.remove(self:run_save_path_for_profile(id))
         -- The run save just went away by a route `clear_run_snapshot` never saw.
         self:forget_saved_run()
     end
@@ -3665,7 +3766,7 @@ function Game:write_profile_settings(profile_id, settings)
     end
     love.filesystem.createDirectory(RUN_SAVE_DIR)
     local encoded = "return " .. serialize_lua_value(self:normalize_settings(settings))
-    local ok = love.filesystem.write(self:settings_path_for_profile(id), encoded)
+    local ok = SaveIO.write(self:settings_path_for_profile(id), encoded)
     return ok and true or false
 end
 
@@ -3975,13 +4076,32 @@ function Game:set_language(language)
     return true
 end
 
-function Game:save_settings()
+--- Whether a settings write requested now should wait for the next check-point instead.
+---
+--- Mid-run the profile is rewritten by discoveries, unlocks and career stats, each of which
+--- used to write the whole file on the spot: issue #94 measured 203-222 ms per new item, and
+--- opening a pack on a young profile can discover several in a row. During play those writes
+--- are coalesced and go out with the next run check-point (`flush_pending_saves`), or on
+--- pause, the end of the run, the main menu or quit. On the pause menu and outside a run --
+--- where the player is changing settings and expects them kept -- the write is immediate.
+function Game:should_defer_settings_save()
+    return self.STAGES ~= nil and self.STAGE == self.STAGES.RUN
+        and self.STATES ~= nil and self.STATE ~= self.STATES.PAUSED
+end
+
+---@param opts? { now?: boolean } `now` writes even when a write would normally be deferred.
+function Game:save_settings(opts)
+    if not (opts and opts.now) and self:should_defer_settings_save() then
+        self._settings_save_pending = true
+        return true
+    end
+    self._settings_save_pending = nil
     if not (love and love.filesystem and love.filesystem.write and love.filesystem.createDirectory) then
         return false
     end
     love.filesystem.createDirectory(RUN_SAVE_DIR)
     local encoded = "return " .. serialize_lua_value(self:snapshot_settings())
-    local ok, err = love.filesystem.write(self:settings_save_path(), encoded)
+    local ok, err = SaveIO.write(self:settings_save_path(), encoded)
     if not ok then
         return false, tostring(err or "write_failed")
     end
@@ -4823,7 +4943,7 @@ function Game:enter_deck_view()
     if self._deck_view_open or not self:can_open_deck_view() then return false end
     -- One overlay at a time: both are modal and both own the touch screen.
     self:exit_run_info()
-    self.dragging = nil
+    self:drop_drag()
     self.active_tooltip_card = nil
     self._deck_view_open = true
     DeckViewUI.build(self)
@@ -4832,7 +4952,7 @@ end
 
 function Game:exit_deck_view()
     if not self._deck_view_open then return false end
-    self.dragging = nil
+    self:drop_drag()
     self.active_tooltip_card = nil
     DeckViewUI.destroy(self)
     self._deck_view_open = false
@@ -4855,7 +4975,7 @@ end
 function Game:enter_run_info()
     if self._run_info_open or not self:can_open_deck_view() then return false end
     self:exit_deck_view()
-    self.dragging = nil
+    self:drop_drag()
     self.active_tooltip_card = nil
     self._run_info_open = true
     return true
@@ -4922,10 +5042,16 @@ function Game:forget_saved_run()
 end
 
 function Game:clear_run_snapshot()
+    -- A deferred autosave landing after this would bring a finished run back. The memo
+    -- counted that save as written, so it has to ask the card again.
+    if self._pending_run_save then
+        self:drop_pending_run_save()
+        self:forget_saved_run()
+    end
     if not (love and love.filesystem and love.filesystem.remove) then return false end
     if not self:has_saved_run() then return true end
     local path = self:run_save_path()
-    local removed = love.filesystem.remove(path) and true or false
+    local removed = SaveIO.remove(path)
     self:note_saved_run(path, not removed)
     return removed
 end
@@ -5026,6 +5152,8 @@ function Game:build_run_snapshot()
         current_blind_reward = tonumber(self.current_blind_reward) or 0,
         current_blind_name = tostring(self.current_blind_name or "Small Blind"),
         current_boss_blind_id = self.current_boss_blind_id,
+        starting_deck_size = tonumber(self.STARTING_DECK_SIZE),
+        run_max_jokers = tonumber(self.run_max_jokers),
         bosses_used_this_cycle = self:serialize_bosses_used_cycle(),
         _last_completed_blind_was_boss = self._last_completed_blind_was_boss == true,
         hand_size_delta_spectral = tonumber(self.hand_size_delta_spectral) or 0,
@@ -5097,15 +5225,15 @@ function Game:build_run_snapshot()
     }
 end
 
-function Game:write_run_snapshot(snapshot)
-    if type(snapshot) ~= "table" then return false, "invalid_snapshot" end
+--- Write an already-encoded run save to `path` now.
+---@return boolean ok
+---@return string|nil err
+function Game:write_encoded_run_save(path, encoded)
     if not (love and love.filesystem and love.filesystem.write and love.filesystem.createDirectory) then
         return false, "filesystem_unavailable"
     end
     love.filesystem.createDirectory(RUN_SAVE_DIR)
-    local encoded = "return " .. serialize_lua_value(snapshot)
-    local path = self:run_save_path()
-    local ok, err = love.filesystem.write(path, encoded)
+    local ok, err = SaveIO.write(path, encoded)
     if not ok then
         return false, tostring(err or "write_failed")
     end
@@ -5113,7 +5241,77 @@ function Game:write_run_snapshot(snapshot)
     return true
 end
 
+--- Write `snapshot` as the active profile's run save, now. Supersedes any deferred autosave,
+--- which holds an older moment and must not land on top of this one.
+function Game:write_run_snapshot(snapshot)
+    if type(snapshot) ~= "table" then return false, "invalid_snapshot" end
+    local path = self:run_save_path()
+    self:drop_pending_run_save(path)
+    return self:write_encoded_run_save(path, "return " .. serialize_lua_value(snapshot))
+end
+
+--- How long a check-point's write waits after the check-point itself. The state change that
+--- triggers an autosave also switches the music, and opening the new track's decoder already
+--- costs that frame ~0.3 s on an Old 3DS (issue #94). Stacking the card write on the same
+--- frame doubled the stall and starved the audio stream; a short delay puts it on a frame of
+--- its own. The snapshot is still taken at the check-point, so what lands is that moment.
+local AUTOSAVE_WRITE_DELAY = 0.6
+
+--- Hold an encoded run save for `AUTOSAVE_WRITE_DELAY`. A newer request replaces an older one,
+--- so a burst of check-points writes once.
+function Game:queue_run_save(path, encoded)
+    self._pending_run_save = { path = path, data = encoded }
+    self._pending_save_timer = AUTOSAVE_WRITE_DELAY
+    -- The file is as good as there: Continue and the like should see it already.
+    self:note_saved_run(path, true)
+end
+
+--- Forget a deferred run save without writing it. With `path`, only one aimed at that file.
+function Game:drop_pending_run_save(path)
+    local pending = self._pending_run_save
+    if pending and (path == nil or pending.path == path) then
+        self._pending_run_save = nil
+        self._pending_save_timer = nil
+    end
+end
+
+---@return boolean pending Whether a run save or settings write is waiting to go out.
+function Game:has_pending_saves()
+    return self._pending_run_save ~= nil or self._settings_save_pending == true
+end
+
+--- Count down a deferred run save on wall time. Called from `Game:update` ahead of its
+--- early-outs, so a screen wipe cannot hold a save back.
+function Game:update_pending_saves(real_dt)
+    local t = self._pending_save_timer
+    if not t then return end
+    t = t - (tonumber(real_dt) or 0)
+    if t > 0 then
+        self._pending_save_timer = t
+        return
+    end
+    self:flush_pending_saves()
+end
+
+--- Write everything deferred, now: the held run save, then a coalesced settings write.
+---@return boolean ok false when a write failed.
+function Game:flush_pending_saves()
+    local ok = true
+    local pending = self._pending_run_save
+    self._pending_run_save = nil
+    self._pending_save_timer = nil
+    if pending then
+        ok = self:write_encoded_run_save(pending.path, pending.data) and ok
+    end
+    if self._settings_save_pending then
+        ok = (self:save_settings({ now = true }) == true) and ok
+    end
+    return ok
+end
+
 function Game:read_run_snapshot()
+    -- The newest check-point may still be waiting on its timer.
+    if self._pending_run_save then self:flush_pending_saves() end
     if not self:has_saved_run() then return nil, "missing" end
     if not (love and love.filesystem and love.filesystem.load) then
         return nil, "filesystem_unavailable"
@@ -5157,7 +5355,7 @@ function Game:load_run_snapshot(snapshot)
         self.hand:clear()
     end
     self.pending_discard = {}
-    self.dragging = nil
+    self:drop_drag()
     self.active_tooltip_card = nil
     self.active_tooltip_joker = nil
     self.active_tooltip_consumable_index = nil
@@ -5223,6 +5421,10 @@ function Game:load_run_snapshot(snapshot)
     self.current_blind_reward = tonumber(snapshot.current_blind_reward) or 0
     self.current_blind_name = snapshot.current_blind_name or "Small Blind"
     self.current_boss_blind_id = snapshot.current_boss_blind_id
+    -- Older saves did not record it; 52 is what they were measured against.
+    self.STARTING_DECK_SIZE = tonumber(snapshot.starting_deck_size) or 52
+    -- Restoring re-adds the Jokers, which raises this as it goes; the saved value is the truth.
+    self._restored_run_max_jokers = tonumber(snapshot.run_max_jokers)
     self:apply_bosses_used_cycle(snapshot.bosses_used_this_cycle)
     self._last_completed_blind_was_boss = snapshot._last_completed_blind_was_boss == true
     self.hand_size_delta_spectral = tonumber(snapshot.hand_size_delta_spectral) or 0
@@ -5444,6 +5646,22 @@ function Game:load_run_snapshot(snapshot)
         self:boss_on_hand_refilled(true)
     end
 
+    -- The same gap for an Arcana or Spectral Pack. Its check-point is taken as the pack opens,
+    -- before the burst deals the preview hand, and a restore skips the burst -- so a run
+    -- closed mid-pack came back to a pack whose hand-targeting cards had no hand to target
+    -- (issue #80). Deal it the way `_release_booster_pack` does.
+    local sess = self.booster_session
+    if resume_state == self.STATES.OPEN_BOOSTER and sess and sess.hand_for_tarot and self.hand
+        and #(self.hand.cards or {}) == 0 and #(self.hand._draw_queue or {}) == 0
+        and self.deck and not self.deck:empty() then
+        self.hand:fill_from_deck()
+        self:init_booster_gamepad_nav()
+    end
+
+    -- Older saves did not keep it; the row as restored is the best that can be said.
+    self.run_max_jokers = math.max(tonumber(self._restored_run_max_jokers) or 0, #(self.jokers or {}))
+    self._restored_run_max_jokers = nil
+
     self._restoring_run_snapshot = nil
     return true
 end
@@ -5529,17 +5747,23 @@ function Game:start_new_run_from_main_menu()
     end)
 end
 
---- Write a run snapshot if one makes sense right now. Quiet by design: a failed autosave
+--- Check-point the run if one makes sense right now. Quiet by design: a failed autosave
 --- must never interrupt play, and the next checkpoint will try again.
----@return boolean written
+---
+--- The snapshot is taken and encoded here, so the save describes this exact moment; only the
+--- card write is deferred (`queue_run_save`). It goes out `AUTOSAVE_WRITE_DELAY` later, or
+--- sooner if the game pauses, ends the run, leaves for the menu or quits.
+---@return boolean queued
 function Game:autosave_run()
     if self.STAGE ~= self.STAGES.RUN then return false end
     -- Loading a run replays state transitions; do not write back over the file mid-restore.
     if self._restoring_run_snapshot == true then return false end
     if self:is_hand_scoring_active() then return false end
     if type(self.build_run_snapshot) ~= "function" then return false end
-    local ok = self:write_run_snapshot(self:build_run_snapshot())
-    return ok == true
+    local snapshot = self:build_run_snapshot()
+    if type(snapshot) ~= "table" then return false end
+    self:queue_run_save(self:run_save_path(), "return " .. serialize_lua_value(snapshot))
+    return true
 end
 
 function Game:enter_main_menu_deck_select()
@@ -5582,13 +5806,19 @@ end
 
 function Game:get_base_requirement_for_ante(ante)
     local base_table = self.BASE_REQUIREMENT_BY_ANTE or {}
-    local requested_ante = math.max(1, tonumber(ante) or 1)
     local stake_offset = tonumber(self._stake_ante_mult) or 0
     local max_ante = 8
     local deckMult = tonumber(self.deck_ante_scaling) or 1
     if self.deck_ante_scaling == nil and self._deck_special == "plasma" then
         deckMult = 2
     end
+    -- Below Ante 1 (Hieroglyph, Petroglyph) the base is a flat 100 at every stake
+    -- (`misc_functions.lua`, `get_blind_amount`: `if ante < 1 then return 100 end`), so the
+    -- blinds read 100/150/200. Clamping to Ante 1 gave them Ante 1's targets (issue #80).
+    if (tonumber(ante) or 1) < 1 then
+        return 100 * deckMult
+    end
+    local requested_ante = math.max(1, tonumber(ante) or 1)
     local table_ante = requested_ante + (max_ante + 1) * stake_offset
     if base_table[table_ante] and requested_ante <= max_ante then
         return tonumber(base_table[table_ante] * deckMult) or 0
@@ -5726,7 +5956,12 @@ function Game:get_boss_blind_prototype()
     local key = self.current_boss_blind_id
     if not key or not self.P_BLINDS or not self.P_BLINDS[key] then
         key = self:roll_boss_blind()
-    else
+    elseif not self._last_completed_blind_was_boss then
+        -- Not for a Boss just beaten: the ante has already gone up by the time the cash-out
+        -- and shop ask after it, and on Ante 7 -> 8 (no ordinary bosses) or 8 -> 9 (no
+        -- showdowns) the check below would swap the beaten Boss for another one on screen,
+        -- and spend that one's place in the cycle doing it (issue #80). The next ante's
+        -- Boss is rolled once the shop is left.
         local proto = self.P_BLINDS[key]
         if not self:is_boss_blind_allowed_for_ante(proto, self.ante) then
             key = self:roll_boss_blind({ exclude_current = true })
@@ -6085,7 +6320,11 @@ function Game:draw()
     -- thing on screen that says the card is chosen - opening a drawer read as the game
     -- deselecting the hand. The row still covers the rest of the fan, which is the point of
     -- pulling it down; the selection comes out on top of it.
-    local rows_pulled = (self.jokers_on_bottom == true) or (self.consumables_on_bottom == true)
+    -- Only while playing a hand. In a pack the hand sits higher, level with the pulled-down
+    -- row itself, so a lifted card would cover the very Jokers and consumables the player
+    -- pulled down to look at (issue #80).
+    local rows_pulled = self.STATE == self.STATES.SELECTING_HAND
+        and ((self.jokers_on_bottom == true) or (self.consumables_on_bottom == true))
     if self.hand and self.hand.card_nodes and self.STATE ~= self.STATES.SHOP then
         for _, hn in ipairs(self.hand.card_nodes) do
             if hn and hn.draw and not (rows_pulled and hn.selected) then hn:draw() end
@@ -6538,12 +6777,14 @@ function Game:hand_ready_for_tarot_selection()
     return true
 end
 
---- Spectrals that destroy random cards held in hand. They need a dealt hand, and more than one
---- card in it, so they cannot be spent in the shop for their payout alone (`card.lua`,
---- `can_use_consumeable`).
+--- Spectrals that work on the cards held in hand: the four that destroy random cards, and Sigil
+--- and Ouija, which convert the whole hand. They need a dealt hand, and more than one card in
+--- it, so they cannot be spent in the shop for their payout alone -- or, for the last two, for
+--- nothing at all (`card.lua`, `can_use_consumeable`).
 local HAND_DESTROYING_SPECTRALS = {
     spectral_familiar = true, spectral_grim = true,
     spectral_incantation = true, spectral_immolate = true,
+    spectral_sigil = true, spectral_ouija = true,
 }
 
 ---@return boolean false when `sid` destroys cards in hand and there is no hand to destroy from
@@ -7301,14 +7542,14 @@ function Game:_apply_consumable_effect(c)
             local jid = self:_pick_joker_id_shop_rarity_distribution(
                 function() return 1 end, "wra", nil, 3, false)
             if jid and self:joker_has_room_for_new("base") then
-                self:add_joker_by_def(jid)
+                self:add_created_joker(jid, "wra")
             end
             self.money = 0
         elseif id == "spectral_soul" then
             local jid = self:_pick_joker_id_shop_rarity_distribution(
                 function() return 1 end, "sou", nil, 4, true)
             if jid and self:joker_has_room_for_new("base") then
-                self:add_joker_by_def(jid)
+                self:add_created_joker(jid, "sou")
             end
         elseif id == "spectral_sigil" then
             if hand and hand.card_nodes and #hand.card_nodes > 0 then
@@ -7582,7 +7823,7 @@ function Game:_apply_consumable_effect(c)
     elseif id == "tarot_judgement" then
         local jid = self:_pick_joker_id_shop_rarity_distribution(
             function() return 1 end, "jud")
-        if jid then self:add_joker_by_def(jid) end
+        if jid then self:add_created_joker(jid, "jud") end
     end
 
     self:record_consumable_use_id(id)
@@ -9042,7 +9283,7 @@ end
 
 --- Tear down run objects and textures before returning to the main menu.
 function Game:clear_run_assets_for_main_menu()
-    self.dragging = nil
+    self:drop_drag()
     self:clear_bottom_tooltips()
 
     if self.booster_session then
@@ -9172,6 +9413,8 @@ function Game:clear_run_assets_for_main_menu()
 end
 
 function Game:enter_main_menu()
+    -- Anything deferred belongs to the run being left, and to this profile.
+    self:flush_pending_saves()
     self.STAGE = self.STAGES.MAIN_MENU
     self._menu_sub_state = "main"
     self._menu_page = "main"
@@ -9801,6 +10044,8 @@ function Game:update(dt, real_dt)
     -- lift. While it holds the frame it is running the run build a chunk at a time and nothing
     -- underneath should animate or read half-built state -- the reference holds
     -- `G.SETTINGS.paused` across the same span (`button_callbacks.lua:2959`).
+    -- Ahead of every early-out below: a deferred save must go out on time under a wipe too.
+    self:update_pending_saves(real_dt)
     if ScreenWipe.update(self, real_dt) then
         return
     end
@@ -10849,6 +11094,8 @@ function Game:add_joker_by_def(def_id, create_params, arrive_from)
     self:apply_joker_shared_picks_to_joker(j)
     table.insert(self.jokers, j)
     self:add(j)
+    -- The most Jokers held at once this run, for Invisible Joker's unlock (`G.GAME.max_jokers`).
+    if #self.jokers > (tonumber(self.run_max_jokers) or 0) then self.run_max_jokers = #self.jokers end
 
     self:refresh_joker_capacity_from_negatives()
 
@@ -11670,7 +11917,10 @@ function Game:prepare_hand_for_new_blind()
     -- No sting here: the reference opens a blind with nothing but the card-deal ladder.
     -- The whoosh1+introPad1 pair that used to play was mis-mapped from `Game:splash_screen`
     -- (reference `game.lua:1435-1436`); see `reference/review/03-cue-map.md`.
-    self:set_state(self.STATES.SELECTING_HAND)
+    -- No check-point on arrival: it would describe a blind with no hand dealt yet, and the
+    -- autosave at the end of this function replaces it anyway. Building and encoding it was
+    -- a whole save's worth of work thrown away on every blind start (issue #94).
+    self:set_state(self.STATES.SELECTING_HAND, { skip_autosave = true })
     if self.deck and self.deck.shuffle then
         self.deck:shuffle("nr" .. tostring(tonumber(self.ante) or 1))
     end
@@ -11694,11 +11944,10 @@ function Game:prepare_hand_for_new_blind()
 
     self:emit_joker_event("on_round_begin", {})
 
-    -- `set_state` above check-pointed the run before the deal was queued, so the snapshot on
-    -- disk described a blind with no hand and no draw queue -- and nothing refills a hand on
-    -- resume, so continuing that save landed the player in SELECTING_HAND with an empty
-    -- playfield. Overwrite it now that the deal exists. (`load_run_snapshot` also repairs the
-    -- saves already written this way.)
+    -- The blind's check-point, taken now that the deal exists. A snapshot from the moment of
+    -- `set_state` above described a blind with no hand and no draw queue -- and nothing refills
+    -- a hand on resume, so continuing it landed the player in SELECTING_HAND with an empty
+    -- playfield. (`load_run_snapshot` also repairs the saves older builds wrote that way.)
     self:autosave_run()
 end
 
@@ -11764,6 +12013,7 @@ function Game:initialize_run_loop()
     self.consumables = {}
     self.tags = {}
     self.last_consumable_use_id = nil
+    self.run_max_jokers = 0
     G:apply_deck_config(G._pending_deck_id   or "b_red")
     G:apply_stake_config(G._pending_stake_id or "stake_white")
     G:apply_pending_challenge()
@@ -11771,6 +12021,10 @@ function Game:initialize_run_loop()
         self.deck:assign_reference_sort_ids()
         self.deck:shuffle("shuffle")
     end
+    -- What Erosion measures shrinkage against: the deck this run actually started with --
+    -- 40 on Abandoned Deck, whatever a challenge deals -- not a fixed 52, which handed
+    -- Abandoned Deck +48 Mult on an untouched deck (`G.GAME.starting_deck_size`, issue #80).
+    self.STARTING_DECK_SIZE = self:count_cards_in_full_deck()
     self:reset_ante_joker_shared_picks()
     self:init_shop_offer_queue()
     self:roll_boss_blind()
@@ -12537,8 +12791,9 @@ function Game:try_boss_reroll_press(x, y)
     if self._blind_slide then return false end
     local r = self._boss_reroll_btn_rect
     if not r or not self:_point_in_rect_simple(x, y, r) then return false end
+    -- Any time on blind select, as the reference's Reroll Boss button is: not only once the
+    -- Small and Big Blinds are behind the player (issue #80).
     if not (self:has_voucher("v_directors_cut") or self:has_voucher("v_retcon")) then return true end
-    if tonumber(self.selected_blind_index) ~= 3 then return true end
     if not self:can_afford_price(10) then return true end
     if self:has_voucher("v_directors_cut") and not self:has_voucher("v_retcon") then
         if (tonumber(self.boss_rerolls_used_this_ante) or 0) >= 1 then return true end
@@ -12574,6 +12829,19 @@ function Game:get_joker_edition_rates()
     end
 
     return rates
+end
+
+--- Add a Joker that comes into being from an effect (Riff-Raff, Judgement, Wraith, The Soul,
+--- Top-up Tag). The reference makes all of these with `create_card('Joker', ...)`, which polls
+--- an edition on `'edi'..key_append..ante` like a shop card does, so they can arrive Foil,
+--- Holographic, Polychrome or Negative (`functions/common_events.lua`, `create_card`).
+---@param def_id string
+---@param append string the reference's key_append for this source ("rif", "jud", ...)
+---@return boolean added
+function Game:add_created_joker(def_id, append)
+    local edition = self:roll_joker_offer_edition(append)
+    if edition == "base" then edition = nil end
+    return self:add_joker_by_def(def_id, edition and { edition = edition } or nil) and true or false
 end
 
 function Game:roll_joker_offer_edition(append)
@@ -14224,7 +14492,7 @@ function Game:end_booster_session()
     end
     self:_booster_destroy_choice_nodes()
     self.booster_session = nil
-    self.dragging = nil
+    self:drop_drag()
     self:reset_gamepad_nav()
     local return_state = self._booster_return_state or self.STATES.SHOP
     local return_rect = self._booster_return_focus_rect
@@ -14348,7 +14616,10 @@ function Game:pack_consumable_can_apply(c)
     end
     if c.spawn_joker and not self:joker_has_room_for_new("base") then return false end
     if c.wheel_of_fortune then
-        if not self.jokers or #self.jokers < 1 then return false end
+        -- Same rule as an owned Wheel: it needs a Joker with no edition to land on, not just
+        -- any Joker (`card.lua`, `can_use_consumeable`). Bought-and-used from the shop or picked
+        -- from a pack it was spending itself on nothing (issue #80).
+        if #self:editionless_jokers() < 1 then return false end
     end
 
     if self:booster_tarot_needs_hand(c) then
@@ -14487,6 +14758,35 @@ function Game:apply_joker_sticker_round_end()
     end
 end
 
+--- A Boss is behind the player: run the end-of-ante bookkeeping. Shared by a won Boss and
+--- one Mr. Bones survived -- the reference's rescue only cancels the game over, and
+--- `end_round` then raises the ante as for any Boss (issue #80).
+function Game:advance_ante_after_boss()
+    -- The ante rises the moment the Boss falls, not when the shop is left
+    -- (`state_events.lua:248`: the eternal/joker-slot modifiers, then `ease_ante(1)`,
+    -- all inside `end_round` before ROUND_EVAL). `ease_ante` is what rings the
+    -- highlight2/generic1 pair, so the cue belongs to the win, not to the shop exit.
+    -- The challenge modifiers compare against the ante that just ended, so they run
+    -- before the increment.
+    local mods = self.challenge_modifiers or {}
+    if tonumber(mods.set_eternal_ante) == (tonumber(self.ante) or 1) then
+        for _, joker in ipairs(self.jokers or {}) do
+            if joker then joker.eternal = true end
+        end
+    end
+    if tonumber(mods.set_joker_slots_ante) == (tonumber(self.ante) or 1) then
+        self.challenge_joker_slots_disabled = true
+    end
+    self.ante = (tonumber(self.ante) or 1) + 1
+    self:emit_joker_event("on_ante_change", { ante_change = 1, ante_end = true })
+    self:reset_ante_joker_shared_picks()
+    self:check_unlock("ante_up", { ante = self.ante })
+    self:check_voucher_unlocks({ ante = self.ante, hand_size = self:get_effective_hand_size_limit() })
+    -- The Ox's target is re-fixed only here, as a Boss blind falls
+    -- (`state_events.lua:132-138`).
+    self:freeze_most_played_hand()
+end
+
 function Game:enter_round_win_after_blind()
     -- `Blind:defeat` flips the Jokers back before the round even ends (`blind.lua:338`), so
     -- Amber Acorn's flip does not follow the player into the cash out and the shop.
@@ -14496,31 +14796,12 @@ function Game:enter_round_win_after_blind()
     self.discardsUnused = math.max(0, tonumber(self.discardsUnused) or 0)
         + math.max(0, tonumber(self.discards) or 0)
     if tonumber(self.current_blind_index) == 3 then
-        self.boss_runtime = self.boss_runtime or {}
-        self.boss_runtime.clear_card_debuffs_after_win = true
-        -- The ante rises the moment the Boss falls, not when the shop is left
-        -- (`state_events.lua:248`: the eternal/joker-slot modifiers, then `ease_ante(1)`,
-        -- all inside `end_round` before ROUND_EVAL). `ease_ante` is what rings the
-        -- highlight2/generic1 pair, so the cue belongs to the win, not to the shop exit.
-        -- The challenge modifiers compare against the ante that just ended, so they run
-        -- before the increment.
-        local mods = self.challenge_modifiers or {}
-        if tonumber(mods.set_eternal_ante) == (tonumber(self.ante) or 1) then
-            for _, joker in ipairs(self.jokers or {}) do
-                if joker then joker.eternal = true end
-            end
-        end
-        if tonumber(mods.set_joker_slots_ante) == (tonumber(self.ante) or 1) then
-            self.challenge_joker_slots_disabled = true
-        end
-        self.ante = (tonumber(self.ante) or 1) + 1
-        self:emit_joker_event("on_ante_change", { ante_change = 1, ante_end = true })
-        self:reset_ante_joker_shared_picks()
-        self:check_unlock("ante_up", { ante = self.ante })
-        self:check_voucher_unlocks({ ante = self.ante, hand_size = self:get_effective_hand_size_limit() })
-        -- The Ox's target is re-fixed only here, as a Boss blind falls
-        -- (`state_events.lua:132-138`).
-        self:freeze_most_played_hand()
+        -- The boss's debuffs lift once the held cards have had their end-of-round pass
+        -- (`_finish_round_win_eval`), not here: the reference evaluates them before
+        -- `Blind:defeat`, so a debuffed Gold Card pays nothing and a debuffed Blue Seal makes
+        -- nothing (issue #80).
+        self._lift_boss_debuffs_after_round_end = true
+        self:advance_ante_after_boss()
     end
 
     -- Round-win unlock conditions (`common_events.lua:1500-1520`). Matador wants a Boss
@@ -14590,6 +14871,11 @@ end
 ---@param hands_left number
 function Game:_finish_round_win_eval(ctx, hands_left)
     self:emit_hand_cards_event("on_round_end", ctx)
+    if self._lift_boss_debuffs_after_round_end then
+        self._lift_boss_debuffs_after_round_end = nil
+        self.boss_runtime = self.boss_runtime or {}
+        self.boss_runtime.clear_card_debuffs_after_win = true
+    end
 
     if tonumber(self.current_blind_index) == 3 then
         for _, tag in ipairs(self.tags or {}) do
@@ -14632,11 +14918,19 @@ function Game:_finish_round_win_eval(ctx, hands_left)
     local discard_bonus = tonumber(self.extra_discard_bonus) or 0
 
     local blind_pay = math.max(0, math.floor(tonumber(self.current_blind_reward) or 0))
+    local blind_label = I18N.text("round.reward.blind", nil, "Blind reward")
+    -- A blind Mr. Bones carried the player through pays nothing for itself; everything else on
+    -- the Cash Out still does (`state_events.lua:1138-1145`).
+    if self._round_saved_by_mr_bones then
+        self._round_saved_by_mr_bones = nil
+        blind_pay = 0
+        blind_label = I18N.text("round.reward.saved", nil, "Saved by Mr. Bones")
+    end
 
     -- Reveal order for the Cash Out panel. The blind row is its header; zero-value rows are
     -- dropped so the list only ever shows money that was actually paid.
     self._round_win_display_lines = {
-        { I18N.text("round.reward.blind", nil, "Blind reward"), blind_pay, "pending", slot = "blind" },
+        { blind_label, blind_pay, "pending", slot = "blind" },
     }
     local function add_display_line(row)
         if (math.floor(tonumber(row[2]) or 0)) <= 0 then return end
@@ -15553,7 +15847,7 @@ function Game:enter_you_win()
     self.active_tooltip_card = nil
     self.active_tooltip_joker = nil
     self.active_tooltip_consumable_index = nil
-    self.dragging = nil
+    self:drop_drag()
     self._you_win_button_rects = nil
     self:ensure_victory_progress_recorded()
     -- Reference `functions/state_events.lua:1-43` reserves this cue for
@@ -15966,6 +16260,20 @@ function Game:sell_owned_joker(index)
     return true
 end
 
+--- Whether the round's score has met the blind -- the test `evaluate_blind_progress` wins on.
+---@return boolean
+function Game:blind_target_reached()
+    local target = tonumber(self.current_blind_target) or 0
+    return target > 0 and (tonumber(self.round_score) or 0) >= target
+end
+
+--- Whether the hand just played ends the round, so nothing is drawn after it: the blind is
+--- beaten, or that was the last hand (`Game:update_hand_played`, reference `game.lua:3196`).
+---@return boolean
+function Game:round_ends_after_play()
+    return self:blind_target_reached() or (tonumber(self.hands) or 0) < 1
+end
+
 function Game:evaluate_blind_progress()
     if self.STATE ~= self.STATES.SELECTING_HAND then
         return
@@ -16009,15 +16317,15 @@ function Game:handle_failed_blind_reset()
             -- Ceremonial Dagger's cue and nothing else's.
             Sfx.play("tarot1")
         end
-        self._blind_resolution_pending = false
-        self:recycle_full_deck_after_blind_win()
-
-        local cap_dollars = self:get_interest_round_cap_dollars()
-        local interest_count_cap = cap_dollars * 5
-        local interest = math.floor(math.min(math.max(0, self.money), interest_count_cap) / 5)
-        interest = math.min(interest, cap_dollars)
-        self.money = (tonumber(self.money) or 0) + interest
-        self:enter_shop_after_blind()
+        -- From here a rescue is a round won, as in the reference: Mr. Bones only turns
+        -- `game_over` off (`state_events.lua:101-105`), and `end_round` then runs its normal
+        -- course -- held-card effects, the ante step after a Boss, the Cash Out with every row
+        -- but the blind's, the win on the Ante 8 Boss. The blind row reads "Saved by
+        -- Mr. Bones" for $0 (`evaluate_round`, `saved = true`). Skipping straight to the shop
+        -- with interest alone also left a beaten Boss to be fought again (issue #80).
+        self._round_saved_by_mr_bones = true
+        self._last_completed_blind_was_boss = (tonumber(self.current_blind_index) == 3)
+        self:enter_round_win_after_blind()
         return
     end
 
@@ -16029,7 +16337,7 @@ function Game:handle_failed_blind_reset()
     self.active_tooltip_card = nil
     self.active_tooltip_joker = nil
     self.active_tooltip_consumable_index = nil
-    self.dragging = nil
+    self:drop_drag()
     if type(self.consumables) == "table" then
         for i = #self.consumables, 1, -1 do
             self:remove_consumable_at(i)
@@ -16977,6 +17285,20 @@ function Game:touchmoved(id, x, y, dx, dy)
     end
 end
 
+--- Let go of whatever is being dragged without dropping it anywhere. A node only leaves its
+--- drag pose through `touchreleased`; clearing `self.dragging` alone left it flagged as held,
+--- and a held node is skipped by the motion springs and by row layout. So a Joker or
+--- consumable grabbed while something closed underneath it (a Celestial Pack finishing its
+--- level-up, a state change, an overlay opening) stayed frozen where the finger left it, out
+--- of its row, for the rest of the run (issue #80).
+function Game:drop_drag()
+    local node = self.dragging
+    self.dragging = nil
+    if node and node.states and node.states.drag and node.states.drag.is then
+        Moveable.touchreleased(node)
+    end
+end
+
 function Game:touchreleased(id, x, y)
     if self._collection_over_run and self.STATE == self.STATES.PAUSED
         and self._menu_sub_state == "collection_grid" then
@@ -16989,7 +17311,7 @@ function Game:touchreleased(id, x, y)
     end
     if self._settings_over_menu and self.STATE == self.STATES.MENU then
         self:finish_pause_slider_drag()
-        self.dragging = nil
+        self:drop_drag()
         return
     end
     if self._deck_view_open then
@@ -16999,7 +17321,7 @@ function Game:touchreleased(id, x, y)
     if self._run_info_open then return end
     if self.STATE == self.STATES.PAUSED then
         self:finish_pause_slider_drag()
-        self.dragging = nil
+        self:drop_drag()
         return
     end
     if self.STATE == self.STATES.GAME_OVER then
@@ -17007,12 +17329,12 @@ function Game:touchreleased(id, x, y)
         if not self:scene_transition_active() then
             GameOverUI.handle_touch(self, x, y)
         end
-        self.dragging = nil
+        self:drop_drag()
         return
     end
     if self.STATE == self.STATES.YOU_WIN then
         YouWinUI.handle_touch(self, x, y)
-        self.dragging = nil
+        self:drop_drag()
         return
     end
     local pack_hand_move = (self.STATE == self.STATES.OPEN_BOOSTER and self.booster_session and self.booster_session.hand_for_tarot)
@@ -17026,16 +17348,16 @@ function Game:touchreleased(id, x, y)
     local zone_drag_touch_state = (self.STATE == self.STATES.SHOP or self.STATE == self.STATES.OPEN_BOOSTER)
         and self.dragging and node_is_zone_draggable(self, self.dragging)
     if not selecting_hand and not joker_touch_state and not tapped_consumable and not shop_offer_touch_state and not zone_drag_touch_state then
-        self.dragging = nil
+        self:drop_drag()
         return
     end
     if selecting_hand and self.hand and self.hand.is_scoring_active and self.hand:is_scoring_active() then
-        self.dragging = nil
+        self:drop_drag()
         return
     end
     if joker_touch_state and self.dragging and not node_is_owned_joker(self, self.dragging) and not node_is_zone_draggable(self, self.dragging) then
         if not (pack_hand_move and node_is_hand_card(self, self.dragging)) then
-            self.dragging = nil
+            self:drop_drag()
             return
         end
     end
@@ -17160,6 +17482,15 @@ function Game:touchreleased(id, x, y)
         local sess = self.booster_session
         local was_selected = sess and tonumber(sess.active_choice_index) == idx
         self:clear_bottom_tooltips()
+        -- A tapped pack card is where the focus is now. In a pack that deals a hand, leaving
+        -- the layer on "hand" (where coming back up from the Joker or consumable row puts it)
+        -- told every tooltip check that the hand cursor owns the screen, so the tapped card
+        -- never showed its tooltip (issue #80). Set directly: the layer setter would also
+        -- re-pick a choice and play the focus cue, and the finger has already chosen.
+        if self:is_booster_hand_mode() then
+            self._gamepad_focus_layer = "booster"
+            self._joker_swap_pick_index = nil
+        end
         if not was_selected and sess then
             sess.active_choice_index = idx
             self.active_tooltip_joker = released
@@ -17200,7 +17531,7 @@ function Game:touchreleased(id, x, y)
             if not was_selected then
                 self.active_tooltip_consumable_index = idx
             end
-            self.dragging = nil
+            self:drop_drag()
             return
         end
     end
@@ -17211,7 +17542,7 @@ function Game:touchreleased(id, x, y)
     -- further up, where an active play sequence returns early.
     if not released and dist < TAP_THRESHOLD and self.STATE == self.STATES.SELECTING_HAND then
         if HandActionsUI.handle_touch(self, x, y) then
-            self.dragging = nil
+            self:drop_drag()
             return
         end
     end
@@ -17219,12 +17550,12 @@ function Game:touchreleased(id, x, y)
     if not released and dist < TAP_THRESHOLD then
         local node_at = self:get_node_at(x, y)
         if node_at and (node_is_shop_offer(self, node_at) or node_is_owned_joker(self, node_at)) then
-            self.dragging = nil
+            self:drop_drag()
             return
         end
         self:clear_bottom_tooltips()
     end
-    self.dragging = nil
+    self:drop_drag()
     if released and self.hand then
         for _, node in ipairs(self.hand.card_nodes) do
             if node == released then
@@ -17825,7 +18156,6 @@ function Game:try_gamepad_boss_reroll()
     if self.STATE ~= self.STATES.BLIND_SELECT then return false end
     if self._blind_slide then return false end
     if not (self:has_voucher("v_directors_cut") or self:has_voucher("v_retcon")) then return false end
-    if tonumber(self.selected_blind_index) ~= 3 then return false end
     if not self:can_afford_price(10) then return false end
     if self:has_voucher("v_directors_cut") and not self:has_voucher("v_retcon") then
         if (tonumber(self.boss_rerolls_used_this_ante) or 0) >= 1 then return false end

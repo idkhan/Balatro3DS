@@ -191,6 +191,15 @@ local function eased_background_color(game)
     return wash
 end
 
+--- Saves are deferred a little after each check-point (`Game:flush_pending_saves`); closing the
+--- software in that window should still keep them.
+function love.quit()
+    if G and G.flush_pending_saves then
+        pcall(G.flush_pending_saves, G)
+    end
+    return false
+end
+
 function love.update(dt)
     -- Polled before anything draws. Switching stereo destroys and recreates the
     -- framebuffers (`renderer_ext.hpp:194-199`), so it can only happen outside the run

@@ -310,17 +310,7 @@ function Consumable:draw()
         love.graphics.setColor(1, 1, 1, dissolve and (1 - dissolve) or 1)
         love.graphics.draw(self.atlas.image, self.quad, cx, cy, rot, scale, scale,
             cx - draw_x, cy - draw_y)
-        if self.def and self.def.id == "spectral_soul" then
-            -- The Soul has a dedicated shader layer in the reference. One faint additive
-            -- echo gives the rare card its own silhouette without a shader or resident asset.
-            local t = Fx and Fx.time and Fx.time() or 0
-            love.graphics.setBlendMode("add")
-            love.graphics.setColor(0.45, 0.2, 0.8, 0.22)
-            love.graphics.draw(self.atlas.image, self.quad, cx + math.sin(t * 1.4) * 1.2,
-                cy + math.cos(t * 1.1) * 1.2, rot, scale * 1.025, scale * 1.025,
-                cx - draw_x, cy - draw_y)
-            love.graphics.setBlendMode("alpha")
-        end
+        self:draw_soul_gem(cx, cy, rot, scale, dissolve)
         return self:draw_focus_outline()
     end
 
@@ -349,7 +339,47 @@ function Consumable:draw()
 
     love.graphics.pop()
 
+    self:draw_soul_gem(cx, cy, rot, scale, dissolve)
     return self:draw_focus_outline()
+end
+
+--- Cell of the floating gem in the `centers` atlas (`Enhancers.png`, 10 columns).
+local SOUL_GEM_CENTERS_INDEX = 7
+
+--- The Soul's gem. It is not part of the card's own art: the reference draws a shared sprite
+--- from the centres atlas over it, bobbing and rocking (`G.shared_soul`, drawn in
+--- `Card:draw` with `scale_mod = 0.05 + 0.05*sin(1.8t)` and `rotate_mod = 0.1*sin(1.219t)`).
+--- Without it the card is an empty swirl (issue #80). `centers` is resident for the whole run,
+--- so this costs one quad draw.
+function Consumable:draw_soul_gem(cx, cy, rot, scale, dissolve)
+    if not (self.def and self.def.id == "spectral_soul") then return end
+    local atlas = G and G.ASSET_ATLAS and G.ASSET_ATLAS["centers"]
+    if (not atlas or not atlas.image) and G and G.ensure_asset_atlas_loaded then
+        G:ensure_asset_atlas_loaded("centers")
+        atlas = G.ASSET_ATLAS and G.ASSET_ATLAS["centers"]
+    end
+    if not (atlas and atlas.image and G.atlas_cell_quad) then return end
+    local quad, cw, ch = G:atlas_cell_quad(atlas, SOUL_GEM_CENTERS_INDEX)
+    if not quad then return end
+    -- `scale_mod` / `rotate_mod` as `card.lua:4504-4505` has them: a slow bob plus a once-a-
+    -- second heartbeat that decays within the second.
+    local t = (Fx and Fx.time and Fx.time()) or 0
+    local frac = t - math.floor(t)
+    local scale_mod = 0.05 + 0.05 * math.sin(1.8 * t)
+        + 0.07 * math.sin(frac * math.pi * 14) * (1 - frac) ^ 3
+    local rotate_mod = 0.1 * math.sin(1.219 * t)
+        + 0.07 * math.sin(t * math.pi * 5) * (1 - frac) ^ 2
+    local s = scale * (1 + scale_mod)
+    local r = rot + rotate_mod
+    local alpha = dissolve and (1 - dissolve) or 1
+    -- The shadow pass the reference draws first, dropped by `0.1 + 0.03*sin(1.8t)` card units
+    -- (about 3 px at 1x).
+    local drop = (0.1 + 0.03 * math.sin(1.8 * t)) * 30 * scale
+    love.graphics.setColor(0, 0, 0, 0.3 * alpha)
+    love.graphics.draw(atlas.image, quad, cx, cy + drop, r, s, s, cw * 0.5, ch * 0.5)
+    love.graphics.setColor(1, 1, 1, alpha)
+    love.graphics.draw(atlas.image, quad, cx, cy, r, s, s, cw * 0.5, ch * 0.5)
+    love.graphics.setColor(1, 1, 1, 1)
 end
 
 --- The gamepad focus ring, drawn outside the sprite transform. Its own function only so the

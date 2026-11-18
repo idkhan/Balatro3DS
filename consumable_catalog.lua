@@ -3,7 +3,7 @@
 --   select = { exact = N } or { min = a, max = b } ("at least" style when min/max).
 --   spawn = { kind = "tarot"|"planet", count = k } — adds up to k items, limited by free slots after use.
 --   spawn_joker = true — needs a free Joker slot.
---   wheel_of_fortune = true — needs ≥1 owned Joker.
+--   wheel_of_fortune = true — needs ≥1 owned Joker with no edition.
 --   fool_duplicate = true — duplicates last used Tarot/Planet this run (not Fool).
 -- `atlas` must exist in `Game.ASSET_ATLAS`. Major arcana `index` matches typical 0..21 sheet order.
 
