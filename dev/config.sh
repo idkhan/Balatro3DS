@@ -44,6 +44,7 @@ EXCLUDE_ASSETS=(
     # resources/textures/1x/menu.png is NOT excluded: the generated menu backdrop is gated to
     # the New 3DS (backdrop.lua), and the Old 3DS draws that prebaked 63-frame sheet instead.
     "resources/fonts/zh_CN.ttf"
+    "resources/fonts/ja.ttf"
     "resources/fonts/GoNotoCJKCore.ttf"
     "resources/fonts/GoNotoCurrent-Bold.ttf"
     "resources/fonts/NotoSans-Bold.ttf"
@@ -91,6 +92,7 @@ PIXEL_FONT_SHEETS=(
 # mkbcfnt can produce from the normalized Chinese subset and must match Fonts.LANGUAGE_CELL_HEIGHTS in fonts.lua.
 LANGUAGE_FONTS=(
     "zh_CN:resources/fonts/zh_CN.ttf"
+    "ja:resources/fonts/ja.ttf"
 )
 CJK_CELL_HEIGHTS=( 13 17 21 27 33 )
 
