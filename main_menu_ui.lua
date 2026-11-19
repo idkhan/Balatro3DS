@@ -970,10 +970,10 @@ function MainMenuUI.draw_how_to_play(game)
     local content_x = margin
     local content_w = W - margin * 2
 
-    love.graphics.setFont(font_m)
-    love.graphics.setColor(C.WHITE)
-    love.graphics.printf(I18N.text("menu.how_to_play", nil, "How to Play"), 0, margin, W, "center")
-
+    -- The "How to Play" heading used to be printed here, at y = margin. The content box below
+    -- starts 4 px lower and covers it, which is exactly why the English build shows nothing: its
+    -- ink starts 4 px down the line. A face whose ink starts at the top of the line (Japanese)
+    -- left the heading's upper edge poking out above the box, so it is not drawn at all.
     love.graphics.setColor(C.BLOCK.BACK)
     love.graphics.rectangle("fill", content_x, content_y, content_w, content_h, 6, 6)
 
@@ -1310,8 +1310,10 @@ function MainMenuUI.draw_deck_select(game)
     love.graphics.setColor(C.WHITE)
     local deck_name = I18N.content_name("deck", def.id, def.name)
     if love.graphics.getFont():getWidth(deck_name) > infoW then
-        love.graphics.setFont(font_s)
-        love.graphics.printf(deck_name, infoX, infoY + 6, infoW, "center")
+        -- Still too wide at the smaller size: squeeze it instead of wrapping onto the
+        -- description box ("チェッカードデッキ").
+        love.graphics.setFont(Fonts.fit_soft(game, font_s, deck_name, infoW - 4))
+        Fonts.printf_fit(deck_name, infoX + 2, infoY + 6, infoW - 4, "center")
     else
         love.graphics.printf(deck_name, infoX, infoY, infoW, "center")
     end
@@ -1321,11 +1323,15 @@ function MainMenuUI.draw_deck_select(game)
     
     love.graphics.setFont(font_s)
     love.graphics.setColor(C.PANEL)
-    love.graphics.printf(
-        deck_unlocked and I18N.content_text("deck", def.id, def.description or "")
-            or def.unlock_condition and def.unlock_condition.text or I18N.t("menu.complete_unlock"),
-        infoX + 2*padding, infoY + 2*padding + offset, infoW - 4*padding, "center"
-    )
+    local desc_text = deck_unlocked and I18N.content_text("deck", def.id, def.description or "")
+        or def.unlock_condition and I18N.text("unlock.deck." .. tostring(def.id), nil, def.unlock_condition.text) or I18N.t("menu.complete_unlock")
+    if game.FONTS.PIXEL.LANGUAGE then
+        -- A kana line is wider than the Latin one the box was sized for; step the text down
+        -- until the wrapped block fits the white box instead of running past its bottom.
+        love.graphics.setFont(Fonts.fit_block(game, font_s, desc_text, infoW - 4*padding,
+            infoH - 4*padding - offset))
+    end
+    love.graphics.printf(desc_text, infoX + 2*padding, infoY + 2*padding + offset, infoW - 4*padding, "center")
 
     -- Stake markers, in the reference's three states (`UI_definitions.lua:3168-3180`):
     -- a stake that has been *cleared* on this deck shows in its own colour, one that has not
