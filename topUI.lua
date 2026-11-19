@@ -356,10 +356,10 @@ function TopUI:draw(screen)
         love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
         local sess = G.booster_session
         local t1 = (sess and sess.title) or I18N.text("booster.title", nil, "Booster Pack")
-        TopUI.center_text(t1, ix, iy - 4, iw, math.floor(ih * 0.45))
+        TopUI.center_text_fit(t1, ix, iy - 4, iw, math.floor(ih * 0.45))
         love.graphics.setFont(G.FONTS.PIXEL.MEDIUM)
         local pr = sess and tonumber(sess.picks_remaining) or 0
-        TopUI.center_text(self:cached_label("picks", pr, I18N.text("booster.picks_left_prefix", nil, "Picks left: ")), ix - sysDepth * textHeight, iy + math.floor(ih * 0.6), iw, math.floor(ih * 0.35))
+        TopUI.center_text_fit(self:cached_label("picks", pr, I18N.text("booster.picks_left_prefix", nil, "Picks left: ")), ix - sysDepth * textHeight, iy + math.floor(ih * 0.6), iw, math.floor(ih * 0.35))
 
     else
         -- Score Requirements Box
@@ -868,6 +868,18 @@ function TopUI.center_text_static(string, x, y, iw, ih)
     local font = love.graphics.getFont()
     local yval = y + math.floor(ih / 2) - math.floor(font:getHeight() / 2)
     TextCache.printf(s, x, yval, iw, "center")
+    return x, yval
+end
+
+--- `center_text` for a label that must stay on one line: a face is chosen (or the line squeezed)
+--- so it fits `iw`, where `printf` would wrap it onto a second row. Used where the label is
+--- longer in some languages than the box was drawn for (a kana pack name).
+function TopUI.center_text_fit(string, x, y, iw, ih)
+    local s = tostring(string or "")
+    local font = Fonts.fit_soft(G, love.graphics.getFont(), s, iw)
+    love.graphics.setFont(font)
+    local yval = y + math.floor(ih/2) - math.floor(font:getHeight()/2)
+    Fonts.printf_fit(s, x, yval, iw, "center")
     return x, yval
 end
 

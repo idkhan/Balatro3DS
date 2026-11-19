@@ -3,6 +3,7 @@
 --- Tarot/Spectral: hand drawn at the top, cards below; select hand first, then tap tarot, then Use.
 
 local ShopUI = require("shop_ui")
+local Fonts = require("fonts")
 local Particles = require("particles")
 
 local BoosterPackUI = {}
@@ -365,9 +366,15 @@ function BoosterPackUI.draw_bottom(game)
     love.graphics.setColor(game.C.WHITE)
     local title = sess.title or I18N.text("booster.pack", nil, "Pack")
     local pr = tonumber(sess.picks_remaining) or 0
-    love.graphics.printf(title, math.floor(width/2) - math.floor(info_w/2), info_y + 6, info_w, "center")
+    -- A long kana pack name ("ジャンボ天体パック") wrapped onto the picks line. Step it down or
+    -- squeeze it so it stays on one line.
+    local title_font = Fonts.fit_soft(game, game.FONTS.PIXEL.MEDIUM, title, info_w - 8)
+    love.graphics.setFont(title_font)
+    local title_y = info_y + 6 + math.floor((game.FONTS.PIXEL.MEDIUM:getHeight() - title_font:getHeight()) / 2)
+    Fonts.printf_fit(title, math.floor(width/2) - math.floor(info_w/2) + 4, title_y, info_w - 8, "center")
     love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    love.graphics.printf(I18N.text("booster.picks_left_prefix", nil, "Picks left: ") .. tostring(pr), math.floor(width/2) - math.floor(info_w/2), info_y + 32, info_w, "center")
+    local picks_text = I18N.text("booster.picks_left_prefix", nil, "Picks left: ") .. tostring(pr)
+    Fonts.printf_fit(picks_text, math.floor(width/2) - math.floor(info_w/2) + 4, info_y + 32, info_w - 8, "center")
 
     local skip_w = 60
     local skip_h = info_h - 4
@@ -392,11 +399,14 @@ function BoosterPackUI._draw_small_button(game, param)
     if _G.draw_rect_with_shadow then
         local ix, iy, iw, ih = draw_button_with_shadow(param.x, param.y, param.w, param.h, 4, 2, param.color, game.C.BLOCK.SHADOW, 2)
         love.graphics.setColor(game.C.WHITE)
-        love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
-        local textHeight = love.graphics.getFont():getHeight()
+        -- "スキップ" is wider than the 60 px button at the MEDIUM size and wrapped onto a second
+        -- line. Fit it to the button's inner width, then centre the fitted face.
+        local font = Fonts.fit_soft(game, game.FONTS.PIXEL.MEDIUM, param.text, iw - 4)
+        love.graphics.setFont(font)
+        local textHeight = font:getHeight()
         local lines = param.lines or 1
         local textY = iy + math.floor(ih / 2) - math.floor((textHeight / 2) * lines)
-        love.graphics.printf(param.text, ix, textY, iw, "center")
+        Fonts.printf_fit(param.text, ix + 2, textY, iw - 4, "center")
     else
         love.graphics.setColor(param.color)
         love.graphics.rectangle("fill", param.x, param.y, param.w, param.h, 4, 4)

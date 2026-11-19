@@ -638,6 +638,13 @@ function CollectionUI.draw_category_menu(game)
     local small_h = 24
     local cons_pad = 3
     local cons_header_h = 12
+    -- Two stacked lines (a label and its count) and the "CONSUMABLES" header need more room in a
+    -- language face, whose line box is taller than m6x11plus's. There are 19 spare rows above
+    -- the Back button, so the consumables block grows into them rather than overlapping.
+    if game.FONTS.PIXEL.LANGUAGE then
+        small_h = 28
+        cons_header_h = 16
+    end
 
     game._collection_menu_rects = {}
 
