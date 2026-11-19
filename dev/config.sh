@@ -94,7 +94,7 @@ LANGUAGE_FONTS=(
     "zh_CN:resources/fonts/zh_CN.ttf"
     "ja:resources/fonts/ja.ttf"
 )
-CJK_CELL_HEIGHTS=( 13 17 21 27 33 )
+CJK_CELL_HEIGHTS=( 9 13 17 21 27 33 )
 
 # LövePotion runtime source. Pin LOVEPOTION_REF to a commit for reproducible
 # builds; "main" tracks upstream nightly.
