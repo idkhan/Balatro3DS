@@ -122,7 +122,7 @@ Fonts.LANGUAGE_FACES = {
 --- draws at the largest of these that fits its size, so the sheet's scale is exactly 1.0 and the
 --- text is at most a pixel smaller than the Latin face's. `dev/config.sh` (CJK_CELL_HEIGHTS)
 --- bakes this same list; `tests/test_localization.lua` fails if they drift.
-Fonts.LANGUAGE_CELL_HEIGHTS = { 13, 17, 21, 27, 33 }
+Fonts.LANGUAGE_CELL_HEIGHTS = { 9, 13, 17, 21, 27, 33 }
 
 --- The language sheet a role of `size` draws from.
 function Fonts.language_size(face, size)
