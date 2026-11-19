@@ -38,7 +38,7 @@ return {
     ["blind.bl_needle.name"] = "ニードル",
     ["blind.bl_needle.description"] = "1ハンドだけをプレイする",
     ["blind.bl_ox.name"] = "雄牛",
-    ["blind.bl_ox.description"] = "your most played hand をプレイすると資金が$0になる",
+    ["blind.bl_ox.description"] = "最もプレイしたハンドをプレイすると資金が$0になる",
     ["blind.bl_pillar.name"] = "柱",
     ["blind.bl_pillar.description"] = "このアンティの前にプレイされたカードにデバフがかかる",
     ["blind.bl_plant.name"] = "プラント",

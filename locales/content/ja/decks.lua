@@ -28,5 +28,5 @@ return {
     ["deck.b_yellow.name"] = "イエローデッキ",
     ["deck.b_yellow.description"] = "$10を追加してスタートする",
     ["deck.b_zodiac.name"] = "ゾディアックデッキ",
-    ["deck.b_zodiac.description"] = "Tarot、Merchant Planet Merchant、オーバーストックでランをスタートする",
+    ["deck.b_zodiac.description"] = "タロット商人、惑星商人、オーバーストックでランをスタートする",
 }
