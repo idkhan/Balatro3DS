@@ -121,4 +121,46 @@ suite.test("a tall tooltip flipped below a hand card stays above the bottom edge
     T.assert_true(box.y + box.h <= 238, "the box ends at row " .. (box.y + box.h - 1))
 end)
 
+--- Each badge gets its own small box beside the card's, as the base game's info queue does,
+--- rather than being appended to the main box until it covers the screen.
+suite.test("badges open their own boxes beside the main one, all on screen", function()
+    for _, profile in ipairs({ "native", "shared" }) do
+        for _, x in ipairs({ 0, 124, 260 }) do
+            bootstrap.new_game(7001)
+            G.FONTS.PIXEL = require("fonts").build(profile)
+            local card = Card(0, 150, 72, 95, { rank = 14, suit = "Spades", enhancement = "glass",
+                modifier = { edition = "polychrome" } }, nil, { face_up = true })
+            card.seal = "blue"
+            local boxes, calls = {}, 0
+            local real = draw_rect_with_shadow
+            draw_rect_with_shadow = function(bx, by, w, h, ...)
+                calls = calls + 1
+                -- Three per box: the outline, then its header and body panels.
+                if calls % 3 == 1 then boxes[#boxes + 1] = { x = bx, y = by, w = w, h = h } end
+                return real(bx, by, w, h, ...)
+            end
+            local ok, err = pcall(function() card:draw_tooltip(x, 150) end)
+            draw_rect_with_shadow = real
+            G:remove(card)
+            if not ok then error(err, 0) end
+
+            local where = profile .. " x=" .. x
+            T.assert_eq(#boxes, 4, where .. ": the card's box plus one per badge")
+            local main = boxes[1]
+            for i, b in ipairs(boxes) do
+                T.assert_true(b.x >= 0 and b.y >= 0 and b.x + b.w <= 320 and b.y + b.h <= 240,
+                    where .. ": box " .. i .. " is on screen")
+                if i > 1 then
+                    local apart = b.x >= main.x + main.w or b.x + b.w <= main.x
+                        or b.y >= main.y + main.h or b.y + b.h <= main.y
+                    T.assert_true(apart, where .. ": badge box " .. i .. " sits beside the card's box")
+                    T.assert_eq(b.w, boxes[2].w, where .. ": every badge is the same width")
+                    T.assert_true(b.x == main.x + main.w or b.x + b.w == main.x,
+                        where .. ": the badge column sits flush against the card's box")
+                end
+            end
+        end
+    end
+end)
+
 return suite
