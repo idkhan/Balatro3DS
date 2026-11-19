@@ -1096,24 +1096,30 @@ function Game:boss_after_discard_or_play(reason)
     end
 end
 
-function Game:boss_after_play_before_draw()
-    local boss_id = self:get_active_boss_blind_id()
-    if boss_id ~= "bl_hook" then return end
+--- The Hook's two discards. They come from the cards still held while the played hand sits
+--- in the play area, before anything scores (`blind.lua:466-486`), so held-in-hand effects
+--- never see them. The play sequence calls this with `mid_play`.
+---@param mid_play boolean|nil
+---@return integer removed
+function Game:boss_hook_discard(mid_play)
     local hand = self.hand
-    if not hand or not hand.cards then return end
+    if not hand or not hand.cards then return 0 end
     -- Pick from a shrinking list as the reference does, then discard the picks together.
     local remaining = {}
-    for i = 1, #hand.cards do remaining[i] = i end
+    for i = 1, #hand.cards do
+        local node = hand.card_nodes and hand.card_nodes[i]
+        if not (node and (node.selected or node.scoring_center)) then
+            remaining[#remaining + 1] = i
+        end
+    end
     local picks = {}
     for _ = 1, 2 do
         if #remaining <= 0 then break end
         local k = self:random("hook", 1, #remaining)
         picks[#picks + 1] = table.remove(remaining, k)
     end
-    local removed = hand.discard_cards_by_hook and hand:discard_cards_by_hook(picks) or 0
-    if removed > 0 then
-        self:notify_boss_effect_triggered({ reason = "hook_discard", count = removed })
-    end
+    if #picks == 0 then return 0 end
+    return hand.discard_cards_by_hook and hand:discard_cards_by_hook(picks, { mid_play = mid_play }) or 0
 end
 
 function Game:boss_before_play_selected(selected_nodes)
@@ -1190,6 +1196,55 @@ function Game:boss_should_void_current_play()
         or self.boss_runtime.psychic_void_play == true
 end
 
+--- Hands the play sequence the dollars The Tooth still has to take, and forgets them.
+---@return integer
+function Game:take_tooth_pending()
+    local rt = self.boss_runtime
+    local n = rt and math.max(0, math.floor(tonumber(rt.tooth_pending) or 0)) or 0
+    if rt then rt.tooth_pending = nil end
+    return n
+end
+
+--- Whether The Hook still has to discard for the hand just played, and forgets it.
+---@return boolean
+function Game:take_hook_pending()
+    local rt = self.boss_runtime
+    local pending = rt and rt.hook_pending == true or false
+    if rt then rt.hook_pending = nil end
+    return pending
+end
+
+--- The beat `play_cards_from_highlighted` gives a boss whose `press_play` acted (The Hook,
+--- The Tooth): the blind chip juices and `tarot2` rings twice, the second lower and 0.06 s
+--- later (`state_events.lua:488-500`).
+function Game:boss_press_play_sting()
+    self:shake(1)
+    if Moveable and Moveable.juice_up then
+        self._blind_chip_juice_state = self._blind_chip_juice_state or {}
+        Moveable.juice_up(self._blind_chip_juice_state)
+    end
+    if Sfx and Sfx.play then Sfx.play("tarot2", 1, 0.4) end
+    -- The same delayed second note as the "Nope!" sting.
+    self._nope_sfx_timer = 0.06
+end
+
+--- One beat of The Tooth: the card juices and $1 goes through the normal loss path --
+--- wallet, "-$1" popup over the card, `coin1` (`blind.lua:500-502`, `ease_dollars`).
+---@param node table|nil the played card being charged for
+function Game:boss_tooth_charge_card(node)
+    self.money = (tonumber(self.money) or 0) - 1
+    local vt = node and node.VT
+    if vt and Popup then
+        local off = node.collision_offset or { x = 0, y = 0 }
+        local s = tonumber(vt.scale) or 1
+        local p = Popup()
+        p:spawn(1, "money_loss", vt.x + (off.x or 0) + (vt.w / 2) * s, vt.y + (off.y or 0) + (vt.h / 2) * s)
+        self:addPopup(p)
+    end
+    if node and node.juice_up then node:juice_up() end
+    if Sfx and Sfx.play then Sfx.play("coin1") end
+end
+
 function Game:boss_apply_on_hand_submitted(selected_nodes)
     local boss_id = self:get_active_boss_blind_id()
     local hand_idx = tonumber(self.selectedHand) or -1
@@ -1205,13 +1260,20 @@ function Game:boss_apply_on_hand_submitted(selected_nodes)
     if not boss_id then return end
 
     if boss_id == "bl_tooth" then
+        -- The dollars are not taken here: the play sequence charges them one card at a time
+        -- (`Game:boss_tooth_charge_card`), the way `Blind:press_play` queues an
+        -- `ease_dollars(-1)` per played card (`blind.lua:497-504`).
         local n = type(selected_nodes) == "table" and #selected_nodes or 0
-        local before = tonumber(self.money) or 0
-        -- No floor: the reference keeps taking $1 a card into debt (`ease_dollars(-1)`).
-        self.money = before - n
-        if (tonumber(self.money) or 0) < before then
-            self:notify_boss_effect_triggered({ reason = "tooth_money_loss", amount = before - (tonumber(self.money) or 0) })
+        if n > 0 then
+            self.boss_runtime = self.boss_runtime or {}
+            self.boss_runtime.tooth_pending = (tonumber(self.boss_runtime.tooth_pending) or 0) + n
+            self:notify_boss_effect_triggered({ reason = "tooth_money_loss", amount = n, quiet = true })
         end
+    elseif boss_id == "bl_hook" then
+        -- `triggered` is set whether or not any card is left to take (`blind.lua:484`).
+        self.boss_runtime = self.boss_runtime or {}
+        self.boss_runtime.hook_pending = true
+        self:notify_boss_effect_triggered({ reason = "hook_discard", quiet = true })
     elseif boss_id == "bl_ox" then
         local target_idx = self:most_played_hand_index()
         if target_idx > 0 and hand_idx == target_idx then
@@ -1388,8 +1450,9 @@ function Game:notify_boss_effect_triggered(meta)
     -- The reference juices the blind chip and HUD debuff text every time a boss ability
     -- fires (`reference/Balatro/functions/state_events.lua:492-494`, `blind.lua:417-423`) —
     -- without it a card scoring zero is illegible. The port's blind chip lives on the top
-    -- readout, so the playfield rattle carries the beat.
-    self:shake(1)
+    -- readout, so the playfield rattle carries the beat. A `quiet` trigger leaves it to the
+    -- boss's own sting, which comes later in the play (`Game:boss_press_play_sting`).
+    if not (meta and meta.quiet) then self:shake(1) end
     -- Mirrors `G.GAME.blind.triggered` (`reference/Balatro/blind.lua:484`): set when a boss
     -- ability fires, cleared when the next hand is played. Matador reads it at `joker_main`.
     self.blind_triggered_this_hand = true
@@ -8076,6 +8139,10 @@ function Game:draw_blind_chip_sprite(sprite_row, center_x, center_y, scale)
 end
 
 function Game:draw_blind_chip_anim(blind_index, center_x, center_y, scale)
+    local juice = self._blind_chip_juice_state
+    if juice and juice.juice_scale and tonumber(blind_index) == tonumber(self.current_blind_index) then
+        scale = (tonumber(scale) or 1) * juice.juice_scale
+    end
     local blind_row = tonumber(self:get_blind_sprite_index(blind_index)) or 0
     self:draw_blind_chip_sprite(blind_row, center_x, center_y, scale)
 end
@@ -10126,6 +10193,9 @@ function Game:update(dt, real_dt)
         local pending = self._pending_round_win_eval
         self._pending_round_win_eval = nil
         self:_finish_round_win_eval(pending.ctx, pending.hands_left)
+    end
+    if self._blind_chip_juice_state and self._blind_chip_juice_state.juice and Moveable then
+        Moveable.update_juice(self._blind_chip_juice_state, real_dt or dt)
     end
     if self._nope_sfx_timer then
         self._nope_sfx_timer = self._nope_sfx_timer - dt

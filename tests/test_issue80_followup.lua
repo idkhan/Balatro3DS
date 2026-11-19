@@ -85,7 +85,25 @@ suite.test("The Tooth takes $1 per card played, into debt", function()
     game.ante = 5 -- The Tooth is not a legal Boss before Ante 3
     game.money = 2
     game:boss_apply_on_hand_submitted({ {}, {}, {}, {}, {} })
-    T.assert_eq(game.money, -3)
+    T.assert_eq(game.money, 2, "nothing is taken until the play sequence charges each card")
+    T.assert_eq(game:take_tooth_pending(), 5)
+    T.assert_eq(game:take_tooth_pending(), 0, "handed over once")
+
+    local popups, sounds, juiced = {}, {}, 0
+    local old_add, old_play = game.addPopup, Sfx.play
+    game.addPopup = function(_, p) popups[#popups + 1] = p end
+    Sfx.play = function(name) sounds[#sounds + 1] = name end
+    local card = { VT = { x = 0, y = 0, w = 10, h = 10, scale = 1 }, juice_up = function() juiced = juiced + 1 end }
+    local ok, err = pcall(function()
+        for _ = 1, 5 do game:boss_tooth_charge_card(card) end
+    end)
+    game.addPopup, Sfx.play = old_add, old_play
+    if not ok then error(err, 0) end
+    T.assert_eq(game.money, -3, "into debt, $1 a card")
+    T.assert_eq(#popups, 5)
+    T.assert_eq(popups[1].text, "-$1")
+    T.assert_eq(juiced, 5)
+    T.assert_eq(sounds[1], "coin1")
 end)
 
 suite.test("Ante 0 and below use a flat 100 base at every stake", function()
