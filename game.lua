@@ -9068,7 +9068,9 @@ function Game:draw_bottom_pause()
             love.graphics.printf(entry.id == nil and I18N.text("settings.art_default", nil, "Default") or entry.name,
                 panel_x, panel_y + 152, panel_w, "center")
             love.graphics.setColor(self.C.GREY)
-            love.graphics.printf(("%d / %d"):format(pick, #entries), panel_x, panel_y + 164, panel_w, "center")
+            local pick_text = ("%d / %d"):format(pick, #entries)
+            love.graphics.setFont(Fonts.for_text(self, self.FONTS.PIXEL.SMALL, pick_text))
+            love.graphics.printf(pick_text, panel_x, panel_y + 164, panel_w, "center")
 
             -- High contrast is a checkbox: the box carries the state, the label stays put.
             local cr = self._art_contrast_rect

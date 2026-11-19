@@ -261,7 +261,8 @@ end
 --- dragged slot and `Game:draw` redraws it, and only it, after the dragged card.
 local function draw_price_tag(game, key, rect, price)
     local label = "$" .. tostring(price or 0)
-    local font = game.FONTS.PIXEL.PRICE
+    -- Numerals come from the pixel face in every language (see `Fonts.latin`).
+    local font = Fonts.latin(game, game.FONTS.PIXEL.PRICE)
     local tag_w = math.floor(font:getWidth(label) + 12)
     local tag_h = math.floor(font:getHeight() + 4)
     local tx = math.floor(rect.x + math.floor((rect.w - tag_w) * 0.5 + 0.5))
@@ -398,6 +399,10 @@ end
 -- than getHeight() would allow.
 local INK_TOP_RATIO = 0.1875
 local INK_HEIGHT_RATIO = 0.6875
+-- The CJK face fills nearly its whole line box (GoNotoCJK at 13 px: ink rows 0..13 of 14), so
+-- the m6x11plus band above would centre kana too low and stack them too loosely.
+local CJK_INK_TOP_RATIO = 0.07
+local CJK_INK_HEIGHT_RATIO = 0.86
 local LINE_GAP = 2
 
 function ShopUI.draw_shop_button(game, param)
@@ -456,15 +461,14 @@ function ShopUI.draw_shop_button(game, param)
         local total = 0
         for i, part in ipairs(parts) do
             local font = part.font or game.FONTS.PIXEL.SMALL
-            -- Drop a size if the label would spill past the button's inner width. `next_smaller`
-            -- is strictly smaller by construction, so this terminates at the bottom of the ladder.
-            while font:getWidth(part.text) > iw - prompt_w do
-                local smaller = Fonts.next_smaller(game, font)
-                if not smaller then break end
-                font = smaller
-            end
+            -- Drop a size if the label would spill past the button's inner width. A label may
+            -- be squeezed a little first, and a number is always drawn in the pixel face.
+            font = Fonts.fit_soft(game, font, part.text, iw - prompt_w)
             part.resolved_font = font
-            total = total + font:getHeight() * INK_HEIGHT_RATIO
+            local cjk = game.FONTS.PIXEL.LANGUAGE ~= nil and not Fonts.is_numeric(part.text)
+            part.ink_top = cjk and CJK_INK_TOP_RATIO or INK_TOP_RATIO
+            part.ink_h = cjk and CJK_INK_HEIGHT_RATIO or INK_HEIGHT_RATIO
+            total = total + font:getHeight() * part.ink_h
             if i > 1 then total = total + LINE_GAP end
         end
 
@@ -473,9 +477,9 @@ function ShopUI.draw_shop_button(game, param)
             local font = part.resolved_font
             local size = font:getHeight()
             love.graphics.setFont(font)
-            Fonts.printf_fit(part.text, ix + prompt_w, math.floor(ink_y - size * INK_TOP_RATIO),
+            Fonts.printf_fit(part.text, ix + prompt_w, math.floor(ink_y - size * part.ink_top),
                 iw - prompt_w, "center")
-            ink_y = ink_y + size * INK_HEIGHT_RATIO + LINE_GAP
+            ink_y = ink_y + size * part.ink_h + LINE_GAP
         end
     else
         love.graphics.setColor(color)
@@ -752,6 +756,13 @@ function ShopUI.draw_panel_header(game, text, x, panel_y, panel_h)
     love.graphics.setFont(font)
     -- Rotated -90 degrees, so the text runs bottom-to-top and is centred on the panel.
     local y = panel_y + font:getWidth(text) / 2 + panel_h / 2
+    -- The glyphs' top edge is the left edge of the rotated text. A language face is a smaller
+    -- size with ink that fills its line box, so left alone it sits several pixels to the left
+    -- of where the Latin MEDIUM face puts its ink. Re-centre it on the Latin ink column
+    -- (ink band 0.1875..0.875 of a 22 px line, centre 11.7 px from the label's left edge).
+    if game.FONTS.PIXEL.LANGUAGE then
+        x = x + math.floor(11.7 - font:getHeight() * 0.5 + 0.5)
+    end
     local shadow = (game.C.BLOCK and game.C.BLOCK.SHADOW) or { 0, 0, 0, 0.35 }
     love.graphics.setColor(shadow)
     -- +1 on screen x and y. Under the rotation the glyph axes are swapped, so the shadow is
