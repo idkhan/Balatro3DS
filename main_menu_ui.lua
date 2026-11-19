@@ -1325,13 +1325,42 @@ function MainMenuUI.draw_deck_select(game)
     love.graphics.setColor(C.PANEL)
     local desc_text = deck_unlocked and I18N.content_text("deck", def.id, def.description or "")
         or def.unlock_condition and I18N.text("unlock.deck." .. tostring(def.id), nil, def.unlock_condition.text) or I18N.t("menu.complete_unlock")
-    if game.FONTS.PIXEL.LANGUAGE then
-        -- A kana line is wider than the Latin one the box was sized for; step the text down
-        -- until the wrapped block fits the white box instead of running past its bottom.
-        love.graphics.setFont(Fonts.fit_block(game, font_s, desc_text, infoW - 4*padding,
-            infoH - 4*padding - offset))
+    if game.FONTS.PIXEL.LANGUAGE == "ja" then
+        -- Japanese: use the whole white box, and squeeze the glyphs horizontally (down to 80%)
+        -- before dropping to the 9 px face, so a long description stays at the normal size.
+        local box_w = infoW - 2*padding - 4
+        local box_h = infoH - 3*padding - offset - 2
+        local f, sx = font_s, 1
+        local done = false
+        while not done do
+            for _, try_sx in ipairs({ 1, 0.9, 0.8 }) do
+                local _, wrapped = f:getWrap(desc_text, box_w / try_sx)
+                if #wrapped * f:getHeight() <= box_h then
+                    sx, done = try_sx, true
+                    break
+                end
+            end
+            if not done then
+                local smaller = Fonts.next_smaller(game, f)
+                if not smaller then sx = 0.8; break end
+                f = smaller
+            end
+        end
+        love.graphics.setFont(f)
+        love.graphics.push()
+        love.graphics.translate(infoX + padding + 2, infoY + 2*padding + offset)
+        love.graphics.scale(sx, 1)
+        love.graphics.printf(desc_text, 0, 0, box_w / sx, "center")
+        love.graphics.pop()
+    else
+        if game.FONTS.PIXEL.LANGUAGE then
+            -- A kana line is wider than the Latin one the box was sized for; step the text down
+            -- until the wrapped block fits the white box instead of running past its bottom.
+            love.graphics.setFont(Fonts.fit_block(game, font_s, desc_text, infoW - 4*padding,
+                infoH - 4*padding - offset))
+        end
+        love.graphics.printf(desc_text, infoX + 2*padding, infoY + 2*padding + offset, infoW - 4*padding, "center")
     end
-    love.graphics.printf(desc_text, infoX + 2*padding, infoY + 2*padding + offset, infoW - 4*padding, "center")
 
     -- Stake markers, in the reference's three states (`UI_definitions.lua:3168-3180`):
     -- a stake that has been *cleared* on this deck shows in its own colour, one that has not
