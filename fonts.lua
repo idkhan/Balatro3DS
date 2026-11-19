@@ -113,7 +113,7 @@ Fonts.LANGUAGE_FACES = {
     ja = {
         native = "resources/fonts/lang/ja_h%d.ttf",
         source = "resources/fonts/ja.ttf",
-        min_size = 13,
+        min_size = 9,
     },
 }
 
