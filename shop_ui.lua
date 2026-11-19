@@ -1,5 +1,6 @@
 --- Bottom-screen shop panel, offer overlays, and shop-related touch targets.
 
+local PixelGrid = require("pixel_grid")
 local Fonts = require("fonts")
 local DynaText = require("dyna_text")
 
@@ -396,8 +397,6 @@ end
 -- m6x11plus ink metrics as a fraction of the font size: glyphs occupy the band
 -- from 0.1875 to 0.875 of the line box, so stacked lines can be packed tighter
 -- than getHeight() would allow.
-local INK_TOP_RATIO = 0.1875
-local INK_HEIGHT_RATIO = 0.6875
 local LINE_GAP = 2
 
 function ShopUI.draw_shop_button(game, param)
@@ -424,7 +423,7 @@ function ShopUI.draw_shop_button(game, param)
             local lw = love.graphics.getLineWidth()
             love.graphics.setLineWidth(2)
             love.graphics.setColor(0, 0, 0, 1)
-            love.graphics.rectangle("line", ix - 1, iy - 1, iw + 2, ih + 2, 4, 4)
+            PixelGrid.outline(ix - 2, iy - 2, iw + 4, ih + 4, 4)
             love.graphics.setLineWidth(lw)
             love.graphics.setColor(game.C.WHITE)
         end
@@ -432,18 +431,11 @@ function ShopUI.draw_shop_button(game, param)
         -- A prompt belongs on controls that the pad can actually activate. It is
         -- only shown while the pad owns focus, matching the hand action bar and
         -- keeping the touch layout clean.
-        local prompt_w = 0
         local button = param.button
-        if button and game.gamepad_focus_visible and game:gamepad_focus_visible()
-            and game.draw_button_pip then
-            local pip_w = math.min(12, math.max(8, ih - 4))
-            local pip_h = math.ceil(pip_w * 34 / 32)
-            local pip_x = ix + 3
-            local pip_y = iy + math.floor((ih - pip_h) * 0.5 + 0.5)
-            if game:draw_button_pip(button, pip_x, pip_y, pip_w) then
-                prompt_w = pip_w + 5
-            end
-        end
+        local show_pip = button ~= nil and game.gamepad_focus_visible ~= nil
+            and game:gamepad_focus_visible() and game.draw_button_pip ~= nil
+        local pip_w = math.min(12, math.max(8, ih - 4))
+        local prompt_w = show_pip and pip_w + 5 or 0
 
         local parts = param.parts
         if not parts then
@@ -453,29 +445,51 @@ function ShopUI.draw_shop_button(game, param)
             end
         end
 
-        local total = 0
-        for i, part in ipairs(parts) do
-            local font = part.font or game.FONTS.PIXEL.SMALL
-            -- Drop a size if the label would spill past the button's inner width. `next_smaller`
-            -- is strictly smaller by construction, so this terminates at the bottom of the ladder.
-            while font:getWidth(part.text) > iw - prompt_w do
-                local smaller = Fonts.next_smaller(game, font)
-                if not smaller then break end
-                font = smaller
+        -- Lines are stacked by their letters (Fonts.ink), not by a fixed share of the cell, and
+        -- the pip and the text block are centred together; pinning the pip to the left edge put
+        -- the pair off-centre by half the pip's width.
+        for _, part in ipairs(parts) do
+            part.resolved_font = Fonts.fit(game, part.font or game.FONTS.PIXEL.SMALL, part.text, iw - 2 - prompt_w)
+        end
+        -- Chinese letters fill their cell, so a stack can be taller than the button: the tallest
+        -- line that can still shrink steps down until the block fits, and if every line is at
+        -- the smallest size already the gaps between them go.
+        local total, block_w, gap
+        while true do
+            local tallest
+            total, block_w = 0, 0
+            for _, part in ipairs(parts) do
+                local font = part.resolved_font
+                part.ink_top, part.ink_h = Fonts.ink(game, font)
+                block_w = math.max(block_w, font:getWidth(part.text))
+                total = total + part.ink_h
+                if Fonts.next_smaller(game, font) and (not tallest or part.ink_h > tallest.ink_h) then
+                    tallest = part
+                end
             end
-            part.resolved_font = font
-            total = total + font:getHeight() * INK_HEIGHT_RATIO
-            if i > 1 then total = total + LINE_GAP end
+            gap = (total + LINE_GAP * (#parts - 1) <= ih - 2 or not tallest) and LINE_GAP or nil
+            if gap then break end
+            tallest.resolved_font = Fonts.next_smaller(game, tallest.resolved_font)
+        end
+        if total + gap * (#parts - 1) > ih - 2 then gap = 0 end
+        total = total + gap * (#parts - 1)
+
+        local left = math.floor(ix + (iw - prompt_w - block_w) / 2 + 0.5)
+        if show_pip then
+            local pip_h = math.ceil(pip_w * 34 / 32)
+            if not game:draw_button_pip(button, left, iy + math.floor((ih - pip_h) * 0.5 + 0.5), pip_w) then
+                prompt_w = 0
+                left = math.floor(ix + (iw - block_w) / 2 + 0.5)
+            end
         end
 
-        local ink_y = iy + math.floor((ih - total) / 2)
+        local ink_y = iy + math.floor((ih - total) / 2 + 0.5)
         for _, part in ipairs(parts) do
             local font = part.resolved_font
-            local size = font:getHeight()
             love.graphics.setFont(font)
-            love.graphics.printf(part.text, ix + prompt_w, math.floor(ink_y - size * INK_TOP_RATIO),
-                iw - prompt_w, "center")
-            ink_y = ink_y + size * INK_HEIGHT_RATIO + LINE_GAP
+            local line_x = left + prompt_w + math.floor((block_w - font:getWidth(part.text)) / 2 + 0.5)
+            love.graphics.print(part.text, line_x, ink_y - part.ink_top)
+            ink_y = ink_y + part.ink_h + gap
         end
     else
         love.graphics.setColor(color)
@@ -633,7 +647,7 @@ function ShopUI.draw_bottom_shop(game)
     end
 
     love.graphics.setColor(game.C.RED)
-    love.graphics.rectangle("line", panel_x, panel_y, panel_w, panel_h, 4, 4)
+    PixelGrid.outline(panel_x, panel_y, panel_w, panel_h, 4)
 
     local padding = 4
     local cache = game._shop_ui_cache
@@ -645,7 +659,10 @@ function ShopUI.draw_bottom_shop(game)
                 x = 0, y = 0, w = 74, h = 45,
                 -- Show both the live binding and the required hold gesture.
                 parts = {
-                    { text = I18N.text("shop.continue_label", nil, "Next Round"), font = game.FONTS.PIXEL.BUTTON },
+                    -- Two lines, as the reference stacks them: on one line "Next Round" only
+                    -- fitted beside the pad prompt at SMALL.
+                    { text = I18N.text("shop.next_round_1", nil, "Next"), font = game.FONTS.PIXEL.BUTTON },
+                    { text = I18N.text("shop.next_round_2", nil, "Round"), font = game.FONTS.PIXEL.BUTTON },
                     { text = I18N.text("shop.hold", nil, "Hold"), font = game.FONTS.PIXEL.SMALL },
                 },
             },

@@ -72,7 +72,7 @@ local BUTTON_LABELS = {
     lefttrigger = "ZL",
 }
 
---- Cell positions in `gamepad_ui_3ds_opt_1x.png`. The sheet keeps the reference game's
+--- Cell positions in `gamepad_ui_3ds_12px.png`. The sheet keeps the reference game's
 --- order (`reference/Balatro/functions/UI_definitions.lua:6129-6148`) but has one 3DS row
 --- instead of platform-specific rows.
 InputBindings.BUTTON_SPRITE_INDICES = {

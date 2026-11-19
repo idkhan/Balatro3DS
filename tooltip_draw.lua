@@ -2,17 +2,46 @@
 
 local M = {}
 local Utf8 = require("utf8_text")
+local Fonts = require("fonts")
 
-local TOOLTIP_PAD_X = 8
-local TOOLTIP_HEADER_PAD_Y = 3
-local TOOLTIP_BODY_PAD_Y = 10
+--- Box geometry shared with the playing-card tooltip (`Card:draw_tooltip`), which lays out its
+--- own cached runs but draws the same box.
+M.LAYOUT = {
+    PAD_X = 8,
+    HEADER_PAD_Y = 3,
+    BODY_PAD_Y = 6,
+    SPACING = 1,
+    SECTION_GAP = 2,
+    OUTER_PAD_X = 3,
+    OUTER_PAD_Y = 3,
+}
+local TOOLTIP_PAD_X = M.LAYOUT.PAD_X
+local TOOLTIP_HEADER_PAD_Y = M.LAYOUT.HEADER_PAD_Y
+local TOOLTIP_BODY_PAD_Y = M.LAYOUT.BODY_PAD_Y
 local TOOLTIP_BODY_PAD_TOP_RARITY = 4
-local TOOLTIP_SPACING = 1
-local TOOLTIP_SECTION_GAP = 2
-local TOOLTIP_OUTER_PAD_X = 3
-local TOOLTIP_OUTER_PAD_Y = 3
+local TOOLTIP_SPACING = M.LAYOUT.SPACING
+local TOOLTIP_SECTION_GAP = M.LAYOUT.SECTION_GAP
+local TOOLTIP_OUTER_PAD_X = M.LAYOUT.OUTER_PAD_X
+local TOOLTIP_OUTER_PAD_Y = M.LAYOUT.OUTER_PAD_Y
 local RARITY_BADGE_PAD_X = 10
 local RARITY_BADGE_PAD_Y = 3
+
+--- Room kept above and below a line's capitals, for accents and for descenders, which hang
+--- 2-3 px under the baseline in m6x11plus.
+local LINE_INK_PAD = 3
+
+--- Height of one tooltip line, and the offset to print at inside it, measured from the letters
+--- (`Fonts.ink`) rather than the font cell. A cell is mostly air above the capitals, so centring
+--- cells left every title a pixel low and every body line high in its box. A face with no measured
+--- ink keeps its whole cell, which is the old layout.
+---@param font love.Font
+---@return number line_h, number print_offset
+function M.line_box(font)
+    local top, cap = Fonts.ink(G, font)
+    local cell = font:getHeight()
+    if top == 0 and cap >= cell then return cell, 0 end
+    return cap + 2 * LINE_INK_PAD, LINE_INK_PAD - top
+end
 
 --------------------------------------------------------------------------------
 -- Appear animation
@@ -272,6 +301,12 @@ local function screen_width()
     return w
 end
 
+--- Widest body line a tooltip box can hold and still be placed on screen: boxes are clamped into
+--- [margin, sw - box_w - margin] with a 2 px margin, so anything past this is drawn off the edge.
+function M.body_limit()
+    return screen_width() - (2 * 2) - (TOOLTIP_OUTER_PAD_X * 2) - (TOOLTIP_PAD_X * 2)
+end
+
 --- Break one line's colour runs across as many lines as it takes to fit `limit`.
 ---
 --- Catalog descriptions arrive pre-broken for a measure that assumed the smallest font, so nothing
@@ -292,7 +327,7 @@ local function remember_wrap(segments, font, limit, lines)
     return lines
 end
 
-local function wrap_segments(font, segments, limit)
+function M.wrap_segments(font, segments, limit)
     -- A badge is a fixed-size pill, not prose; breaking it would just make a broken pill.
     if #segments == 1 and segments[1].rarity_badge then return { segments } end
 
@@ -374,20 +409,18 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
     love.graphics.setFont(font)
 
-    -- Widest body line the box can hold and still be placed on screen: the box is clamped into
-    -- [margin, sw - box_w - margin] below, so anything past this is drawn off the edge.
     local sw = screen_width()
-    local body_limit = sw - (2 * 2) - (TOOLTIP_OUTER_PAD_X * 2) - (TOOLTIP_PAD_X * 2)
+    local body_limit = M.body_limit()
     local wrapped = {}
     for _, segments in ipairs(resolved_lines) do
-        for _, line in ipairs(wrap_segments(font, segments, body_limit)) do
+        for _, line in ipairs(M.wrap_segments(font, segments, body_limit)) do
             wrapped[#wrapped + 1] = line
         end
     end
     resolved_lines = wrapped
 
     local header_w = font:getWidth(title)
-    local line_h = font:getHeight()
+    local line_h, ink_off = M.line_box(font)
     local body_line_heights = {}
     local body_max_w = 0
     for _, segments in ipairs(resolved_lines) do
@@ -496,12 +529,13 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
         draw_rect_with_shadow(body_x + inner_pad, body_y + inner_pad - 1, inner_w - (inner_pad * 2), inner_body_h, 4, 0, white_c, dark_white, 1)
     end
 
-    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5)
+    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5) + ink_off
     local header_text_x = header_x + math.floor((inner_w - header_w) * 0.5 + 0.5)
     love.graphics.setColor(panel_c[1], panel_c[2], panel_c[3], panel_c[4] or 1)
     love.graphics.print(title, header_text_x, header_text_y)
 
-    local text_y = body_y + body_pad_top
+    -- Measured from the body's face, which sits a pixel above its panel.
+    local text_y = body_y + body_pad_top - 1
     local function draw_segments_centered(segments, line_y0)
         local total_w = 0
         for _, seg in ipairs(segments) do
@@ -531,11 +565,11 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
                 draw_rounded_rect(x0, text_y, bw, row_h, 4, 0, "fill")
             end
             local text_x = x0 + RARITY_BADGE_PAD_X
-            local text_y_row = text_y + math.floor((row_h - line_h) * 0.5 + 0.5)
+            local text_y_row = text_y + math.floor((row_h - line_h) * 0.5 + 0.5) + ink_off
             love.graphics.setColor(1, 1, 1, 1)
             love.graphics.print(label, text_x, text_y_row)
         else
-            local line_y0 = math.floor(text_y + (row_h - line_h) * 0.5 + 0.5)
+            local line_y0 = math.floor(text_y + (row_h - line_h) * 0.5 + 0.5) + ink_off
             draw_segments_centered(segments, line_y0)
         end
         text_y = text_y + row_h + TOOLTIP_SPACING

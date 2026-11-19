@@ -210,7 +210,7 @@ local function draw_hidden_collection_tooltip(node)
     local draw_y = node.VT.y + (node.collision_offset and node.collision_offset.y or 0)
     local card_w = node.VT.w * node.VT.scale
     local card_h = node.VT.h * node.VT.scale
-    local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local font = G.FONTS.PIXEL.TOOLTIP or love.graphics.getFont()
     local TooltipDraw = require("tooltip_draw")
     TooltipDraw.draw_tooltip_layout(font, I18N.text("term.not_discovered", nil, "Not Discovered"), {}, draw_x, draw_y, card_w, card_h)
 end
@@ -232,7 +232,7 @@ function CollectionUI.draw_entry_tooltip(game, node, draw_x, draw_y)
             resolved[#resolved + 1] = sl
         end
     end
-    local font = game.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local font = game.FONTS.PIXEL.TOOLTIP or love.graphics.getFont()
     TooltipDraw.draw_tooltip_layout(font, title, resolved, draw_x, draw_y, card_w, card_h)
 end
 

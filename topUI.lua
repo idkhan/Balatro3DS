@@ -1,3 +1,4 @@
+local PixelGrid = require("pixel_grid")
 local GameOverUI = require("game_over_ui")
 local DynaText = require("dyna_text")
 local Fonts = require("fonts")
@@ -6,6 +7,9 @@ local NumberFormat = require("number_format")
 -- largest saving on this screen.
 local TextCache = require("text_cache")
 local JokerDisplay = require("joker_display")
+
+-- The 3DS top screen. Text that hangs off the bottom of the trays is placed against it.
+local TOP_SCREEN_H = 240
 
 ---@class TopUI
 TopUI = Object:extend()
@@ -71,6 +75,13 @@ local SCORE_EASE_DURATION = 0.5
 function draw_rounded_rect(x, y, w, h, radius, padding, mode)
     padding = padding or 0
     mode = mode or "fill"
+    -- Edges on whole pixels. Layout here is arithmetic on the panel (`ih/3`, `ih/4 + 4`), and
+    -- a rect with a fractional edge is rasterised by coverage: in motion its width changes by a
+    -- pixel from frame to frame and it slides out from under the text drawn on it. The inner
+    -- bounds returned below inherit the snap, so content placed from them lands on the grid too.
+    local x1, y1 = math.floor(x + w + 0.5), math.floor(y + h + 0.5)
+    x, y = math.floor(x + 0.5), math.floor(y + 0.5)
+    w, h = x1 - x, y1 - y
     radius = math.min(radius or 0, w / 2, h / 2)
     if radius < 0 then radius = 0 end
 
@@ -257,7 +268,7 @@ function TopUI:draw_inventory_tray(x, y, w, h, occupied, depth)
     love.graphics.rectangle("fill", x - (depth or 0), y, w, h, 4, 4)
     love.graphics.setColor(C and C.GREY or { 0.5, 0.5, 0.5, 1 })
     love.graphics.setLineWidth(1)
-    love.graphics.rectangle("line", x - (depth or 0) + 0.5, y + 0.5, w - 1, h - 1, 4, 4)
+    PixelGrid.outline(x - (depth or 0), y, w, h, 4)
 end
 
 function TopUI:draw(screen)
@@ -311,7 +322,7 @@ function TopUI:draw(screen)
     love.graphics.rectangle("fill", 0, panelY, 400, panelHeight)
 
     love.graphics.setColor(G.C.BLIND_COLORS.Big)
-    love.graphics.rectangle("line", 0, panelY, 401, panelHeight)
+    PixelGrid.outline(-1, panelY, 402, panelHeight)
 
     -- Title
     local titlePosX = 2
@@ -472,13 +483,31 @@ function TopUI:draw(screen)
     local score_row_height = math.max(math.floor(titleHeight/3.5), G.FONTS.PIXEL.MEDIUM:getHeight() + 12)
     ix, iy, iw, ih = draw_rounded_rect(titlePosX + (width * 2) - 4, titlePosY, titleWidth, score_row_height, 4, 4, "fill")
     
-    love.graphics.setFont(G.FONTS.PIXEL.SMALL)
+    -- "Round" over "Score" in the LABEL face, as the reference stacks them: one SMALL line had
+    -- 7 px capitals in a 34 px row, and the stacked pair is narrower, so the score gets wider.
     love.graphics.setColor(G.C.WHITE)
-    local score_label = I18N.text("hud.round_score_1", nil, "Round")
-        .. (I18N.get_language() == "zh_CN" and "" or " ")
-        .. I18N.text("hud.round_score_2", nil, "Score")
-    local paneOffset = math.min(62, G.FONTS.PIXEL.SMALL:getWidth(score_label) + 4)
-    TopUI.center_text_juiced(score_label, ix, iy, paneOffset - 4, ih)
+    local score_lines = {
+        I18N.text("hud.round_score_1", nil, "Round"),
+        I18N.text("hud.round_score_2", nil, "Score"),
+    }
+    local label_font = G.FONTS.PIXEL.LABEL
+    local _, label_ink = Fonts.ink(G, label_font)
+    local label_gap = 3
+    local paneOffset
+    if label_ink * 2 + label_gap <= ih then
+        local label_w = math.max(label_font:getWidth(score_lines[1]), label_font:getWidth(score_lines[2]))
+        paneOffset = math.min(62, label_w + 6)
+        love.graphics.setFont(label_font)
+        local label_top = iy + math.floor((ih - (label_ink * 2 + label_gap)) / 2)
+        TopUI.center_text_juiced(score_lines[1], ix, label_top, paneOffset - 4, label_ink)
+        TopUI.center_text_juiced(score_lines[2], ix, label_top + label_ink + label_gap, paneOffset - 4, label_ink)
+    else
+        -- Chinese letters fill their cell, so two lines are taller than the row: one SMALL line.
+        local score_label = score_lines[1] .. (I18N.get_language() == "zh_CN" and "" or " ") .. score_lines[2]
+        love.graphics.setFont(G.FONTS.PIXEL.SMALL)
+        paneOffset = math.min(62, G.FONTS.PIXEL.SMALL:getWidth(score_label) + 4)
+        TopUI.center_text_juiced(score_label, ix, iy, paneOffset - 4, ih)
+    end
 
     love.graphics.setColor(G.C.PANEL)
     ix, iy, iw, ih = draw_rounded_rect(ix + paneOffset, iy, iw - paneOffset, ih, 2, 2, "fill")
@@ -529,9 +558,15 @@ function TopUI:draw(screen)
     -- already are. The reference juices the whole hand-text area on every `update_hand_text`
     -- (`common_events.lua:553`), and this was the one readout on the panel that never moved -
     -- so building up to a Full House looked exactly like building up to a High Card.
+    -- The face the name is actually drawn in: a long name (most of them, in Chinese) steps down.
+    local name_font = Fonts.fit_line(G, love.graphics.getFont(), tostring(handSelected or ""),
+        iw -20, math.floor(ih/3))
     local _, posY = TopUI.center_text_juiced(handSelected, ix - sysDepth * textHeight, iy -2,
         iw -20, math.floor(ih/3), self.hand_juice)
-    posY = posY + math.floor(G.FONTS.PIXEL.MEDIUM_HEIGHT/6)
+    -- The level sits on the hand name's baseline. The old fixed drop put it 4 px above.
+    local name_top, name_ink = Fonts.ink(G, name_font)
+    local level_top, level_ink = Fonts.ink(G, G.FONTS.PIXEL.SMALL)
+    posY = posY + name_top + name_ink - level_top - level_ink
     love.graphics.setFont(G.FONTS.PIXEL.SMALL)
     local handLevel = G:readout_hand_level()
     if(handSelected ~= "" and handLevel ~= nil and not handHidden) then
@@ -642,7 +677,11 @@ function TopUI:draw(screen)
         love.graphics.setColor(G.C.DARK_WHITE or G.C.GREY)
         -- The seed is fixed for the whole run, so this is the most cacheable string on the
         -- screen; it was the only one still being re-shaped sixty times a second.
-        TextCache.printf(self:cached_label("seed", G.SEED or "", I18N.text("hud.seed_prefix", nil, "Seed ")), 250 - sysDepth * textHeight, 96, 146, "center")
+        -- Centred in the strip between the money field and the panel's bottom edge; at y=96
+        -- its letters sat on the money field's bottom row.
+        local seed_top = fieldsPositionY + fieldHeight * 2 + padding
+        local seed_y = Fonts.centre_y(G, love.graphics.getFont(), seed_top, panelY + panelHeight - 1 - seed_top)
+        TextCache.printf(self:cached_label("seed", G.SEED or "", I18N.text("hud.seed_prefix", nil, "Seed ")), 250 - sysDepth * textHeight, seed_y, 146, "center")
     end
 
     -- Joker panel (left 2/3 of top screen).
@@ -683,8 +722,13 @@ function TopUI:draw(screen)
     if G.jokers_on_bottom ~= true then
         counter_y = counter_y + JokerDisplay.band_height(G)
     end
-    love.graphics.setFont(G.FONTS.PIXEL.MICRO or G.FONTS.PIXEL.SMALL)
+    -- The counts take the LABEL face when the strip below the trays has room for it and step
+    -- down when the Joker readouts take that room, centred in whatever is left of the screen.
+    local counter_room = TOP_SCREEN_H - counter_y
+    local counter_font = Fonts.fit_line(G, G.FONTS.PIXEL.LABEL, "00/00", joker_panel_w, counter_room - 4)
+    love.graphics.setFont(counter_font)
     love.graphics.setColor(G.C.DARK_WHITE or G.C.GREY)
+    counter_y = Fonts.centre_y(G, counter_font, counter_y, counter_room)
     local joker_cap = math.max(0, math.floor(tonumber(G.joker_capacity) or 5))
     -- "2/5" changes when a joker is bought or sold, which is a handful of times a round.
     TextCache.printf(self:cached_ratio_label("joker_slots", n, joker_cap),
@@ -855,16 +899,42 @@ end
 --- belongs in `center_text`.
 function TopUI.center_text_static(string, x, y, iw, ih)
     local s = tostring(string or "")
-    local font = love.graphics.getFont()
-    local yval = y + math.floor(ih / 2) - math.floor(font:getHeight() / 2)
+    local yval = Fonts.centre_y(G, love.graphics.getFont(), y, ih)
     TextCache.printf(s, x, yval, iw, "center")
     return x, yval
 end
 
+--- Pip size and the gap between a pip and its caption.
+local PIP_SIZE, PIP_GAP = 12, 4
+
+--- A button caption, led by its controller pip when `button` is given and the d-pad is driving,
+--- centred in the box as one group. Pinning the pip to the left edge and centring the caption in
+--- what was left put the pair 3-4 px left of centre. The caption steps down from `font` until it
+--- fits; it is never scaled. The current font is left as it was.
+---@param text string
+---@param button string|nil controller button whose pip leads the caption
+---@param font love.Font preferred face
+function TopUI.button_caption(text, button, x, y, w, h, font)
+    text = tostring(text or "")
+    local show_pip = button ~= nil and G:gamepad_focus_visible()
+    local pip_w = show_pip and (PIP_SIZE + PIP_GAP) or 0
+    local fitted = Fonts.fit(G, font, text, w - 4 - pip_w)
+    local text_w = fitted:getWidth(text)
+    local left = math.floor(x + (w - pip_w - text_w) / 2 + 0.5)
+    if show_pip and not G:draw_button_pip(button, left, math.floor(y + (h - PIP_SIZE) / 2 + 0.5), PIP_SIZE) then
+        -- No sprite for this button: centre the caption alone.
+        left = math.floor(x + (w - text_w) / 2 + 0.5)
+        pip_w = 0
+    end
+    local caller_font = love.graphics.getFont()
+    love.graphics.setFont(fitted)
+    love.graphics.print(text, left + pip_w, Fonts.centre_y(G, fitted, y, h))
+    love.graphics.setFont(caller_font)
+end
+
 function TopUI.center_text(string, x, y, iw, ih)
     local s = tostring(string or "")
-    local font = love.graphics.getFont()
-    local yval = y + math.floor(ih/2) - math.floor(font:getHeight()/2)
+    local yval = Fonts.centre_y(G, love.graphics.getFont(), y, ih)
     love.graphics.printf(s, x, yval, iw, "center")
     local xval = x
     return xval, yval
@@ -888,12 +958,18 @@ end
 --- right-aligned label grows leftwards instead of sliding. `scale` nil means idle.
 --- @param scale number|nil Pop scale from the baked curve
 function TopUI.printf_juiced(text, x, y, w, align, scale)
+    local font = love.graphics.getFont()
+    if scale then
+        local text_w = math.min(w, font:getWidth(tostring(text)))
+        local reach = (align == "center") and text_w * 0.5 or text_w
+        if PixelGrid.at_rest(scale, math.max(reach, font:getHeight() * 0.5)) then scale = nil end
+    end
     if not scale then
         love.graphics.printf(text, x, y, w, align)
         return
     end
     local anchor_x = (align == "right" and x + w) or (align == "center" and x + w * 0.5) or x
-    local anchor_y = y + love.graphics.getFont():getHeight() * 0.5
+    local anchor_y = y + font:getHeight() * 0.5
     love.graphics.push()
     love.graphics.translate(anchor_x, anchor_y)
     love.graphics.scale(scale, scale)
@@ -902,23 +978,37 @@ function TopUI.printf_juiced(text, x, y, w, align, scale)
     love.graphics.pop()
 end
 
---- `center_text` with a scale pop about the centre of its box. `scale` nil means idle, which is
---- every frame except the quarter second after a counter changes, and costs one nil test.
+--- One line of text centred in a box by its letters, with a scale pop about the box centre.
+--- `scale` nil means idle, which is every frame except the quarter second after a counter
+--- changes.
+---
+--- At rest the text is drawn 1:1 on whole pixels. Fonts are sampled linearly on hardware, so any
+--- other scale or a fractional origin is a blur. Text that does not fit steps down the font
+--- ladder (`Fonts.fit_line`) rather than being scaled. Only text that overflows even the
+--- smallest face is squeezed, as a last resort. The fit is by the letters (`Fonts.ink`), not the
+--- cell: fitting by cell is what drew the Hands, Discards, Ante and Round counters at 64%.
+--- The current font is left as it was.
 --- @param scale number|nil Pop scale from the baked curve
+--- @return number x, number y top left of the drawn text's cell
 function TopUI.center_text_juiced(string, x, y, iw, ih, scale)
     -- A readout is one line. printf would wrap a ratio or a large number out of its panel.
     local text = tostring(string or "")
-    local font = love.graphics.getFont()
-    local width, height = font:getWidth(text), font:getHeight()
-    local fit = math.min(1, iw / math.max(1, width), ih / math.max(1, height))
-    local pop = math.min(scale or 1, iw / math.max(1, width), ih / math.max(1, height))
-    if not scale then pop = fit end
-    local px, py = x + (iw - width * pop) / 2, y + (ih - height * pop) / 2
-    love.graphics.push()
-    love.graphics.translate(px, py)
-    love.graphics.scale(pop, pop)
-    love.graphics.print(text, 0, 0)
-    love.graphics.pop()
+    local caller_font = love.graphics.getFont()
+    local font = Fonts.fit_line(G, caller_font, text, iw, ih)
+    local ink_top, ink_h = Fonts.ink(G, font)
+    local width = font:getWidth(text)
+    local room = math.min(iw / math.max(1, width), ih / math.max(1, ink_h))
+    local pop = math.min(scale or 1, room)
+    if PixelGrid.at_rest(pop, math.max(width, ink_h) * 0.5) then pop = 1 end
+    local px = math.floor(x + (iw - width * pop) / 2 + 0.5)
+    local py = math.floor(y + (ih - ink_h * pop) / 2 - ink_top * pop + 0.5)
+    if font ~= caller_font then love.graphics.setFont(font) end
+    if pop == 1 then
+        love.graphics.print(text, px, py)
+    else
+        love.graphics.print(text, px, py, 0, pop, pop)
+    end
+    if font ~= caller_font then love.graphics.setFont(caller_font) end
     return px, py
 end
 

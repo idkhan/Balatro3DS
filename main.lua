@@ -9,6 +9,13 @@ local nest_ok, nest = pcall(function()
     return require("nest").init({ console = "3ds" })
 end)
 
+-- Desktop screenshot harness (`dev/pixel_lab`). `dev/` is never staged into a console build, and
+-- the flag is never on a console's command line, so this is inert everywhere but a dev machine.
+if type(arg) == "table" and love.filesystem.getInfo("dev/pixel_lab/init.lua") then
+    local Lab = require("dev.pixel_lab")
+    if Lab.requested(arg) then Lab.install(arg) end
+end
+
 -- Startup is slow enough on hardware to look like a hang, so the bar goes up before
 -- anything else is required and is stepped through the rest of boot. Loading is
 -- deliberately free of dependencies; see the header there.

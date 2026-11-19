@@ -58,6 +58,21 @@ Fonts.DESKTOP_MATCH = {
     [33] = { size = 32, line = 29 },
 }
 
+--- Where the letters actually are in each m6x11plus cell: `{ top, height }` of a digit or capital,
+--- in pixels from the top of the cell. A cell is mostly air -- the `h22` sheet's digits are 13 px
+--- tall from row 5 -- so a box that fits a readout by its *cell* height shrinks text that would
+--- have fitted, and centring by cell sits it visibly off centre. Measured off the glyph sheets
+--- `mkbcfnt` produces for PIXEL_FONT_SHEETS (`dev/pixel_lab/bake_hw_fonts.py` reproduces them);
+--- re-measure with the ladder.
+Fonts.INK = {
+    [9]  = { 2, 6 },
+    [13] = { 4, 7 },
+    [18] = { 4, 11 },
+    [22] = { 5, 13 },
+    [27] = { 6, 17 },
+    [33] = { 7, 21 },
+}
+
 --- Role -> requested pixel size.
 ---
 --- NATIVE is what ships. SHARED is the historical ladder, kept so toggling the experiment is
@@ -71,14 +86,26 @@ Fonts.DESKTOP_MATCH = {
 --- 8 -> 9 is the smallest step the ladder offers, which is deliberate - MICRO carries the
 --- boss-effect text into a ~76 px column on the top readout (`topUI.lua:248-250`) that wraps by
 --- line count, so growing it overflows the block rather than just reading bigger.
+---
+--- TOOLTIP is the text in the boxes that open over a selected card, joker, consumable or shop
+--- offer. It used to be SMALL, whose capitals are 7 px tall on the 13 px sheet - too small to read
+--- on hardware in a box that is read up close and has the screen to itself while it is open. The
+--- 18 px sheet (11 px capitals) is already loaded for BUTTON and PRICE, so it costs no memory. The
+--- shared profile keeps SMALL's historical size so the A/B still compares against what shipped.
+---
+--- LABEL is the same move for the short labels that have room for it: button captions, tab
+--- names, panel headers, hints. They were SMALL too. Anything that does not fit at LABEL stays
+--- SMALL rather than being squeezed.
 Fonts.PROFILES = {
     shared = {
         MICRO = 8, TINY = 9, SMALL = 11, PRICE = 15,
         BUTTON = 18, MEDIUM = 22, BUTTON_PRICE = 26, LARGE = 33,
+        TOOLTIP = 11, LABEL = 11,
     },
     native = {
         MICRO = 9, TINY = 9, SMALL = 13, PRICE = 18,
         BUTTON = 18, MEDIUM = 22, BUTTON_PRICE = 27, LARGE = 33,
+        TOOLTIP = 18, LABEL = 18,
     },
 }
 
@@ -91,7 +118,7 @@ Fonts.DEFAULT_PROFILE = "native"
 --- set. It is not a size ordering: `next_smaller` sorts by height, because the roles collapse
 --- onto shared faces differently in each profile.
 local ROLES = {
-    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE",
+    "MICRO", "TINY", "SMALL", "PRICE", "BUTTON", "MEDIUM", "BUTTON_PRICE", "LARGE", "TOOLTIP", "LABEL",
 }
 
 --- Faces for languages m6x11plus cannot draw (`localization.lua`).
@@ -308,6 +335,62 @@ function Fonts.fit(game, font, text, max_w)
         candidate = smaller
     end
     return candidate
+end
+
+--- Top and height of the letters inside `font`'s cell (`Fonts.INK`). A face with no measured
+--- ink -- a language face, or one this table has never seen -- reports its whole cell, which is
+--- the old, conservative behaviour.
+---@param game table
+---@param font love.Font
+---@return number top, number height
+function Fonts.ink(game, font)
+    local pixel = game and game.FONTS and game.FONTS.PIXEL
+    if pixel and not pixel.LANGUAGE then
+        for _, role in ipairs(ROLES) do
+            if pixel[role] == font then
+                local ink = Fonts.INK[pixel[role .. "_HEIGHT"]]
+                if ink then return ink[1], ink[2] end
+                break
+            end
+        end
+    end
+    return 0, font:getHeight()
+end
+
+--- The y to print `font` at so its capitals sit centred in a box `h` tall starting at `y`, on a
+--- whole pixel. Centring the cell instead (`y + (h - getHeight()) / 2`) puts small text about a
+--- pixel low, because the cell is mostly air above the letters, and a hand-tuned `y + 3` only
+--- holds for the one face it was tuned against.
+---@param game table
+---@param font love.Font
+---@param y number
+---@param h number
+---@return number
+function Fonts.centre_y(game, font, y, h)
+    local top, ink_h = Fonts.ink(game, font)
+    return math.floor(y + (h - ink_h) / 2 - top + 0.5)
+end
+
+--- Largest face at or below `font` whose single line of `text` fits `max_w` wide with its
+--- letters (`Fonts.ink`) inside `max_h`, or the smallest there is. The one-line readout
+--- counterpart of `Fonts.fit`: stepping down the ladder keeps the text at a size a sheet was
+--- baked at, where scaling it to fit resamples a linear-filtered sheet into a blur.
+---@param game table
+---@param font love.Font
+---@param text string
+---@param max_w number
+---@param max_h number
+---@return love.Font
+function Fonts.fit_line(game, font, text, max_w, max_h)
+    text = tostring(text or "")
+    local candidate = font
+    while true do
+        local _, ink_h = Fonts.ink(game, candidate)
+        if candidate:getWidth(text) <= max_w and ink_h <= max_h then return candidate end
+        local smaller = Fonts.next_smaller(game, candidate)
+        if not smaller then return candidate end
+        candidate = smaller
+    end
 end
 
 --- Largest face at or below `font` whose *wrapped* block fits `max_w` x `max_h`.

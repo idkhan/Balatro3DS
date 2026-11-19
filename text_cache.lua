@@ -133,9 +133,12 @@ end
 
 --- Draw `batch` at the current colour's expense: white, then put the colour back so this is
 --- a drop-in for a `printf` that left the colour alone.
+---
+--- The origin is rounded: the glyph sheet is sampled linearly on hardware, so text off the pixel
+--- grid is blurred text. Column layouts (`deck_view_ui`) space labels by fractional pitches.
 local function draw_at(batch, x, y, r, g, b, a)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(batch, x, y)
+    love.graphics.draw(batch, math.floor(x + 0.5), math.floor(y + 0.5))
     love.graphics.setColor(r, g, b, a)
 end
 
@@ -147,7 +150,7 @@ function TextCache.printf(text, x, y, limit, align)
     local r, g, b, a = love.graphics.getColor()
     local batch = acquire(font, s, limit, align or "left", r, g, b, a or 1)
     if not batch then
-        love.graphics.printf(s, x, y, limit, align)
+        love.graphics.printf(s, math.floor(x + 0.5), math.floor(y + 0.5), limit, align)
         return
     end
     draw_at(batch, x, y, r, g, b, a)
@@ -161,7 +164,7 @@ function TextCache.print(text, x, y)
     local r, g, b, a = love.graphics.getColor()
     local batch = acquire(font, s, nil, nil, r, g, b, a or 1)
     if not batch then
-        love.graphics.print(s, x, y)
+        love.graphics.print(s, math.floor(x + 0.5), math.floor(y + 0.5))
         return
     end
     draw_at(batch, x, y, r, g, b, a)
