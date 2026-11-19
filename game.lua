@@ -8693,6 +8693,7 @@ function Game:draw_bottom_pause()
         end
         love.graphics.setColor(self.C.WHITE)
         local btn_font = (r.h and r.h <= 20) and self.FONTS.PIXEL.SMALL or self.FONTS.PIXEL.MEDIUM
+        btn_font = Fonts.fit(self, btn_font, label, r.w - 4)
         love.graphics.setFont(btn_font)
         local ty = r.y + math.floor((r.h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
         love.graphics.printf(label, r.x, ty - 1, r.w, "center")
