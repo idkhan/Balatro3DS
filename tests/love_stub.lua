@@ -477,6 +477,40 @@ function stub.install()
                 dirs[normalize(path)] = true
                 return true
             end,
+            --- A File handle with PhysFS semantics: "w" truncates, "a" keeps the contents and
+            --- starts at the end, and a seek is honoured either way, so writing after
+            --- `seek(0)` on an append handle overwrites in place. Contents land on `close`.
+            openFile = function(path, mode)
+                path = normalize(path)
+                local buf = (mode == "a" and files[path]) or ""
+                if mode == "r" and not files[path] then return nil, "file not found" end
+                local pos = (mode == "a") and #buf or 0
+                local open = true
+                local handle = {}
+                function handle:seek(p)
+                    p = tonumber(p) or 0
+                    if not open or p < 0 or p > #buf then return false end
+                    pos = p
+                    return true
+                end
+                function handle:write(data)
+                    if not open or mode == "r" then return false, "not writable" end
+                    data = tostring(data)
+                    buf = buf:sub(1, pos) .. data .. buf:sub(pos + #data + 1)
+                    pos = pos + #data
+                    return true
+                end
+                function handle:read()
+                    return buf:sub(pos + 1)
+                end
+                function handle:close()
+                    if open and mode ~= "r" then files[path] = buf end
+                    open = false
+                    return true
+                end
+                if mode ~= "r" then files[path] = buf end
+                return handle
+            end,
             remove = function(path)
                 path = normalize(path)
                 if files[path] then

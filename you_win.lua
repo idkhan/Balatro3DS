@@ -31,6 +31,9 @@ YouWinUI.information = {
     },
     {
         title = "Most Played Hand", key = "most_played_hand",
+        -- Purple, as on the game-over summary. With no colour the stub fell back to white, the
+        -- same as its label, and read as a blank box (issue #80).
+        color = function(G) return G.C.PURPLE end,
         content = function(G)
             if G.get_most_played_hand_name then
                 return I18N.hand_name(G:get_most_played_hand_name())
@@ -81,6 +84,7 @@ YouWinUI.information = {
     },
     {
         title = "Seed", key = "seed",
+        color = function(G) return G.C.PURPLE end,
         content = function(G)
             if G.SEED == nil then return I18N.text("common.unknown", nil, "Unknown") end
             return tostring(G.SEED)

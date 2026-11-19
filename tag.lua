@@ -254,7 +254,7 @@ function Tag:apply(context)
                 local id = G:_pick_joker_id_shop_rarity_distribution(
                     function() return 1 end, "top", nil, 1, false)
                 if not id then break end
-                G:add_joker_by_def(id)
+                G:add_created_joker(id, "top")
             end
         end
         return true

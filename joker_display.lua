@@ -731,7 +731,15 @@ DEFS.j_blackboard = {
 DEFS.j_flower_pot = {
     main = function(_, ctx)
         local order = { "Hearts", "Diamonds", "Spades", "Clubs" }
-        local has = fill_suits(ctx.game, ctx.scoring, order, order)
+        -- Debuffed cards count, debuffed Wilds do not (`joker_effects.lua`'s Flower Pot).
+        local cards = {}
+        for _, node in ipairs(ctx.played) do
+            local scoring = node.counts_for_play_score == true or node.debuffed_for_scoring == true
+            local wild_debuffed = (node.card_data or {}).enhancement == "wild"
+                and node.debuffed_for_scoring == true
+            if scoring and not wild_debuffed then cards[#cards + 1] = node end
+        end
+        local has = fill_suits(ctx.game, cards, order, order)
         if has.Hearts and has.Clubs and has.Diamonds and has.Spades then return 3, "xmult" end
         return 1, "xmult"
     end,
@@ -740,8 +748,26 @@ DEFS.j_flower_pot = {
 
 DEFS.j_seeing_double = {
     main = function(_, ctx)
-        local has = fill_suits(ctx.game, ctx.scoring,
-            { "Hearts", "Diamonds", "Spades", "Clubs" }, { "Clubs", "Diamonds", "Spades", "Hearts" })
+        -- Every suit a non-Wild card matches counts, then each Wild fills one empty suit,
+        -- Clubs first (`joker_effects.lua`'s Seeing Double).
+        local has, wilds = {}, {}
+        for _, node in ipairs(ctx.scoring or {}) do
+            if (node.card_data or node).enhancement == "wild" then
+                wilds[#wilds + 1] = node
+            else
+                for _, s in ipairs({ "Hearts", "Diamonds", "Spades", "Clubs" }) do
+                    if is_suit(ctx.game, node, s) then has[s] = true end
+                end
+            end
+        end
+        for _, node in ipairs(wilds) do
+            for _, s in ipairs({ "Clubs", "Diamonds", "Spades", "Hearts" }) do
+                if not has[s] and is_suit(ctx.game, node, s) then
+                    has[s] = true
+                    break
+                end
+            end
+        end
         local other = has.Hearts or has.Diamonds or has.Spades
         return (has.Clubs and other) and 2 or 1, "xmult"
     end,

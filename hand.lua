@@ -5,6 +5,20 @@ local Particles = require("particles")
 local JokerDisplay = require("joker_display")
 local PixelGrid = require("pixel_grid")
 
+--- Whether a card counts as every suit when a Flush is being found. Only an undebuffed Wild
+--- does: `Card:is_suit(..., flush_calc)` checks `not self.debuff` before treating a Wild Card
+--- as wild, and a debuffed one falls back to its printed suit (`card.lua:4069`). A suit boss
+--- debuffs every Wild, so this decides real hands -- four Hearts and a Wild under The Club
+--- are not a Flush.
+local function counts_as_wild_for_flush(node)
+    local data = node and node.card_data or {}
+    if data.enhancement ~= "wild" then return false end
+    if node.is_debuffed then return not node:is_debuffed() end
+    if node.debuffed == true or node.debuffed_for_scoring == true then return false end
+    return not (G and G.boss_is_card_debuffed_for_scoring
+        and G:boss_is_card_debuffed_for_scoring(node) == true)
+end
+
 local SCREEN_W = 320
 local SCREEN_H = 240
 local CARD_W = 72
@@ -816,10 +830,7 @@ function Hand:_discard_selected_impl(reason, opts)
             if self.game.boss_after_play_before_draw then
                 self.game:boss_after_play_before_draw()
             end
-            self:fill_from_deck()
-            if self.game.boss_on_hand_refilled then
-                self.game:boss_on_hand_refilled(false, reason)
-            end
+            self:_refill_after(reason)
             self:calculate_play()
         end
         return
@@ -974,6 +985,21 @@ end
 ---@param discarded_nodes table[]
 ---@param discarded_cards table[]
 ---@param selected_set table<table, boolean>
+--- Top the hand back up after a play or discard -- unless the play ended the round. The
+--- reference goes straight to `end_round` from a hand that beat the blind or spent the last
+--- hand, without drawing (`game.lua:3196`, `Game:update_hand_played`), so cards that would have been drawn never
+--- sit in hand for the end of the round: no Gold Card payout, no Blue Seal Planet from them
+--- (issue #80). `_skip_refill_after_play` is set by the play sequence before it finishes.
+function Hand:_refill_after(reason)
+    local skip = self._skip_refill_after_play == true and reason == "play"
+    self._skip_refill_after_play = nil
+    if skip then return end
+    self:fill_from_deck()
+    if self.game and self.game.boss_on_hand_refilled then
+        self.game:boss_on_hand_refilled(false, reason)
+    end
+end
+
 function Hand:_finish_discard(reason, skip_events, discarded_nodes, discarded_cards, selected_set)
     local new_cards, new_nodes = {}, {}
     for i, node in ipairs(self.card_nodes) do
@@ -1009,10 +1035,7 @@ function Hand:_finish_discard(reason, skip_events, discarded_nodes, discarded_ca
     if reason == "play" and self.game and self.game.boss_after_play_before_draw then
         self.game:boss_after_play_before_draw()
     end
-    self:fill_from_deck()
-    if self.game and self.game.boss_on_hand_refilled then
-        self.game:boss_on_hand_refilled(false, reason)
-    end
+    self:_refill_after(reason)
     self:calculate_play()
 end
 
@@ -1400,7 +1423,7 @@ function Hand:build_contained_hand_types(nodes)
         if rank ~= nil then
             rank_counts[rank] = (rank_counts[rank] or 0) + 1
         end
-        if enhancement == "wild" then
+        if counts_as_wild_for_flush(node) then
             wild_count = wild_count + 1
         elseif suit ~= nil then
             suit_counts[suit] = (suit_counts[suit] or 0) + 1
@@ -1945,9 +1968,16 @@ function Hand:_update_play_sequence(dt)
                 free_joker_slots = math.max(0, cap - used)
             end
             local scored_cards = {}
+            -- The reference's `scoring_hand`: debuffed cards stay in it, they just score
+            -- nothing. Jokers that read suits off the whole hand see them (Flower Pot counts a
+            -- debuffed card's suit; `card.lua:3816`).
+            local scoring_hand = {}
             for _, node in ipairs(seq.cards or {}) do
                 if node and node.counts_for_play_score == true then
                     scored_cards[#scored_cards + 1] = node
+                end
+                if node and (node.counts_for_play_score == true or node.debuffed_for_scoring == true) then
+                    scoring_hand[#scoring_hand + 1] = node
                 end
             end
             local ctx = {
@@ -1957,9 +1987,13 @@ function Hand:_update_play_sequence(dt)
                 mult = mult,
                 hand_index = G.selectedHand,
                 hand_type = hand_type,
-                contains_hand_types = self:build_contained_hand_types(scored_cards),
+                -- From every played card, as `G.FUNCS.get_poker_hand_info(G.play.cards)` builds
+                -- `poker_hands`: a Pair among a Four Fingers Flush's odd card still counts for
+                -- The Duo, though that card does not score.
+                contains_hand_types = self:build_contained_hand_types(seq.cards or scored_cards),
                 hand_level = G.selectedHandLevel,
                 cards = scored_cards,
+                scoring_hand = scoring_hand,
                 full_hand = seq.cards,
                 played_cards = seq.cards,
                 free_joker_slots = free_joker_slots,
@@ -2091,6 +2125,8 @@ function Hand:_update_play_sequence(dt)
                 node.scoring_center = false
             end
             self._play_sequence = nil
+            self._skip_refill_after_play = G and G.round_ends_after_play
+                and G:round_ends_after_play() or nil
             self:_discard_selected_impl("play")
             if G and G.evaluate_blind_progress then
                 G:evaluate_blind_progress()
@@ -2536,8 +2572,9 @@ function Hand:play_selected()
         self.game:add_career_stat("c_hands_played", 1)
         if faces > 0 then self.game:add_career_stat("c_face_cards_played", faces) end
         self.game:check_unlock("career_stat")
-        self.game:check_unlock("hand_contents", { cards = played_data })
-        self.game:check_unlock("play_all_hearts")
+        -- The nodes rather than their data: Seeing Double's unlock asks whether a 7 is debuffed.
+        self.game:check_unlock("hand_contents", { cards = cards })
+        self.game:check_unlock("play_all_hearts", { played = cards })
     end
     if G.record_cards_played then
         G:record_cards_played(#cards)
@@ -2770,7 +2807,7 @@ function Hand:calculate_play()
         if suit ~= nil then
             table.insert(suits, suit)
         end
-        if enhancement == "wild" then
+        if counts_as_wild_for_flush(node) then
             wild_count = wild_count + 1
         elseif suit ~= nil then
             local normalized_suit = normalized_suit_for_scoring(suit)
@@ -3009,7 +3046,7 @@ function Hand:calculate_play()
             local t = {}
             for _, node in ipairs(ordered) do
                 local data = node.card_data or {}
-                if data.enhancement == "wild"
+                if counts_as_wild_for_flush(node)
                     or (data.enhancement ~= "stone" and data.suit ~= nil
                         and normalized_suit_for_scoring(data.suit) == want) then
                     t[#t + 1] = node

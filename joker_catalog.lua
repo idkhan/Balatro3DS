@@ -2901,6 +2901,9 @@ JOKER_DEFS = {
         rarity = 1, 
         cost = 5, 
         sell_cost = 2,
+        -- Starts at +20 and loses 4 a round (`game.lua:470`, `config = {mult = 20, extra = 4}`).
+        -- Without it a Popcorn in the shop read +0 until its first round.
+        config = { mult = 20, extra = 4 },
         pos = { 
             atlas = "Joker2_p3", 
             index = 13 

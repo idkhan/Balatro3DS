@@ -233,6 +233,7 @@ suite.test("continue runs its read, restore and save-back as separate steps", fu
     game._pending_stake_id = "stake_white"
     game:start_run_from_main_menu()
     game:autosave_run()
+    game:flush_pending_saves()
 
     local fresh = bootstrap.new_game(4113)
     T.assert_true(fresh:begin_continue_saved_run())

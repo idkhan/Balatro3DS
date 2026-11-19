@@ -3,6 +3,7 @@ return {
     ["language.es"] = "Spanish",
     ["language.zh_CN"] = "Simplified Chinese",
     ["language.da"] = "Danish",
+    ["language.it"] = "Italian",
     ["common.back"] = "Back",
     ["common.continue"] = "Continue",
     ["common.none"] = "None",
@@ -86,6 +87,7 @@ return {
 
     ["round.won"] = "Round won!",
     ["round.reward.blind"] = "Blind reward",
+    ["round.reward.saved"] = "Saved by Mr. Bones",
     ["round.reward.interest"] = "1 interest per $5 (%d max)",
     ["game_over.title"] = "Game Over",
     ["game_over.reason"] = "You ran out of hands before beating this blind.",
