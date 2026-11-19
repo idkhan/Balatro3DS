@@ -979,17 +979,37 @@ function MainMenuUI.draw_how_to_play(game)
 
     love.graphics.setFont(font_m)
     love.graphics.setColor(C.WHITE)
-    love.graphics.printf(page.title, content_x, content_y + 6, content_w, "center")
+    love.graphics.setFont(Fonts.fit(game, font_m, page.title, content_w - 8))
+    Fonts.printf_fit(page.title, content_x, content_y + 6, content_w, "center")
 
-    love.graphics.setFont(font_s)
-    love.graphics.setColor(C.DARK_WHITE or C.GREY)
-    local line_h = love.graphics.getFont():getHeight() + 2
+    -- A line that wraps takes more than one row, so count the wrapped rows and drop a size until
+    -- the whole page fits the box.
     local text_y = content_y + 32
+    local avail_h = content_y + content_h - 4 - text_y
+    local function page_height(f)
+        local h = 0
+        for _, line in ipairs(page.lines) do
+            local _, wrapped = f:getWrap(line, content_w - 16)
+            h = h + math.max(1, #wrapped) * (f:getHeight() + 2)
+        end
+        return h
+    end
+    local body_font = font_s
+    while page_height(body_font) > avail_h do
+        local smaller = Fonts.next_smaller(game, body_font)
+        if not smaller then break end
+        body_font = smaller
+    end
+    love.graphics.setFont(body_font)
+    love.graphics.setColor(C.DARK_WHITE or C.GREY)
+    local line_h = body_font:getHeight() + 2
     for _, line in ipairs(page.lines) do
-        if text_y + line_h <= content_y + content_h - 4 then
+        local _, wrapped = body_font:getWrap(line, content_w - 16)
+        local rows = math.max(1, #wrapped)
+        if text_y + rows * line_h <= content_y + content_h - 4 then
             love.graphics.printf(line, content_x + 8, text_y, content_w - 16, "left")
         end
-        text_y = text_y + line_h
+        text_y = text_y + rows * line_h
     end
 
     local nav_y = content_y + content_h + 6

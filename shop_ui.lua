@@ -473,7 +473,7 @@ function ShopUI.draw_shop_button(game, param)
             local font = part.resolved_font
             local size = font:getHeight()
             love.graphics.setFont(font)
-            love.graphics.printf(part.text, ix + prompt_w, math.floor(ink_y - size * INK_TOP_RATIO),
+            Fonts.printf_fit(part.text, ix + prompt_w, math.floor(ink_y - size * INK_TOP_RATIO),
                 iw - prompt_w, "center")
             ink_y = ink_y + size * INK_HEIGHT_RATIO + LINE_GAP
         end
@@ -747,7 +747,8 @@ end
 ---@param panel_y number
 ---@param panel_h number
 function ShopUI.draw_panel_header(game, text, x, panel_y, panel_h)
-    local font = game.FONTS.PIXEL.MEDIUM
+    -- The label runs along the panel's height, so that is the width it has to fit.
+    local font = Fonts.fit(game, game.FONTS.PIXEL.MEDIUM, text, panel_h - 6)
     love.graphics.setFont(font)
     -- Rotated -90 degrees, so the text runs bottom-to-top and is centred on the panel.
     local y = panel_y + font:getWidth(text) / 2 + panel_h / 2

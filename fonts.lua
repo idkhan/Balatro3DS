@@ -360,4 +360,23 @@ function Fonts.status_line(game)
     return string.format("FONT %s  native %d/%d faces", profile, native, faces)
 end
 
+--- One line of text that never wraps and never overflows `w`. If even the smallest face is too
+--- wide for the box, the line is squeezed horizontally to fit; `love.graphics.printf` would wrap
+--- it instead, and the wrapped half lands on whatever sits under the box. Languages with long
+--- words (Japanese katakana) are why this exists. A line that already fits prints as before.
+function Fonts.printf_fit(text, x, y, w, align)
+    text = tostring(text or "")
+    local font = love.graphics.getFont()
+    local text_w = font:getWidth(text)
+    if text_w <= w then
+        love.graphics.printf(text, x, y, w, align or "left")
+        return
+    end
+    love.graphics.push()
+    love.graphics.translate(x, y)
+    love.graphics.scale(w / text_w, 1)
+    love.graphics.print(text, 0, 0)
+    love.graphics.pop()
+end
+
 return Fonts

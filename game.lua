@@ -8492,7 +8492,7 @@ function Game:draw_bottom_blind_select()
             local label_w = buttonW - prompt_w - 4
             local button_font = Fonts.fit(self, self.FONTS.PIXEL.SMALL, buttonText, label_w)
             love.graphics.setFont(button_font)
-            love.graphics.print(buttonText, buttonX + prompt_w + 2 + math.floor((label_w - button_font:getWidth(buttonText))/2), buttonY + math.floor((buttonH - button_font:getHeight())/2))
+            Fonts.printf_fit(buttonText, buttonX + prompt_w + 2, buttonY + math.floor((buttonH - button_font:getHeight())/2), label_w, "center")
             love.graphics.setFont(self.FONTS.PIXEL.SMALL)
 
             love.graphics.pop()
@@ -8696,7 +8696,7 @@ function Game:draw_bottom_pause()
         btn_font = Fonts.fit(self, btn_font, label, r.w - 4)
         love.graphics.setFont(btn_font)
         local ty = r.y + math.floor((r.h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
-        love.graphics.printf(label, r.x, ty - 1, r.w, "center")
+        Fonts.printf_fit(label, r.x, ty - 1, r.w, "center")
     end
 
     local function draw_cell(r, label, value, hint, focused, listening)
@@ -8713,11 +8713,12 @@ function Game:draw_bottom_pause()
             love.graphics.setLineWidth(2)
             love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
         end
-        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, string.format("%s (%s)", label, value), r.w - 8))
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.printf(string.format("%s (%s)", label, value), r.x + 4, r.y + 4, r.w - 8, "center")
+        Fonts.printf_fit(string.format("%s (%s)", label, value), r.x + 4, r.y + 4, r.w - 8, "center")
         if hint and hint ~= "" then
             love.graphics.setColor(self.C.WHITE)
+            love.graphics.setFont(Fonts.fit_block(self, self.FONTS.PIXEL.SMALL, hint, r.w - 8, r.h - 17))
             love.graphics.printf(hint, r.x + 4, r.y + 15, r.w - 8, "left")
         end
     end
