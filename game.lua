@@ -22,6 +22,7 @@ local PerformanceLab = require("performance_lab")
 local RenderProfiler = require("render_profiler")
 local Particles = require("particles")
 local Fonts = require("fonts")
+local PixelGrid = require("pixel_grid")
 local Localization = require("localization")
 local NumberFormat = require("number_format")
 local Tilt = require("tilt")
@@ -1095,24 +1096,30 @@ function Game:boss_after_discard_or_play(reason)
     end
 end
 
-function Game:boss_after_play_before_draw()
-    local boss_id = self:get_active_boss_blind_id()
-    if boss_id ~= "bl_hook" then return end
+--- The Hook's two discards. They come from the cards still held while the played hand sits
+--- in the play area, before anything scores (`blind.lua:466-486`), so held-in-hand effects
+--- never see them. The play sequence calls this with `mid_play`.
+---@param mid_play boolean|nil
+---@return integer removed
+function Game:boss_hook_discard(mid_play)
     local hand = self.hand
-    if not hand or not hand.cards then return end
+    if not hand or not hand.cards then return 0 end
     -- Pick from a shrinking list as the reference does, then discard the picks together.
     local remaining = {}
-    for i = 1, #hand.cards do remaining[i] = i end
+    for i = 1, #hand.cards do
+        local node = hand.card_nodes and hand.card_nodes[i]
+        if not (node and (node.selected or node.scoring_center)) then
+            remaining[#remaining + 1] = i
+        end
+    end
     local picks = {}
     for _ = 1, 2 do
         if #remaining <= 0 then break end
         local k = self:random("hook", 1, #remaining)
         picks[#picks + 1] = table.remove(remaining, k)
     end
-    local removed = hand.discard_cards_by_hook and hand:discard_cards_by_hook(picks) or 0
-    if removed > 0 then
-        self:notify_boss_effect_triggered({ reason = "hook_discard", count = removed })
-    end
+    if #picks == 0 then return 0 end
+    return hand.discard_cards_by_hook and hand:discard_cards_by_hook(picks, { mid_play = mid_play }) or 0
 end
 
 function Game:boss_before_play_selected(selected_nodes)
@@ -1189,6 +1196,55 @@ function Game:boss_should_void_current_play()
         or self.boss_runtime.psychic_void_play == true
 end
 
+--- Hands the play sequence the dollars The Tooth still has to take, and forgets them.
+---@return integer
+function Game:take_tooth_pending()
+    local rt = self.boss_runtime
+    local n = rt and math.max(0, math.floor(tonumber(rt.tooth_pending) or 0)) or 0
+    if rt then rt.tooth_pending = nil end
+    return n
+end
+
+--- Whether The Hook still has to discard for the hand just played, and forgets it.
+---@return boolean
+function Game:take_hook_pending()
+    local rt = self.boss_runtime
+    local pending = rt and rt.hook_pending == true or false
+    if rt then rt.hook_pending = nil end
+    return pending
+end
+
+--- The beat `play_cards_from_highlighted` gives a boss whose `press_play` acted (The Hook,
+--- The Tooth): the blind chip juices and `tarot2` rings twice, the second lower and 0.06 s
+--- later (`state_events.lua:488-500`).
+function Game:boss_press_play_sting()
+    self:shake(1)
+    if Moveable and Moveable.juice_up then
+        self._blind_chip_juice_state = self._blind_chip_juice_state or {}
+        Moveable.juice_up(self._blind_chip_juice_state)
+    end
+    if Sfx and Sfx.play then Sfx.play("tarot2", 1, 0.4) end
+    -- The same delayed second note as the "Nope!" sting.
+    self._nope_sfx_timer = 0.06
+end
+
+--- One beat of The Tooth: the card juices and $1 goes through the normal loss path --
+--- wallet, "-$1" popup over the card, `coin1` (`blind.lua:500-502`, `ease_dollars`).
+---@param node table|nil the played card being charged for
+function Game:boss_tooth_charge_card(node)
+    self.money = (tonumber(self.money) or 0) - 1
+    local vt = node and node.VT
+    if vt and Popup then
+        local off = node.collision_offset or { x = 0, y = 0 }
+        local s = tonumber(vt.scale) or 1
+        local p = Popup()
+        p:spawn(1, "money_loss", vt.x + (off.x or 0) + (vt.w / 2) * s, vt.y + (off.y or 0) + (vt.h / 2) * s)
+        self:addPopup(p)
+    end
+    if node and node.juice_up then node:juice_up() end
+    if Sfx and Sfx.play then Sfx.play("coin1") end
+end
+
 function Game:boss_apply_on_hand_submitted(selected_nodes)
     local boss_id = self:get_active_boss_blind_id()
     local hand_idx = tonumber(self.selectedHand) or -1
@@ -1204,13 +1260,20 @@ function Game:boss_apply_on_hand_submitted(selected_nodes)
     if not boss_id then return end
 
     if boss_id == "bl_tooth" then
+        -- The dollars are not taken here: the play sequence charges them one card at a time
+        -- (`Game:boss_tooth_charge_card`), the way `Blind:press_play` queues an
+        -- `ease_dollars(-1)` per played card (`blind.lua:497-504`).
         local n = type(selected_nodes) == "table" and #selected_nodes or 0
-        local before = tonumber(self.money) or 0
-        -- No floor: the reference keeps taking $1 a card into debt (`ease_dollars(-1)`).
-        self.money = before - n
-        if (tonumber(self.money) or 0) < before then
-            self:notify_boss_effect_triggered({ reason = "tooth_money_loss", amount = before - (tonumber(self.money) or 0) })
+        if n > 0 then
+            self.boss_runtime = self.boss_runtime or {}
+            self.boss_runtime.tooth_pending = (tonumber(self.boss_runtime.tooth_pending) or 0) + n
+            self:notify_boss_effect_triggered({ reason = "tooth_money_loss", amount = n, quiet = true })
         end
+    elseif boss_id == "bl_hook" then
+        -- `triggered` is set whether or not any card is left to take (`blind.lua:484`).
+        self.boss_runtime = self.boss_runtime or {}
+        self.boss_runtime.hook_pending = true
+        self:notify_boss_effect_triggered({ reason = "hook_discard", quiet = true })
     elseif boss_id == "bl_ox" then
         local target_idx = self:most_played_hand_index()
         if target_idx > 0 and hand_idx == target_idx then
@@ -1387,8 +1450,9 @@ function Game:notify_boss_effect_triggered(meta)
     -- The reference juices the blind chip and HUD debuff text every time a boss ability
     -- fires (`reference/Balatro/functions/state_events.lua:492-494`, `blind.lua:417-423`) —
     -- without it a card scoring zero is illegible. The port's blind chip lives on the top
-    -- readout, so the playfield rattle carries the beat.
-    self:shake(1)
+    -- readout, so the playfield rattle carries the beat. A `quiet` trigger leaves it to the
+    -- boss's own sting, which comes later in the play (`Game:boss_press_play_sting`).
+    if not (meta and meta.quiet) then self:shake(1) end
     -- Mirrors `G.GAME.blind.triggered` (`reference/Balatro/blind.lua:484`): set when a boss
     -- ability fires, cleared when the next hand is played. Matador reads it at `joker_main`.
     self.blind_triggered_this_hand = true
@@ -4399,10 +4463,8 @@ end
 --- for the suit being edited; nothing changes until Set, so browsing never redraws a run.
 
 --- The preview is three live playing cards, not three sprites, so it moves the way a hand does:
---- the same idle sway as `Hand:apply_idle_sway` (`hand.lua`), the same spring, juice on a tap,
+--- the same idle bob as `Hand:apply_idle_sway` (`hand.lua`), the same spring, juice on a tap,
 --- and a real flip when the choice changes, with the art swapping edge-on as a card turned over.
-local ART_SWAY_R_AMP = 0.02
-local ART_SWAY_R_RATE = 2
 local ART_SWAY_Y_AMP = 0.03 * CardArt.CELL_H / (2.4 * 47 / 41) -- the hand's units, in px
 local ART_SWAY_Y_RATE = 0.666
 local ART_SWAY_PHASE_PER_PX = 20 / 320
@@ -4500,7 +4562,6 @@ function Game:update_card_art_preview(dt)
         local base = card._art_base
         if base then
             local phase = base.x * ART_SWAY_PHASE_PER_PX
-            card.T.r = ART_SWAY_R_AMP * math.sin(ART_SWAY_R_RATE * t + phase)
             card.T.y = base.y + ART_SWAY_Y_AMP * math.sin(ART_SWAY_Y_RATE * t + phase)
         end
         card:update(dt)
@@ -6582,7 +6643,7 @@ function Game:_draw_shop_voucher_tooltip()
     if type(offer) ~= "table" or type(rect) ~= "table" then return end
     local title = tostring(I18N.content_name("voucher", offer.id, offer.name or "Voucher"))
     local desc = tostring(I18N.content_text("voucher", offer.id, offer.description or ""))
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
@@ -6592,7 +6653,7 @@ function Game:_draw_shop_booster_tooltip(offer, rect)
     local title = tostring(offer.pack and BoosterPackUI.pack_name(offer.pack, offer.size)
         or offer.name or I18N.text("booster.title", nil, "Booster Pack"))
     local desc = BoosterPackUI.shop_tooltip_description(offer)
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
@@ -8069,12 +8130,19 @@ function Game:draw_blind_chip_sprite(sprite_row, center_x, center_y, scale)
     local sprite_index = (blind_row * frames_per_blind) + frame
     local quad, cell_w, cell_h = self:atlas_cell_quad(atlas, sprite_index)
     if not quad then return end
-    local s = scale or 1
+    -- Callers size the chip by eye (1.05, 1.1); at those scales the nearest filter doubles every
+    -- tenth row of the chip's lettering. Whole scales and a whole-pixel corner keep it even.
+    local s = PixelGrid.art_scale(scale or 1)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(atlas.image, quad, center_x - (cell_w * s * 0.5), center_y - (cell_h * s * 0.5), 0, s, s)
+    love.graphics.draw(atlas.image, quad, PixelGrid.snap(center_x - cell_w * s * 0.5),
+        PixelGrid.snap(center_y - cell_h * s * 0.5), 0, s, s)
 end
 
 function Game:draw_blind_chip_anim(blind_index, center_x, center_y, scale)
+    local juice = self._blind_chip_juice_state
+    if juice and juice.juice_scale and tonumber(blind_index) == tonumber(self.current_blind_index) then
+        scale = (tonumber(scale) or 1) * juice.juice_scale
+    end
     local blind_row = tonumber(self:get_blind_sprite_index(blind_index)) or 0
     self:draw_blind_chip_sprite(blind_row, center_x, center_y, scale)
 end
@@ -8278,12 +8346,15 @@ function Game:draw_bottom_blind_select()
         end
         local card_h = 232 - y
 
+        -- Radius 6, not 4: the 3 px frame sits inside the panel, so its inner corner keeps a
+        -- radius of 3. At 4 it was 1 and read as square where the frame matches the backdrop
+        -- (Small Blind's blue).
         love.graphics.setColor(card_color)
-        love.graphics.rectangle("fill", x, y, card_w, card_h, 4, 4)
+        love.graphics.rectangle("fill", x, y, card_w, card_h, 6, 6)
         local blind_color = self:get_blind_color(i) or self.C.BLOCK.BACK
         love.graphics.setColor(blind_color)
         love.graphics.setLineWidth(3)
-        love.graphics.rectangle("line", x, y, card_w, card_h, 4, 4)
+        PixelGrid.outline(x, y, card_w, card_h, 6)
 
 
         local padding = 16
@@ -8329,11 +8400,12 @@ function Game:draw_bottom_blind_select()
                 love.graphics.setColor(self.C.WHITE)
                 love.graphics.setFont(effect_font)
                 love.graphics.push()
-                love.graphics.translate(x + (card_w - text_w * scale) / 2, y + 98)
+                -- Whole pixels at the usual scale of 1: fonts are sampled linearly on hardware.
+                love.graphics.translate(math.floor(x + (card_w - text_w * scale) / 2 + 0.5), y + 98)
                 love.graphics.scale(scale, scale)
                 for line_index, line in ipairs(lines) do
                     local line_w = effect_font:getWidth(line)
-                    love.graphics.print(line, (text_w - line_w) / 2, (line_index - 1) * effect_font:getHeight())
+                    love.graphics.print(line, math.floor((text_w - line_w) / 2), (line_index - 1) * effect_font:getHeight())
                 end
                 love.graphics.pop()
                 scorePosY = 98 + math.ceil(block_h * scale) + 4
@@ -8361,18 +8433,9 @@ function Game:draw_bottom_blind_select()
         self._blind_select_tap_rects[i] = { x = btn_x, y = btn_y, w = selectWidth, h = selectHeight }
 
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
-        local tx = x + math.floor(card_w / 2) - math.floor(selectWidth / 2)
-        local select_prompt_w = 0
-        if selectable and self:gamepad_focus_visible() then
-            if self:draw_button_pip(self:get_button_for_role("confirm"), tx + 3, btn_y + math.floor((selectHeight - 13)/2), 12) then
-                select_prompt_w = 17
-            end
-        end
-        local select_label_w = selectWidth - select_prompt_w - 4
-        local select_font = Fonts.fit(self, self.FONTS.PIXEL.SMALL, selectText, select_label_w)
-        love.graphics.setFont(select_font)
-        love.graphics.printf(selectText, tx + select_prompt_w + 2, btn_y + math.floor((selectHeight-select_font:getHeight())/2), select_label_w, "center")
+        TopUI.button_caption(selectText, selectable and self:get_button_for_role("confirm") or nil,
+            btn_x, btn_y, selectWidth, selectHeight, self.FONTS.PIXEL.LABEL)
+        local tx
 
         -- Wide enough for the longest boss name ("Crimson Heart"), which overran the old 70 px
         -- pill. The card's inner border sits at x+8..x+90, so this keeps a 4 px margin inside it.
@@ -8380,11 +8443,13 @@ function Game:draw_bottom_blind_select()
         local label = self:get_blind_display_name(i)
         love.graphics.setColor(blind_color)
         tx = x + math.floor(card_w / 2) - math.floor(blindWidth / 2) + 2
-        love.graphics.rectangle("fill", tx, btn_y + selectHeight + 8, blindWidth - 4, selectHeight, 4, 4)
+        local pill_y = btn_y + selectHeight + 8
+        love.graphics.rectangle("fill", tx, pill_y, blindWidth - 4, selectHeight, 4, 4)
 
+        -- Centred in the pill as drawn (blindWidth - 4), not in blindWidth, which put every name
+        -- 2 px right of centre.
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, label, blindWidth - 4))
-        love.graphics.printf(label, tx, btn_y + selectHeight + 8 + 2, blindWidth, "center")
+        TopUI.button_caption(label, nil, tx, pill_y, blindWidth - 4, selectHeight, self.FONTS.PIXEL.SMALL)
         love.graphics.setFont(self.FONTS.PIXEL.SMALL)
         self:draw_blind_chip_anim(i, x + math.floor(card_w / 2), y + 80, 1.1)
         self._blind_info_tap_rects[i] = {
@@ -8403,22 +8468,32 @@ function Game:draw_bottom_blind_select()
         tx = x + math.floor((card_w - scoreWidth) / 2)
         love.graphics.rectangle("fill", tx, y + scorePosY + 2, scoreWidth, scoreHeight, 4, 4)
 
-        local ty = y + scorePosY + 5
+        -- Three rows laid out by their letters: label, target, reward. The target is the number
+        -- the player is here to read, so it gets the PRICE face (11 px capitals, up from SMALL's
+        -- 7); the box keeps its height.
+        local _, label_ink = Fonts.ink(self, text_font)
+        local req_font = Fonts.fit(self, self.FONTS.PIXEL.PRICE, NumberFormat.format(math.floor(tonumber(target) or 0)), scoreWidth - 4)
+        local _, req_ink = Fonts.ink(self, req_font)
+        local row_gap = 4
+        local rows_h = label_ink + row_gap + req_ink + row_gap + label_ink
+        local ty = y + scorePosY + 2 + math.floor((scoreHeight - rows_h) / 2)
         love.graphics.setColor(self.C.WHITE)
         TopUI.center_text_juiced(I18N.text("blind.score_at_least", nil, "Score at Least"),
-            tx + 2, ty, scoreWidth - 4, text_font:getHeight())
+            tx + 2, ty, scoreWidth - 4, label_ink)
         love.graphics.setColor(self.C.RED)
         local req = NumberFormat.format(math.floor(tonumber(target) or 0))
-        love.graphics.setFont(Fonts.fit(self, text_font, req, scoreWidth - 4))
-        TopUI.center_text_juiced(req, tx + 2, ty + line_step, scoreWidth - 4, text_font:getHeight())
+        love.graphics.setFont(req_font)
+        TopUI.center_text_juiced(req, tx + 2, ty + label_ink + row_gap, scoreWidth - 4, req_ink)
         love.graphics.setFont(text_font)
 
         local reward_label = I18N.text("blind.reward", nil, "Reward: ")
         local money = TopUI:cached_reward_pips(reward)
         local total_w = text_font:getWidth(reward_label .. money)
         local scale = math.min(1, (scoreWidth - 4) / math.max(1, total_w))
+        local reward_row_y = ty + label_ink + row_gap + req_ink + row_gap
         love.graphics.push()
-        love.graphics.translate(tx + (scoreWidth - total_w * scale) / 2, ty + 2 * line_step)
+        love.graphics.translate(math.floor(tx + (scoreWidth - total_w * scale) / 2 + 0.5),
+            Fonts.centre_y(self, text_font, reward_row_y, label_ink))
         love.graphics.scale(scale, scale)
         love.graphics.setColor(self.C.WHITE)
         love.graphics.print(reward_label, 0, 0)
@@ -8433,13 +8508,17 @@ function Game:draw_bottom_blind_select()
             love.graphics.setColor(self.C.WHITE)
             local or_text = I18N.t("common.or")
             local w = love.graphics.getFont():getWidth(or_text)
-            love.graphics.print(or_text, tx + math.floor(blindWidth/2) - math.floor(w/2) + 4, ty + scoreHeight - 1)
+            -- Centred on the score box above it and in the gap down to the skip box.
+            local score_bottom = y + scorePosY + 2 + scoreHeight
+            local or_gap = text_font:getHeight() + 5
+            love.graphics.print(or_text, tx + math.floor((scoreWidth - w) / 2 + 0.5),
+                Fonts.centre_y(self, text_font, score_bottom, or_gap))
 
             -- Skip Box
             local p = 4
             local sx = x + p
             local sw = card_w - 2 * p
-            local sy = ty + scoreHeight + text_font:getHeight() + 2
+            local sy = score_bottom + or_gap
             local sh = 24 + 2 * p
             love.graphics.setColor(self.C.BLOCK.BACK)
             love.graphics.rectangle("fill", sx, sy, sw, sh, 4, 4)
@@ -8481,18 +8560,9 @@ function Game:draw_bottom_blind_select()
             self._blind_skip_tap_rects = self._blind_skip_tap_rects or {}
             self._blind_skip_tap_rects[i] = { x = buttonX, y = buttonY, w = buttonW, h = buttonH, blind_index = i }
             love.graphics.setColor(self.C.WHITE)
-            local buttonText = I18N.text("blind.skip_short", nil, "Skip")
-            local prompt_w = 0
-            if can_skip and self:gamepad_focus_visible() then
-                local button = self:get_button_for_role("cancel")
-                if self:draw_button_pip(button, buttonX + 3, buttonY + math.floor((buttonH - 13) / 2), 12) then
-                    prompt_w = 17
-                end
-            end
-            local label_w = buttonW - prompt_w - 4
-            local button_font = Fonts.fit(self, self.FONTS.PIXEL.SMALL, buttonText, label_w)
-            love.graphics.setFont(button_font)
-            Fonts.printf_fit(buttonText, buttonX + prompt_w + 2, buttonY + math.floor((buttonH - button_font:getHeight())/2), label_w, "center")
+            TopUI.button_caption(I18N.text("blind.skip_short", nil, "Skip"),
+                can_skip and self:get_button_for_role("cancel") or nil,
+                buttonX, buttonY, buttonW, buttonH, self.FONTS.PIXEL.LABEL)
             love.graphics.setFont(self.FONTS.PIXEL.SMALL)
 
             love.graphics.pop()
@@ -8565,7 +8635,7 @@ function Game:_draw_blind_info_tooltip()
     if not rect then return end
     local title = self:get_blind_display_name(blind_index)
     local desc = self:get_blind_description(blind_index)
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
@@ -8580,7 +8650,7 @@ function Game:_draw_skip_tag_tooltip()
     if not info or not rect then return end
     local title = tostring(info.name or I18N.text("term.tag", nil, "Tag"))
     local desc = tostring(info.description or "")
-    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.SMALL) or love.graphics.getFont()
+    local font = (self.FONTS and self.FONTS.PIXEL and self.FONTS.PIXEL.TOOLTIP) or love.graphics.getFont()
     local resolved = TooltipDraw.resolved_lines_from_multiline(desc)
     TooltipDraw.draw_tooltip_layout(font, title, resolved, rect.x, rect.y, rect.w, rect.h)
 end
@@ -8689,14 +8759,18 @@ function Game:draw_bottom_pause()
         if focused then
             love.graphics.setColor(1, 1, 1, 1)
             love.graphics.setLineWidth(2)
-            love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+            PixelGrid.outline(r.x, r.y, r.w, r.h)
         end
         love.graphics.setColor(self.C.WHITE)
         local btn_font = (r.h and r.h <= 20) and self.FONTS.PIXEL.SMALL or self.FONTS.PIXEL.MEDIUM
-        btn_font = Fonts.fit(self, btn_font, label, r.w - 4)
+        if self.FONTS.PIXEL.LANGUAGE then btn_font = Fonts.fit(self, btn_font, label, r.w - 4) end
         love.graphics.setFont(btn_font)
         local ty = r.y + math.floor((r.h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
-        Fonts.printf_fit(label, r.x, ty - 1, r.w, "center")
+        if self.FONTS.PIXEL.LANGUAGE then
+            Fonts.printf_fit(label, r.x, ty - 1, r.w, "center")
+        else
+            love.graphics.printf(label, r.x, ty - 1, r.w, "center")
+        end
     end
 
     local function draw_cell(r, label, value, hint, focused, listening)
@@ -8711,14 +8785,25 @@ function Game:draw_bottom_pause()
         if focused or listening then
             love.graphics.setColor(1, 1, 1, 1)
             love.graphics.setLineWidth(2)
-            love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+            PixelGrid.outline(r.x, r.y, r.w, r.h)
         end
-        love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, string.format("%s (%s)", label, value), r.w - 8))
+        local cell_text = string.format("%s (%s)", label, value)
+        if self.FONTS.PIXEL.LANGUAGE then
+            love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, cell_text, r.w - 8))
+        else
+            love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        end
         love.graphics.setColor(self.C.WHITE)
-        Fonts.printf_fit(string.format("%s (%s)", label, value), r.x + 4, r.y + 4, r.w - 8, "center")
+        if self.FONTS.PIXEL.LANGUAGE then
+            Fonts.printf_fit(cell_text, r.x + 4, r.y + 4, r.w - 8, "center")
+        else
+            love.graphics.printf(cell_text, r.x + 4, r.y + 4, r.w - 8, "center")
+        end
         if hint and hint ~= "" then
             love.graphics.setColor(self.C.WHITE)
-            love.graphics.setFont(Fonts.fit_block(self, self.FONTS.PIXEL.SMALL, hint, r.w - 8, r.h - 17))
+            if self.FONTS.PIXEL.LANGUAGE then
+                love.graphics.setFont(Fonts.fit_block(self, self.FONTS.PIXEL.SMALL, hint, r.w - 8, r.h - 17))
+            end
             love.graphics.printf(hint, r.x + 4, r.y + 15, r.w - 8, "left")
         end
     end
@@ -9060,7 +9145,7 @@ function Game:draw_bottom_pause()
                 local r = self._art_carousel_rect
                 love.graphics.setColor(1, 1, 1, 1)
                 love.graphics.setLineWidth(2)
-                love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+                PixelGrid.outline(r.x, r.y, r.w, r.h)
             end
 
             love.graphics.setFont(self.FONTS.PIXEL.SMALL)
@@ -9079,7 +9164,7 @@ function Game:draw_bottom_pause()
             local bx, by = cr.x + 6, cr.y + math.floor((cr.h - box) / 2)
             love.graphics.setColor(self.C.WHITE)
             love.graphics.setLineWidth(1)
-            love.graphics.rectangle("line", bx + 0.5, by + 0.5, box - 1, box - 1)
+            PixelGrid.outline(bx, by, box, box)
             if contrast then
                 love.graphics.setColor(self.C.GREEN)
                 love.graphics.rectangle("fill", bx + 2, by + 2, box - 4, box - 4)
@@ -9128,7 +9213,7 @@ function Game:draw_bottom_pause()
                 if is_pause_focused("speed", i) then
                     love.graphics.setColor(1, 1, 1, 1)
                     love.graphics.setLineWidth(2)
-                    love.graphics.rectangle("line", rx + 0.5, sb_y + 0.5, sb_w - 1, sb_h - 1)
+                    PixelGrid.outline(rx, sb_y, sb_w, sb_h)
                 end
             end
 
@@ -10127,6 +10212,9 @@ function Game:update(dt, real_dt)
         local pending = self._pending_round_win_eval
         self._pending_round_win_eval = nil
         self:_finish_round_win_eval(pending.ctx, pending.hands_left)
+    end
+    if self._blind_chip_juice_state and self._blind_chip_juice_state.juice and Moveable then
+        Moveable.update_juice(self._blind_chip_juice_state, real_dt or dt)
     end
     if self._nope_sfx_timer then
         self._nope_sfx_timer = self._nope_sfx_timer - dt
@@ -18578,10 +18666,15 @@ function Game:draw_node_gamepad_focus_outline(node)
     else
         love.graphics.setColor(0, 0, 0, 1)
     end
+    -- Follow the art: its whole pixels, a joker's idle bob, and the node's angle step
+    -- (`PixelGrid.turn`), so the outline moves with the art instead of flickering along its edge.
+    r.x, r.y = PixelGrid.snap(r.x), PixelGrid.snap(r.y)
+    if node.idle_bob then r.y = r.y + node:idle_bob() end
     love.graphics.push()
-    local rot = (node.VT and node.VT.r) or 0
     local cx = r.x + r.w / 2
     local cy = r.y + r.h / 2
+    local scale = (node.VT and node.VT.scale) or 1
+    local rot = PixelGrid.turn((node.VT and node.VT.r) or 0, node.VT.w * scale, node.VT.h * scale)
     love.graphics.translate(cx, cy)
     love.graphics.rotate(rot)
     love.graphics.translate(-cx, -cy)
@@ -19353,6 +19446,9 @@ local function load_atlas_image(self, atlas)
         ok, img = pcall(love.graphics.newImage, atlas.path, {})
         if not ok then err = img end
     end
+    -- A sheet that is only ever magnified as a soft image, never as pixel art, declares its
+    -- own filter (the menu backdrop).
+    if ok and atlas.filter then img:setFilter(atlas.filter, atlas.filter) end
     atlas.image = ok and img or nil
     atlas.load_error = (not ok) and tostring(err) or nil
     atlas._failed_at = (not ok) and love.timer and love.timer.getTime() or nil
@@ -19439,9 +19535,11 @@ function Game:draw_button_pip(button, x, y, size)
     local quad, cell_w, cell_h = self:atlas_cell_quad(atlas, index)
     if not quad then return false end
 
+    -- Always 1:1, centred on the `size` box the caller laid out (11-14 px). The sheet is baked at
+    -- pip size because nearest-filtered art scaled to 0.375 dropped five pixels in eight.
     size = tonumber(size) or 14
-    local scale = size / cell_w
-    love.graphics.draw(atlas.image, quad, x, y, 0, scale, scale)
+    local offset = math.floor((size - cell_w) / 2 + 0.5)
+    love.graphics.draw(atlas.image, quad, math.floor(x + offset + 0.5), math.floor(y + offset + 0.5))
     return true
 end
 
@@ -19517,9 +19615,13 @@ function Game:set_render_settings()
             -- falls back to this prebaked 63-frame sheet: 1024x1024, 4 MiB resident, loaded
             -- on entry to the home screen and freed on leaving it. Where the field does draw,
             -- `path` is nil so `ensure_animation_atlas_loaded` never touches the card.
+            --
+            -- It is stretched 3.125x on the top screen and 2.5x on the bottom. Through the
+            -- nearest filter that is a mosaic of uneven 2-, 3- and 4-pixel blocks. The
+            -- reference draws this backdrop as a smooth shader, so it is magnified linearly.
             {name = "menu", path = (not require("backdrop").is_supported())
                 and "resources/textures/1x/menu.png" or nil,
-                px=128, py=128, cols=8, rows=8, frames = 63},
+                px=128, py=128, cols=8, rows=8, frames = 63, filter = "linear"},
         }
         self.asset_atli = {
             -- Edition pattern sheets: structure only, colour comes from the vertex field.
@@ -19543,9 +19645,10 @@ function Game:set_render_settings()
             -- `centers` + `cards_2` the way Card:draw does would pull 4 MiB of atlas onto the
             -- title screen for one 72x95 sprite, so it is pre-composited into its own sheet.
             {name = "title_ace", path = "resources/textures/1x/title_ace.png",px=72,py=95},
-            -- A 640x34 3DS-only strip. Its 20 cells retain Balatro's binding-pip order,
-            -- but declaring the single row is essential: CTR reports padded texture sizes.
-            {name = 'gamepad_ui_3ds', path = "resources/textures/gamepad_ui_3ds_opt_1x.png",px=32,py=34,cols=20,rows=1},
+            -- A 240x13 3DS-only strip, drawn 1:1 (`dev/bake_button_pips.py`). Its 20 cells keep
+            -- Balatro's binding-pip order, but declaring the single row is essential: CTR
+            -- reports padded texture sizes.
+            {name = 'gamepad_ui_3ds', path = "resources/textures/gamepad_ui_3ds_12px.png",px=12,py=13,cols=20,rows=1},
             {name = 'tags', path = "resources/textures/1x/tags.png",px=34,py=34,cols=10},
             {name = 'stickers', path = "resources/textures/1x/stickers.png",px=72,py=95},
             {name = 'chips', path = "resources/textures/1x/chips.png",px=30,py=30},
@@ -19628,6 +19731,7 @@ function Game:set_render_settings()
             self.ANIMATION_ATLAS[name].cols = entry.cols
             self.ANIMATION_ATLAS[name].rows = entry.rows
             self.ANIMATION_ATLAS[name].frames = entry.frames
+            self.ANIMATION_ATLAS[name].filter = entry.filter
             -- Lazy, like the asset atlases. These used to load during Game() for every
             -- sheet but `menu`, which meant BlindChips.png was resident before the title
             -- screen drew: 864x1008 pads to 1024x1024 on hardware, so 4 MiB of a 64 MB

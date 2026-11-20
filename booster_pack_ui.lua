@@ -2,8 +2,9 @@
 --- Cards are shown like shop items: tap to select (tooltip), then Pick/Use button next to selected.
 --- Tarot/Spectral: hand drawn at the top, cards below; select hand first, then tap tarot, then Use.
 
-local ShopUI = require("shop_ui")
+local PixelGrid = require("pixel_grid")
 local Fonts = require("fonts")
+local ShopUI = require("shop_ui")
 local Particles = require("particles")
 
 local BoosterPackUI = {}
@@ -361,26 +362,30 @@ function BoosterPackUI.draw_bottom(game)
     love.graphics.rectangle("fill", math.floor(width/2) - math.floor(info_w/2), height - info_h, info_w, info_h, 4, 4)
     
     love.graphics.setColor(game.C.RED)
-    love.graphics.rectangle("line", math.floor(width/2) - math.floor(info_w/2), height - info_h, info_w, info_h + 10, 2, 2)
-    love.graphics.setFont(game.FONTS.PIXEL.MEDIUM)
+    PixelGrid.outline(math.floor(width/2) - math.floor(info_w/2), height - info_h, info_w, info_h + 10, 2)
+    -- Title and picks stacked by their letters and centred in the panel's visible part (it
+    -- runs off the bottom of the screen); the picks count was SMALL, 7 px capitals.
     love.graphics.setColor(game.C.WHITE)
     local title = sess.title or I18N.text("booster.pack", nil, "Pack")
     local pr = tonumber(sess.picks_remaining) or 0
-    -- A long kana pack name ("ジャンボ天体パック") wrapped onto the picks line. Step it down or
-    -- squeeze it so it stays on one line.
-    local title_font = Fonts.fit_soft(game, game.FONTS.PIXEL.MEDIUM, title, info_w - 8)
+    local picks = I18N.text("booster.picks_left_prefix", nil, "Picks left: ") .. tostring(pr)
+    local info_x = math.floor(width/2) - math.floor(info_w/2)
+    local title_font = Fonts.fit(game, game.FONTS.PIXEL.MEDIUM, title, info_w - 8)
+    local picks_font = Fonts.fit(game, game.FONTS.PIXEL.LABEL, picks, info_w - 8)
+    local title_top, title_ink = Fonts.ink(game, title_font)
+    local picks_top, picks_ink = Fonts.ink(game, picks_font)
+    local row_gap = 6
+    local rows_y = height - info_h + math.floor((info_h - (title_ink + row_gap + picks_ink)) / 2 + 0.5)
     love.graphics.setFont(title_font)
-    local title_y = info_y + 6 + math.floor((game.FONTS.PIXEL.MEDIUM:getHeight() - title_font:getHeight()) / 2)
-    Fonts.printf_fit(title, math.floor(width/2) - math.floor(info_w/2) + 4, title_y, info_w - 8, "center")
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    local picks_text = I18N.text("booster.picks_left_prefix", nil, "Picks left: ") .. tostring(pr)
-    Fonts.printf_fit(picks_text, math.floor(width/2) - math.floor(info_w/2) + 4, info_y + 32, info_w - 8, "center")
+    love.graphics.printf(title, info_x, rows_y - title_top, info_w, "center")
+    love.graphics.setFont(picks_font)
+    love.graphics.printf(picks, info_x, rows_y + title_ink + row_gap - picks_top, info_w, "center")
 
     local skip_w = 60
     local skip_h = info_h - 4
     local skip_x = width - padding - skip_w
     local skip_y = info_y + 8
-    local skip_rect = { x = skip_x, y = skip_y, w = skip_w, h = skip_h, color = game.C.RED, text = I18N.text("common.skip", nil, "Skip"), lines = 1 }
+    local skip_rect = { x = skip_x, y = skip_y, w = skip_w, h = skip_h, color = game.C.RED, text = I18N.text("common.skip", nil, "Skip") }
     BoosterPackUI._draw_small_button(game, skip_rect)
     game._booster_skip_rect = { x = skip_x, y = skip_y, w = skip_w, h = skip_h }
 
@@ -399,14 +404,7 @@ function BoosterPackUI._draw_small_button(game, param)
     if _G.draw_rect_with_shadow then
         local ix, iy, iw, ih = draw_button_with_shadow(param.x, param.y, param.w, param.h, 4, 2, param.color, game.C.BLOCK.SHADOW, 2)
         love.graphics.setColor(game.C.WHITE)
-        -- "スキップ" is wider than the 60 px button at the MEDIUM size and wrapped onto a second
-        -- line. Fit it to the button's inner width, then centre the fitted face.
-        local font = Fonts.fit_soft(game, game.FONTS.PIXEL.MEDIUM, param.text, iw - 4)
-        love.graphics.setFont(font)
-        local textHeight = font:getHeight()
-        local lines = param.lines or 1
-        local textY = iy + math.floor(ih / 2) - math.floor((textHeight / 2) * lines)
-        Fonts.printf_fit(param.text, ix + 2, textY, iw - 4, "center")
+        TopUI.button_caption(param.text, nil, ix, iy, iw, ih, game.FONTS.PIXEL.MEDIUM)
     else
         love.graphics.setColor(param.color)
         love.graphics.rectangle("fill", param.x, param.y, param.w, param.h, 4, 4)

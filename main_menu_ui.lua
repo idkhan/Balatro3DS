@@ -1,3 +1,4 @@
+local PixelGrid = require("pixel_grid")
 local Fonts = require("fonts")
 
 local MainMenuUI = {}
@@ -240,13 +241,12 @@ local LOGO_SCALE = 7 / 8
 --- Idle motion for the title ace, from the single-card branch of `cardarea.lua:466-471`:
 --- `T.r = 0.02*sin(2t)` and `T.y = base + 0.03*sin(0.666t)`, both in game units.
 ---
---- The rotation ports over unchanged. The bob does not: 0.03 units is 2.2 px against the
---- reference's 73 px tile on a 720p window, which is 0.83% of the card's height. The same
---- fraction of an 83 px card here is 0.7 px -- below the threshold where anything reads as
---- moving on a 240p panel. So the amplitude is set in pixels to keep the *visible* travel the
---- reference has, and the periods are kept exactly.
-local ACE_TILT_RAD = 0.02
-local ACE_TILT_HZ = 2.0
+--- The bob is set in pixels: 0.03 units is 2.2 px against the reference's 73 px tile on a 720p
+--- window, which is 0.83% of the card's height. The same fraction of an 83 px card here is
+--- 0.7 px, below the threshold where anything reads as moving on a 240p panel. So the amplitude
+--- keeps the *visible* travel the reference has, the period is kept exactly, and the ace moves
+--- in whole pixels. The rotation does not port: 0.02 rad moves the ace's corners about a pixel,
+--- which at 240p only slides shear seams through the art (`PixelGrid.turn`).
 local ACE_BOB_PX = 1.2
 local ACE_BOB_HZ = 0.666
 
@@ -307,23 +307,21 @@ function MainMenuUI.draw_top(screen, game)
         -- Centred in the strip above the build stamp rather than pinned to the top, so shrinking
         -- the logo takes slack off both ends instead of leaving it all at the bottom.
         local dy = math.floor((222 - draw_h) * 0.5 + 0.5)
-        local depth = titleDepth * sysDepth
+        -- Parallax in whole pixels, so the logo and the ace on it step together as the 3D
+        -- slider moves instead of each picking its own pixel.
+        local lx = PixelGrid.snap(dx - titleDepth * sysDepth)
         love.graphics.setColor(game.C.WHITE)
-        love.graphics.draw(atlas.image, dx - depth, dy, 0, s, s)
+        love.graphics.draw(atlas.image, lx, dy, 0, s, s)
 
         local ace = game.ensure_asset_atlas_loaded and game:ensure_asset_atlas_loaded("title_ace")
         if ace and ace.image then
             local t = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
-            local r = ACE_TILT_RAD * math.sin(ACE_TILT_HZ * t)
-            local bob = ACE_BOB_PX * math.sin(ACE_BOB_HZ * t)
-            -- Rotate about the card's centre, which is where the reference's transform origin
-            -- sits, so the tilt reads as a hinge rather than a swing from the corner. The ace
-            -- shares the logo's parallax offset: it is a card lying on the logo, not in front
-            -- of it, and a separate depth would need hardware to tune.
+            local bob = PixelGrid.snap(ACE_BOB_PX * math.sin(ACE_BOB_HZ * t))
+            -- The ace shares the logo's parallax offset: it is a card lying on the logo, not in
+            -- front of it, and a separate depth would need hardware to tune.
             love.graphics.draw(ace.image,
-                dx - depth + (ACE_X + ACE_W * 0.5) * s,
-                dy + (ACE_Y + ACE_H * 0.5) * s + bob,
-                r, s, s, ACE_W * 0.5, ACE_H * 0.5)
+                lx + PixelGrid.snap(ACE_X * s), dy + PixelGrid.snap(ACE_Y * s) + bob,
+                0, s, s)
         end
     end
 
@@ -739,7 +737,7 @@ function MainMenuUI.draw_main(game)
         local r = focused.rect
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.setLineWidth(2)
-        love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+        PixelGrid.outline(r.x, r.y, r.w, r.h)
     end
 
     if game._language_picker_open then MainMenuUI.draw_language_picker(game) end
@@ -822,7 +820,7 @@ function MainMenuUI.draw_language_picker(game)
             r.y + math.floor((r.h - font:getHeight()) / 2), r.w, "center")
         if i == focus then
             love.graphics.setLineWidth(2)
-            love.graphics.rectangle("line", r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1)
+            PixelGrid.outline(r.x, r.y, r.w, r.h)
         end
     end
 end
@@ -970,42 +968,56 @@ function MainMenuUI.draw_how_to_play(game)
     local content_x = margin
     local content_w = W - margin * 2
 
-    -- The "How to Play" heading used to be printed here, at y = margin. The content box below
-    -- starts 4 px lower and covers it, which is exactly why the English build shows nothing: its
-    -- ink starts 4 px down the line. A face whose ink starts at the top of the line (Japanese)
-    -- left the heading's upper edge poking out above the box, so it is not drawn at all.
+    -- Japanese: the heading is covered by the box below in English, but kana ink starts at the
+    -- top of the line and pokes out above it, so it is not drawn there.
+    if game.FONTS.PIXEL.LANGUAGE ~= "ja" then
+        love.graphics.setFont(font_m)
+        love.graphics.setColor(C.WHITE)
+        love.graphics.printf(I18N.text("menu.how_to_play", nil, "How to Play"), 0, margin, W, "center")
+    end
+
     love.graphics.setColor(C.BLOCK.BACK)
     love.graphics.rectangle("fill", content_x, content_y, content_w, content_h, 6, 6)
 
     love.graphics.setFont(font_m)
     love.graphics.setColor(C.WHITE)
-    love.graphics.setFont(Fonts.fit(game, font_m, page.title, content_w - 8))
-    Fonts.printf_fit(page.title, content_x, content_y + 6, content_w, "center")
-
-    -- A line that wraps takes more than one row, so count the wrapped rows and drop a size until
-    -- the whole page fits the box.
-    local text_y = content_y + 32
-    local avail_h = content_y + content_h - 4 - text_y
-    local function page_height(f)
-        local h = 0
-        for _, line in ipairs(page.lines) do
-            local _, wrapped = f:getWrap(line, content_w - 16)
-            h = h + math.max(1, #wrapped) * (f:getHeight() + 2)
-        end
-        return h
+    local ja = game.FONTS.PIXEL.LANGUAGE == "ja"
+    if ja then
+        love.graphics.setFont(Fonts.fit(game, font_m, page.title, content_w - 8))
+        Fonts.printf_fit(page.title, content_x, content_y + 6, content_w, "center")
+    else
+        love.graphics.printf(page.title, content_x, content_y + 6, content_w, "center")
     end
+
     local body_font = font_s
-    while page_height(body_font) > avail_h do
-        local smaller = Fonts.next_smaller(game, body_font)
-        if not smaller then break end
-        body_font = smaller
+    local text_y = content_y + 32
+    if ja then
+        -- A line that wraps takes more than one row: count the rows and drop a size until the
+        -- whole page fits the box.
+        local avail_h = content_y + content_h - 4 - text_y
+        local function page_height(f)
+            local h = 0
+            for _, line in ipairs(page.lines) do
+                local _, wrapped = f:getWrap(line, content_w - 16)
+                h = h + math.max(1, #wrapped) * (f:getHeight() + 2)
+            end
+            return h
+        end
+        while page_height(body_font) > avail_h do
+            local smaller = Fonts.next_smaller(game, body_font)
+            if not smaller then break end
+            body_font = smaller
+        end
     end
     love.graphics.setFont(body_font)
     love.graphics.setColor(C.DARK_WHITE or C.GREY)
     local line_h = body_font:getHeight() + 2
     for _, line in ipairs(page.lines) do
-        local _, wrapped = body_font:getWrap(line, content_w - 16)
-        local rows = math.max(1, #wrapped)
+        local rows = 1
+        if ja then
+            local _, wrapped = body_font:getWrap(line, content_w - 16)
+            rows = math.max(1, #wrapped)
+        end
         if text_y + rows * line_h <= content_y + content_h - 4 then
             love.graphics.printf(line, content_x + 8, text_y, content_w - 16, "left")
         end
@@ -1229,10 +1241,74 @@ function MainMenuUI._start_run(game)
     return true
 end
 
+--- `text` on one line in the largest face from `font` down that fits `w` x `h`, its capitals
+--- centred in that box.
+local function print_line_centred(game, font, text, x, y, w, h)
+    font = Fonts.fit_line(game, font, text, w, h)
+    love.graphics.setFont(font)
+    love.graphics.printf(text, x, Fonts.centre_y(game, font, y, h), w, "center")
+end
+
+--- `text` wrapped in the largest face from `font` down whose block fits `w` x `h`, centred in
+--- that box from the first line's capitals to the last's.
+local function print_block_centred(game, font, text, x, y, w, h)
+    if game.FONTS.PIXEL.LANGUAGE == "ja" then
+        -- Japanese: a kana line holds few letters, so before dropping to a smaller face squeeze
+        -- the glyphs horizontally (down to 80%) and keep the larger size.
+        local f, sx, done = font, 1, false
+        while not done do
+            for _, try_sx in ipairs({ 1, 0.9, 0.8 }) do
+                local _, wrapped = f:getWrap(text, w / try_sx)
+                if #wrapped * f:getHeight() * f:getLineHeight() <= h then
+                    sx, done = try_sx, true
+                    break
+                end
+            end
+            if not done then
+                local smaller = Fonts.next_smaller(game, f)
+                if not smaller then sx = 0.8; break end
+                f = smaller
+            end
+        end
+        love.graphics.setFont(f)
+        local _, lines = f:getWrap(text, w / sx)
+        local line_h = f:getHeight() * f:getLineHeight()
+        love.graphics.push()
+        love.graphics.translate(x + w * (1 - sx) / 2, math.floor(y + (h - #lines * line_h) / 2 + 0.5))
+        love.graphics.scale(sx, 1)
+        love.graphics.printf(text, 0, 0, w / sx, "center")
+        love.graphics.pop()
+        return
+    end
+    font = Fonts.fit_block(game, font, text, w, h)
+    love.graphics.setFont(font)
+    local _, lines = font:getWrap(text, w)
+    local line_h = font:getHeight() * font:getLineHeight()
+    love.graphics.printf(text, x, Fonts.centre_y(game, font, y, h - (#lines - 1) * line_h), w, "center")
+end
+
+--- "<" and ">" are x-height glyphs: on the 18 px sheet their ink is the lowest 8 of the 11
+--- capital rows, so centring them as capitals leaves them 2 px low in their bar.
+local CHEVRON_INK_H = 8
+
+--- A deck or stake arrow, centred in its bar by its own ink.
+local function print_chevron(game, font, glyph, x, y, w, h)
+    local _, cap_h = Fonts.ink(game, font)
+    local rise = math.max(0, cap_h - CHEVRON_INK_H)
+    love.graphics.setFont(font)
+    love.graphics.printf(glyph, x, Fonts.centre_y(game, font, y - rise, h + rise), w, "center")
+end
+
+--- Places `n` markers `step` apart, centred on `cx` whether `n` is odd or even.
+local function centred_marker_x(cx, step, n, i)
+    return math.floor(cx + step * (i - (n + 1) / 2) + 0.5)
+end
+
 function MainMenuUI.draw_deck_select(game)
     local W, H    = 320, 240
     local font_s  = game.FONTS.PIXEL.SMALL
     local font_m  = game.FONTS.PIXEL.MEDIUM
+    local font_l  = game.FONTS.PIXEL.LABEL
     local C       = game.C
 
     love.graphics.setColor(C.PANEL)
@@ -1257,30 +1333,33 @@ function MainMenuUI.draw_deck_select(game)
     local stake_unlocked = game:is_stake_unlocked(def.id, stake_def.id)
     local deck_unlocked = game:is_deck_unlocked(def.id)
 
-    local startX, startY = 24, 4
-    local endX, endY = W - 24, H - 128
+    -- Two arrow bars with the card between them, a padding gap either side, centred on the
+    -- screen; everything below centres on the same frame.
     local padding = 4
     local buttonW = 24
-
-    local frameW = endX - startX
-    local frameH = endY - startY
+    local card_w = 212
+    local frameW = 2 * buttonW + 2 * padding + card_w
+    local startX, startY = math.floor((W - frameW) / 2), 4
+    local frameH = H - 128 - startY
+    local centreX = startX + frameW / 2
 
     local prev_x, prev_y, prev_w, prev_h = startX, startY, buttonW, frameH
-    local next_x = W - 52
-    local card_x, card_y, card_w, card_h = startX + buttonW + padding, startY + padding, frameW - 2*buttonW - 3*padding, frameH - 4*padding -- Select Button
+    local next_x = startX + frameW - buttonW
+    local card_x, card_y, card_h = startX + buttonW + padding, startY + padding, frameH - 4*padding
 
-    local selectbuttonW = 140
-    local selectX, selectY, selectW, selectH = startX + 32, 200, selectbuttonW, 24
+    local selectW, seedW, rowGap = 140, 80, 8
+    local selectX = startX + math.floor((frameW - (selectW + rowGap + seedW)) / 2)
+    local selectY, selectH = 200, 24
     draw_button_with_shadow(selectX, selectY, selectW, selectH, 4, 4, G.C.CHIPS, G.C.BLOCK.SHADOW, 2)
     love.graphics.setFont(font_m)
     love.graphics.setColor(C.WHITE)
     love.graphics.printf(I18N.text("menu.play", nil, "PLAY"), selectX, selectY, selectW, "center")
-    local seedX, seedW = selectX + selectW + 8, 80
+    local seedX = selectX + selectW + rowGap
     local seed = game:normalize_run_seed(game._pending_run_seed)
     draw_button_with_shadow(seedX, selectY, seedW, selectH, 4, 4, C.MULT, C.BLOCK.SHADOW, 2)
-    love.graphics.setFont(font_s)
     love.graphics.setColor(C.WHITE)
-    love.graphics.printf(seed and I18N.text("menu.seed", { seed = seed }, "Seed " .. seed) or I18N.text("menu.set_seed", nil, "Set Seed"), seedX, selectY + 5, seedW, "center")
+    print_line_centred(game, font_l, seed and I18N.text("menu.seed", { seed = seed }, "Seed " .. seed) or I18N.text("menu.set_seed", nil, "Set Seed"),
+        seedX + padding, selectY, seedW - 2 * padding, selectH)
 
     game._deck_select_rects = {
         prev = { x = prev_x, y = prev_y, w = prev_w, h = prev_h, action = "prev" },
@@ -1289,78 +1368,33 @@ function MainMenuUI.draw_deck_select(game)
         seed = { x = seedX, y = selectY, w = seedW, h = selectH, action = "seed" },
     }
 
-    love.graphics.setColor(C.MULT)
     draw_button_with_shadow(prev_x, prev_y, prev_w, prev_h, 4, 4, G.C.MULT, G.C.BLOCK.SHADOW, 2)
     draw_button_with_shadow(next_x, prev_y, prev_w, prev_h, 4, 4, G.C.MULT, G.C.BLOCK.SHADOW, 2)
     love.graphics.setColor(C.WHITE)
-    love.graphics.setFont(font_s)
-    love.graphics.printf("<", prev_x, prev_y + math.floor(frameH/2) - 2*padding, prev_w, "center")
-    love.graphics.printf(">", next_x, prev_y + math.floor(frameH/2) - 2*padding, prev_w, "center")
+    print_chevron(game, font_l, "<", prev_x, prev_y, prev_w, prev_h)
+    print_chevron(game, font_l, ">", next_x, prev_y, prev_w, prev_h)
 
     love.graphics.setColor(C.BLOCK.BACK)
     love.graphics.rectangle("fill", card_x, card_y, card_w, card_h, 8, 8)
     local dx,dy,dw,dh = MainMenuUI.draw_deck_carousel_sprite(game, def, card_x + 4, card_y, 64, card_h, 0, deck_unlocked)
 
-    -- Infocard
+    -- Infocard: the name centred in the strip above the description box.
     love.graphics.setColor(C.PANEL)
     local infoX,infoY,infoW,infoH = dx+dw + padding, card_y + padding, 2*dw - 16, card_h - 2*padding
     love.graphics.rectangle("fill", infoX, infoY, infoW, infoH, 4, 4)
 
-    love.graphics.setFont(font_m)
+    local name_h = padding + font_m:getHeight()
     love.graphics.setColor(C.WHITE)
-    local deck_name = I18N.content_name("deck", def.id, def.name)
-    if love.graphics.getFont():getWidth(deck_name) > infoW then
-        -- Still too wide at the smaller size: squeeze it instead of wrapping onto the
-        -- description box ("チェッカードデッキ").
-        love.graphics.setFont(Fonts.fit_soft(game, font_s, deck_name, infoW - 4))
-        Fonts.printf_fit(deck_name, infoX + 2, infoY + 6, infoW - 4, "center")
-    else
-        love.graphics.printf(deck_name, infoX, infoY, infoW, "center")
-    end
-    love.graphics.setFont(font_m)
-    local offset = love.graphics.getFont():getHeight(deck_name)
-    love.graphics.rectangle("fill", infoX + padding, infoY + padding + offset, infoW - 2*padding, infoH - 2*padding - offset, 4, 4)
-    
-    love.graphics.setFont(font_s)
+    print_line_centred(game, font_m, I18N.content_name("deck", def.id, def.name), infoX, infoY, infoW, name_h)
+    local box_x, box_y, box_w, box_h = infoX + padding, infoY + name_h, infoW - 2*padding, infoH - padding - name_h
+    love.graphics.rectangle("fill", box_x, box_y, box_w, box_h, 4, 4)
+
     love.graphics.setColor(C.PANEL)
-    local desc_text = deck_unlocked and I18N.content_text("deck", def.id, def.description or "")
-        or def.unlock_condition and I18N.text("unlock.deck." .. tostring(def.id), nil, def.unlock_condition.text) or I18N.t("menu.complete_unlock")
-    if game.FONTS.PIXEL.LANGUAGE == "ja" then
-        -- Japanese: use the whole white box, and squeeze the glyphs horizontally (down to 80%)
-        -- before dropping to the 9 px face, so a long description stays at the normal size.
-        local box_w = infoW - 2*padding - 4
-        local box_h = infoH - 3*padding - offset - 2
-        local f, sx = font_s, 1
-        local done = false
-        while not done do
-            for _, try_sx in ipairs({ 1, 0.9, 0.8 }) do
-                local _, wrapped = f:getWrap(desc_text, box_w / try_sx)
-                if #wrapped * f:getHeight() <= box_h then
-                    sx, done = try_sx, true
-                    break
-                end
-            end
-            if not done then
-                local smaller = Fonts.next_smaller(game, f)
-                if not smaller then sx = 0.8; break end
-                f = smaller
-            end
-        end
-        love.graphics.setFont(f)
-        love.graphics.push()
-        love.graphics.translate(infoX + padding + 2, infoY + 2*padding + offset)
-        love.graphics.scale(sx, 1)
-        love.graphics.printf(desc_text, 0, 0, box_w / sx, "center")
-        love.graphics.pop()
-    else
-        if game.FONTS.PIXEL.LANGUAGE then
-            -- A kana line is wider than the Latin one the box was sized for; step the text down
-            -- until the wrapped block fits the white box instead of running past its bottom.
-            love.graphics.setFont(Fonts.fit_block(game, font_s, desc_text, infoW - 4*padding,
-                infoH - 4*padding - offset))
-        end
-        love.graphics.printf(desc_text, infoX + 2*padding, infoY + 2*padding + offset, infoW - 4*padding, "center")
-    end
+    print_block_centred(game, font_l,
+        deck_unlocked and I18N.content_text("deck", def.id, def.description or "")
+            or def.unlock_condition and I18N.text("deck." .. tostring(def.id) .. ".unlock", nil, def.unlock_condition.text)
+            or I18N.t("menu.complete_unlock"),
+        box_x + padding, box_y, box_w - 2*padding, box_h)
 
     -- Stake markers, in the reference's three states (`UI_definitions.lua:3168-3180`):
     -- a stake that has been *cleared* on this deck shows in its own colour, one that has not
@@ -1392,26 +1426,19 @@ function MainMenuUI.draw_deck_select(game)
         love.graphics.rectangle("fill", markerX, my, w, markerH, 4, 4)
         if stake_idx == i then
             love.graphics.setColor(C.WHITE)
-            love.graphics.rectangle("line", markerX, my, w, markerH, 2, 2)
+            PixelGrid.outline(markerX, my, w, markerH, 2)
         end
     end
 
-
-    local limitX1 = startX + buttonW + 3 * padding
-    local limitX2 = endX - buttonW - 3 * padding
+    local dot_step = 8
     local dotY = startY + frameH - padding
-    local offset = 8
-    local midX = math.floor((limitX2 - limitX1)/2 + limitX1)
-    --love.graphics.circle("fill", midX, dotY, 2)
-    for i = 1,#deck_list do
-        local mid = math.floor(#deck_list/2)
-        x = midX + offset * (i - mid - 1)
+    for i = 1, #deck_list do
         if sel_idx == i then
             love.graphics.setColor(C.WHITE)
         else
             love.graphics.setColor(C.BLOCK.BACK)
         end
-        love.graphics.circle("fill", x, dotY, 2)
+        love.graphics.circle("fill", centred_marker_x(centreX, dot_step, #deck_list, i), dotY, 2)
     end
 
     -- Stake Select
@@ -1426,9 +1453,8 @@ function MainMenuUI.draw_deck_select(game)
     draw_button_with_shadow(prev_x, prev_y, prev_w, stakeH, 4, 4, G.C.MULT, G.C.BLOCK.SHADOW, 2)
     draw_button_with_shadow(next_x, prev_y, prev_w, stakeH, 4, 4, G.C.MULT, G.C.BLOCK.SHADOW, 2)
     love.graphics.setColor(C.WHITE)
-    love.graphics.setFont(font_s)
-    love.graphics.printf("<", prev_x, prev_y + math.floor(stakeH/2) - 2*padding, prev_w, "center")
-    love.graphics.printf(">", next_x, prev_y + math.floor(stakeH/2) - 2*padding, prev_w, "center")
+    print_chevron(game, font_l, "<", prev_x, prev_y, prev_w, stakeH)
+    print_chevron(game, font_l, ">", next_x, prev_y, prev_w, stakeH)
 
     -- Stake Infocard
     love.graphics.setColor(C.BLOCK.BACK)
@@ -1442,38 +1468,28 @@ function MainMenuUI.draw_deck_select(game)
     local stake_info_h = stakeH - 4 * padding
     love.graphics.rectangle("fill", stake_info_x, stake_info_y, stake_info_w, stake_info_h, 4, 4)
 
-    love.graphics.setFont(font_m)
+    local stake_name_h = padding + font_m:getHeight()
     love.graphics.setColor(stake_unlocked and C.WHITE or C.GREY)
-    local stake_name = I18N.content_name("stake", stake_def.id, stake_def.name)
-    if love.graphics.getFont():getWidth(stake_name) > stake_info_w then
-        love.graphics.setFont(font_s)
-        love.graphics.printf(stake_name, stake_info_x, stake_info_y + 6, stake_info_w, "center")
-    else
-        love.graphics.printf(stake_name, stake_info_x, stake_info_y, stake_info_w, "center")
-    end
-    love.graphics.setFont(font_m)
-    local stake_name_h = love.graphics.getFont():getHeight()
+    print_line_centred(game, font_m, I18N.content_name("stake", stake_def.id, stake_def.name), stake_info_x, stake_info_y, stake_info_w, stake_name_h)
+    local sbox_x, sbox_y = stake_info_x + padding, stake_info_y + stake_name_h
+    local sbox_w, sbox_h = stake_info_w - 2 * padding, stake_info_h - padding - stake_name_h
     love.graphics.setColor(C.WHITE)
-    love.graphics.rectangle("fill", stake_info_x + padding, stake_info_y + padding + stake_name_h, stake_info_w - 2 * padding, stake_info_h - 2 * padding - stake_name_h, 4, 4)
+    love.graphics.rectangle("fill", sbox_x, sbox_y, sbox_w, sbox_h, 4, 4)
 
-    love.graphics.setFont(font_s)
     love.graphics.setColor(C.PANEL)
-    love.graphics.printf(
+    print_block_centred(game, font_l,
         stake_unlocked and I18N.content_text("stake", stake_def.id, stake_def.description or "")
             or I18N.t("menu.clear_previous_stake"),
-        stake_info_x + 2 * padding, stake_info_y + padding + stake_name_h, stake_info_w - 4 * padding, "center"
-    )
+        sbox_x + padding, sbox_y, sbox_w - 2 * padding, sbox_h)
 
     local stake_dot_y = prev_y + stakeH - 1 * padding
-    local stake_mid_x = math.floor((limitX2 - limitX1) / 2 + limitX1)
     for i = 1, #stake_list do
-        local x = stake_mid_x + offset * (i - math.floor(#stake_list / 2) - 1)
         if stake_idx == i then
             love.graphics.setColor(C.WHITE)
         else
             love.graphics.setColor(C.BLOCK.BACK)
         end
-        love.graphics.circle("fill", x, stake_dot_y, 2)
+        love.graphics.circle("fill", centred_marker_x(centreX, dot_step, #stake_list, i), stake_dot_y, 2)
     end
 
     love.graphics.setFont(font_s)
