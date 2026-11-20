@@ -4126,6 +4126,14 @@ function Game:apply_language(language)
     local live = Localization.get_language()
     if self.FONTS and self.FONTS.PIXEL then
         Fonts.apply(self, self.FONTS.PIXEL.PROFILE, live)
+        -- Japanese only: the tooltip boxes are tall in kana and hide the card they describe, so
+        -- their text takes the next size down (SMALL). Every other language keeps TOOLTIP.
+        local pixel = self.FONTS.PIXEL
+        if live == "ja" and pixel.SMALL and pixel.TOOLTIP_HEIGHT and pixel.SMALL_HEIGHT
+            and pixel.TOOLTIP_HEIGHT > pixel.SMALL_HEIGHT then
+            pixel.TOOLTIP = pixel.SMALL
+            pixel.TOOLTIP_HEIGHT = pixel.SMALL_HEIGHT
+        end
     end
     return live
 end
