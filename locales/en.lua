@@ -3,6 +3,7 @@ return {
     ["language.es"] = "Spanish",
     ["language.zh_CN"] = "Simplified Chinese",
     ["language.da"] = "Danish",
+    ["language.ja"] = "Japanese",
     ["language.it"] = "Italian",
     ["common.back"] = "Back",
     ["common.continue"] = "Continue",

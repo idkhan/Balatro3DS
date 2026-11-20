@@ -2,6 +2,7 @@
 local ProfileUI = {}
 local PixelGrid = require("pixel_grid")
 local NumberFormat = require("number_format")
+local Fonts = require("fonts")
 
 local SCREEN_W, SCREEN_H = 320, 240
 local NAME_MAX_LENGTH = 14
@@ -30,9 +31,12 @@ end
 
 local function draw_button(rect, text, color, C, font)
     fill_rect(rect.x, rect.y, rect.w, rect.h, color, C)
+    -- A label wider than its button used to wrap onto a second line that fell out of the
+    -- bottom ("プロフィールをロード"). Take a smaller face or squeeze it instead.
+    font = Fonts.fit_soft(_G.G, font, text, rect.w - 6)
     love.graphics.setFont(font)
     love.graphics.setColor(C.WHITE)
-    love.graphics.printf(text, rect.x, label_y(rect, font), rect.w, "center")
+    Fonts.printf_fit(text, rect.x + 3, label_y(rect, font), rect.w - 6, "center")
 end
 
 --- Filled progress bar with the percentage and raw counts printed inside it.
@@ -47,12 +51,15 @@ local function draw_progress_bar(game, x, y, w, h, have, total, font, count_font
     end
 
     local percent = string.format("%d%%", math.floor(ratio * 100 + 0.5))
+    -- Numerals are drawn in the pixel face whatever the language (`Fonts.latin`).
+    font = Fonts.for_text(game, font, percent)
     love.graphics.setFont(font)
     love.graphics.setColor(C.WHITE)
     love.graphics.print(percent, x + 4, label_y({ y = y, h = h }, font))
 
     if count_font then
         local counts = string.format("%d/%d", have, total)
+        count_font = Fonts.for_text(game, count_font, counts)
         love.graphics.setFont(count_font)
         love.graphics.setColor(C.DARK_WHITE or C.LIGHT_GREY)
         love.graphics.print(counts, x + w - 4 - count_font:getWidth(counts), label_y({ y = y, h = h }, count_font))
@@ -359,6 +366,7 @@ function ProfileUI.draw_bottom(game)
             love.graphics.setColor(C.DARK_WHITE or C.GREY)
             love.graphics.print(row[1], inner_x, label_y({ y = row_y, h = ROW_H }, font_s))
             love.graphics.setColor(row[3] or C.WHITE)
+            love.graphics.setFont(Fonts.for_text(game, font_s, row[2]))
             love.graphics.printf(row[2], inner_x, label_y({ y = row_y, h = ROW_H }, font_s),
                 inner_w, "right")
             row_y = row_y + ROW_H + ROW_GAP
@@ -373,9 +381,11 @@ function ProfileUI.draw_bottom(game)
         local row_y = PANEL.y + PANEL_PAD + ROW_H + ROW_GAP
         for _, row in ipairs(progress and progress.rows or {}) do
             fill_rect(inner_x, row_y, LABEL_W, ROW_H, C.LIGHT_GREY, C)
-            love.graphics.setFont(font_s)
+            local row_label = I18N.text("profile.row." .. tostring(row.key), nil, row.label)
+            local row_font = Fonts.fit_soft(game, font_s, row_label, LABEL_W - 4)
+            love.graphics.setFont(row_font)
             love.graphics.setColor(C.BLOCK.BACK)
-            love.graphics.printf(I18N.text("profile.row." .. tostring(row.key), nil, row.label), inner_x + 2, label_y({ y = row_y, h = ROW_H }, font_s), LABEL_W - 4, "center")
+            Fonts.printf_fit(row_label, inner_x + 2, label_y({ y = row_y, h = ROW_H }, row_font), LABEL_W - 4, "center")
             draw_progress_bar(game, bar_x, row_y, bar_w, ROW_H, row.have, row.total, font_s, font_t)
             row_y = row_y + ROW_H + ROW_GAP
         end
@@ -385,11 +395,13 @@ function ProfileUI.draw_bottom(game)
     local wins = progress and progress.wins or 0
     love.graphics.setFont(font_m)
     local wins_label, wins_value = I18N.text("profile.wins_prefix", nil, "Wins: "), tostring(wins)
-    local wins_w = font_m:getWidth(wins_label) + font_m:getWidth(wins_value)
+    local wins_value_font = Fonts.for_text(game, font_m, wins_value)
+    local wins_w = font_m:getWidth(wins_label) + wins_value_font:getWidth(wins_value)
     local wins_x = COL_X + math.floor((COL_W - wins_w) * 0.5 + 0.5)
     love.graphics.setColor(C.WHITE)
     love.graphics.print(wins_label, wins_x, PANEL.y)
     love.graphics.setColor(C.RED)
+    love.graphics.setFont(wins_value_font)
     love.graphics.print(wins_value, wins_x + font_m:getWidth(wins_label), PANEL.y)
 
     -- Slot actions
@@ -473,6 +485,7 @@ function ProfileUI.draw_stats(game)
         love.graphics.setColor(C.DARK_WHITE or C.GREY)
         love.graphics.print(row[1], inner_x, label_y({ y = row_y, h = ROW_H }, font_s))
         love.graphics.setColor(row[3] or C.WHITE)
+        love.graphics.setFont(Fonts.for_text(game, font_s, row[2]))
         love.graphics.printf(row[2], inner_x, label_y({ y = row_y, h = ROW_H }, font_s), inner_w, "right")
         row_y = row_y + ROW_H + ROW_GAP
     end
@@ -482,6 +495,7 @@ function ProfileUI.draw_stats(game)
     love.graphics.setColor(C.DARK_WHITE or C.GREY)
     love.graphics.print(I18N.text("profile.wins", nil, "Wins"), inner_x, label_y({ y = row_y, h = ROW_H }, font_s))
     love.graphics.setColor(C.RED)
+    love.graphics.setFont(Fonts.for_text(game, font_s, tostring(progress and progress.wins or 0)))
     love.graphics.printf(tostring(progress and progress.wins or 0), inner_x,
         label_y({ y = row_y, h = ROW_H }, font_s), inner_w, "right")
 

@@ -968,26 +968,60 @@ function MainMenuUI.draw_how_to_play(game)
     local content_x = margin
     local content_w = W - margin * 2
 
-    love.graphics.setFont(font_m)
-    love.graphics.setColor(C.WHITE)
-    love.graphics.printf(I18N.text("menu.how_to_play", nil, "How to Play"), 0, margin, W, "center")
+    -- Japanese: the heading is covered by the box below in English, but kana ink starts at the
+    -- top of the line and pokes out above it, so it is not drawn there.
+    if game.FONTS.PIXEL.LANGUAGE ~= "ja" then
+        love.graphics.setFont(font_m)
+        love.graphics.setColor(C.WHITE)
+        love.graphics.printf(I18N.text("menu.how_to_play", nil, "How to Play"), 0, margin, W, "center")
+    end
 
     love.graphics.setColor(C.BLOCK.BACK)
     love.graphics.rectangle("fill", content_x, content_y, content_w, content_h, 6, 6)
 
     love.graphics.setFont(font_m)
     love.graphics.setColor(C.WHITE)
-    love.graphics.printf(page.title, content_x, content_y + 6, content_w, "center")
+    local ja = game.FONTS.PIXEL.LANGUAGE == "ja"
+    if ja then
+        love.graphics.setFont(Fonts.fit(game, font_m, page.title, content_w - 8))
+        Fonts.printf_fit(page.title, content_x, content_y + 6, content_w, "center")
+    else
+        love.graphics.printf(page.title, content_x, content_y + 6, content_w, "center")
+    end
 
-    love.graphics.setFont(font_s)
-    love.graphics.setColor(C.DARK_WHITE or C.GREY)
-    local line_h = love.graphics.getFont():getHeight() + 2
+    local body_font = font_s
     local text_y = content_y + 32
+    if ja then
+        -- A line that wraps takes more than one row: count the rows and drop a size until the
+        -- whole page fits the box.
+        local avail_h = content_y + content_h - 4 - text_y
+        local function page_height(f)
+            local h = 0
+            for _, line in ipairs(page.lines) do
+                local _, wrapped = f:getWrap(line, content_w - 16)
+                h = h + math.max(1, #wrapped) * (f:getHeight() + 2)
+            end
+            return h
+        end
+        while page_height(body_font) > avail_h do
+            local smaller = Fonts.next_smaller(game, body_font)
+            if not smaller then break end
+            body_font = smaller
+        end
+    end
+    love.graphics.setFont(body_font)
+    love.graphics.setColor(C.DARK_WHITE or C.GREY)
+    local line_h = body_font:getHeight() + 2
     for _, line in ipairs(page.lines) do
-        if text_y + line_h <= content_y + content_h - 4 then
+        local rows = 1
+        if ja then
+            local _, wrapped = body_font:getWrap(line, content_w - 16)
+            rows = math.max(1, #wrapped)
+        end
+        if text_y + rows * line_h <= content_y + content_h - 4 then
             love.graphics.printf(line, content_x + 8, text_y, content_w - 16, "left")
         end
-        text_y = text_y + line_h
+        text_y = text_y + rows * line_h
     end
 
     local nav_y = content_y + content_h + 6
@@ -1218,6 +1252,34 @@ end
 --- `text` wrapped in the largest face from `font` down whose block fits `w` x `h`, centred in
 --- that box from the first line's capitals to the last's.
 local function print_block_centred(game, font, text, x, y, w, h)
+    if game.FONTS.PIXEL.LANGUAGE == "ja" then
+        -- Japanese: a kana line holds few letters, so before dropping to a smaller face squeeze
+        -- the glyphs horizontally (down to 80%) and keep the larger size.
+        local f, sx, done = font, 1, false
+        while not done do
+            for _, try_sx in ipairs({ 1, 0.9, 0.8 }) do
+                local _, wrapped = f:getWrap(text, w / try_sx)
+                if #wrapped * f:getHeight() * f:getLineHeight() <= h then
+                    sx, done = try_sx, true
+                    break
+                end
+            end
+            if not done then
+                local smaller = Fonts.next_smaller(game, f)
+                if not smaller then sx = 0.8; break end
+                f = smaller
+            end
+        end
+        love.graphics.setFont(f)
+        local _, lines = f:getWrap(text, w / sx)
+        local line_h = f:getHeight() * f:getLineHeight()
+        love.graphics.push()
+        love.graphics.translate(x, math.floor(y + (h - #lines * line_h) / 2 + 0.5))
+        love.graphics.scale(sx, 1)
+        love.graphics.printf(text, 0, 0, w / sx, "center")
+        love.graphics.pop()
+        return
+    end
     font = Fonts.fit_block(game, font, text, w, h)
     love.graphics.setFont(font)
     local _, lines = font:getWrap(text, w)
@@ -1330,7 +1392,8 @@ function MainMenuUI.draw_deck_select(game)
     love.graphics.setColor(C.PANEL)
     print_block_centred(game, font_l,
         deck_unlocked and I18N.content_text("deck", def.id, def.description or "")
-            or def.unlock_condition and def.unlock_condition.text or I18N.t("menu.complete_unlock"),
+            or def.unlock_condition and I18N.text("deck." .. tostring(def.id) .. ".unlock", nil, def.unlock_condition.text)
+            or I18N.t("menu.complete_unlock"),
         box_x + padding, box_y, box_w - 2*padding, box_h)
 
     -- Stake markers, in the reference's three states (`UI_definitions.lua:3168-3180`):

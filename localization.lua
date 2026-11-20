@@ -12,7 +12,7 @@ local Localization = {}
 
 Localization.DEFAULT_LANGUAGE = "en"
 
-Localization.SUPPORTED_LANGUAGES = { "en", "es", "da", "zh_CN", "it" }
+Localization.SUPPORTED_LANGUAGES = { "en", "es", "da", "zh_CN", "it", "ja" }
 
 local locale_cache = {}
 --- Strings added at runtime, by language: mod text (`smods.lua`), layered over the files.

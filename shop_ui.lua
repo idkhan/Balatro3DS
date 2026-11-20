@@ -262,7 +262,8 @@ end
 --- dragged slot and `Game:draw` redraws it, and only it, after the dragged card.
 local function draw_price_tag(game, key, rect, price)
     local label = "$" .. tostring(price or 0)
-    local font = game.FONTS.PIXEL.PRICE
+    -- Numerals come from the pixel face in every language (see `Fonts.latin`).
+    local font = Fonts.latin(game, game.FONTS.PIXEL.PRICE)
     local tag_w = math.floor(font:getWidth(label) + 12)
     local tag_h = math.floor(font:getHeight() + 4)
     local tx = math.floor(rect.x + math.floor((rect.w - tag_w) * 0.5 + 0.5))
@@ -765,9 +766,19 @@ end
 ---@param panel_h number
 function ShopUI.draw_panel_header(game, text, x, panel_y, panel_h)
     local font = game.FONTS.PIXEL.MEDIUM
+    -- A language face: the label runs along the panel's height, so fit it to that.
+    if game.FONTS.PIXEL.LANGUAGE then
+        font = Fonts.fit(game, font, text, panel_h - 6)
+    end
     love.graphics.setFont(font)
     -- Rotated -90 degrees, so the text runs bottom-to-top and is centred on the panel.
     local y = panel_y + font:getWidth(text) / 2 + panel_h / 2
+    -- The glyphs' top edge is the left edge of the rotated text. A language face is a smaller
+    -- size with ink that fills its line box, so left alone it sits several pixels to the left
+    -- of where the Latin MEDIUM face puts its ink. Re-centre it on the Latin ink column.
+    if game.FONTS.PIXEL.LANGUAGE then
+        x = x + math.floor(11.7 - font:getHeight() * 0.5 + 0.5)
+    end
     local shadow = (game.C.BLOCK and game.C.BLOCK.SHADOW) or { 0, 0, 0, 0.35 }
     love.graphics.setColor(shadow)
     -- +1 on screen x and y. Under the rotation the glyph axes are swapped, so the shadow is

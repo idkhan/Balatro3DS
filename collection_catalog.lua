@@ -350,7 +350,7 @@ function CollectionCatalog.deck_tooltip_body(game, def)
     end
     local uc = def.unlock_condition
     if type(uc) == "table" and type(uc.text) == "string" then
-        return uc.text
+        return I18N.text("deck." .. tostring(def.id) .. ".unlock", nil, uc.text)
     end
     return "Complete the unlock condition to play this deck."
 end
