@@ -196,8 +196,9 @@ end
 local function draw_back_button(game, x, y, w)
     draw_button_with_shadow(x, y, w, 17, 3, 0, game.C.ORANGE, game.C.BLOCK.SHADOW, 2)
     love.graphics.setColor(game.C.WHITE)
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    TextCache.printf(I18N.text("common.back", nil, "Back"), x, y + 3, w, "center")
+    local font = game.FONTS.PIXEL.LABEL
+    love.graphics.setFont(font)
+    TextCache.printf(I18N.text("common.back", nil, "Back"), x, Fonts.centre_y(game, font, y, 17), w, "center")
     if game.draw_button_pip and game.gamepad_focus_visible and game:gamepad_focus_visible() then
         game:draw_button_pip(game:get_button_for_role("cancel"), x + 4, y + 3, 11)
     end
@@ -211,7 +212,7 @@ end
 local VOUCHER_CELL_W, VOUCHER_CELL_H = 72, 95
 local VOUCHER_SCALE = 0.78
 local VOUCHER_AREA_X, VOUCHER_AREA_W = 10, 248
-local VOUCHER_Y = 130
+local VOUCHER_Y, VOUCHER_H = 132, 74
 
 --- Overlapping fan, same rule as `DeckViewUI`'s rows and the joker tray: cards keep their
 --- natural gap until the row would overflow, then they tuck under each other.
@@ -260,20 +261,27 @@ local function draw_blind_plate(game, b, x, y)
     love.graphics.printf(target, x + 52, y + 40, 66, "left")
 
     local col = game.C[STATE_COLOUR[b.state] or "GREY"] or game.C.GREY
+    local plate_y, plate_w, plate_h = y + BLIND_H - 22, BLIND_W - 8, 18
     love.graphics.setColor(col)
-    draw_rounded_rect(x + 4, y + BLIND_H - 22, BLIND_W - 8, 18, 3, 0, "fill")
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    draw_rounded_rect(x + 4, plate_y, plate_w, plate_h, 3, 0, "fill")
+    local state = I18N.text("run_info.state." .. b.state:lower(), nil, b.state)
+    local font = Fonts.fit_line(game, game.FONTS.PIXEL.LABEL, state, plate_w - 8, plate_h - 4)
+    love.graphics.setFont(font)
     love.graphics.setColor(game.C.WHITE)
-    TextCache.printf(I18N.text("run_info.state." .. b.state:lower(), nil, b.state), x + 4, y + BLIND_H - 18, BLIND_W - 8, "center")
+    TextCache.printf(state, x + 4, Fonts.centre_y(game, font, plate_y, plate_h), plate_w, "center")
 end
 
 function RunInfoUI.draw_top(screen, game)
     love.graphics.setColor(game.C.BLACK)
     love.graphics.rectangle("fill", 0, 0, TOP_W, TOP_H)
 
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    -- Headers: the ante centred in the strip above the blinds, and the two section names in
+    -- the 15 px strip above the vouchers, clear of the held-tag line under the blinds.
+    local label = game.FONTS.PIXEL.LABEL
+    love.graphics.setFont(label)
     love.graphics.setColor(game.C.JOKER_GREY)
-    love.graphics.print(I18N.text("run_info.ante_prefix", nil, "Ante ") .. tostring(tonumber(game.ante) or 1), 10, 6)
+    love.graphics.print(I18N.text("run_info.ante_prefix", nil, "Ante ") .. tostring(tonumber(game.ante) or 1), 10, Fonts.centre_y(game, label, 0, BLIND_Y))
+    local head_y = Fonts.centre_y(game, label, VOUCHER_Y - 15, 15)
 
     for i, b in ipairs(RunInfoUI.blinds(game)) do
         draw_blind_plate(game, b, BLIND_X0 + (i - 1) * BLIND_STEP, BLIND_Y)
@@ -288,14 +296,14 @@ function RunInfoUI.draw_top(screen, game)
 
     -- Vouchers, as the cards they are. They used to be bare icons with no way to read them.
     local vouchers = RunInfoUI.owned_vouchers(game)
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    love.graphics.setFont(label)
     love.graphics.setColor(game.C.JOKER_GREY)
-    love.graphics.print(#vouchers > 0 and (I18N.text("run_info.vouchers_prefix", nil, "Vouchers ") .. #vouchers) or I18N.text("deck_view.vouchers", nil, "Vouchers"), 10, 116)
+    love.graphics.print(#vouchers > 0 and (I18N.text("run_info.vouchers_prefix", nil, "Vouchers ") .. #vouchers) or I18N.text("deck_view.vouchers", nil, "Vouchers"), 10, head_y)
     if #vouchers == 0 then
         love.graphics.setColor(game.C.BLOCK.BACK)
-        draw_rounded_rect(VOUCHER_AREA_X, VOUCHER_Y, VOUCHER_AREA_W, 74, 4, 0, "fill")
+        draw_rounded_rect(VOUCHER_AREA_X, VOUCHER_Y, VOUCHER_AREA_W, VOUCHER_H, 4, 0, "fill")
         love.graphics.setColor(game.C.GREY)
-        TextCache.printf(I18N.text("run_info.no_vouchers", nil, "None redeemed yet"), VOUCHER_AREA_X, VOUCHER_Y + 28, VOUCHER_AREA_W, "center")
+        TextCache.printf(I18N.text("run_info.no_vouchers", nil, "None redeemed yet"), VOUCHER_AREA_X, Fonts.centre_y(game, label, VOUCHER_Y, VOUCHER_H), VOUCHER_AREA_W, "center")
     else
         local card_w = VOUCHER_CELL_W * VOUCHER_SCALE
         local step, start_x = fanned_step(#vouchers, VOUCHER_AREA_W, card_w, 4)
@@ -324,26 +332,38 @@ function RunInfoUI.draw_top(screen, game)
     -- Stake: the chip, its own rule, then the rules it inherits from every stake below it.
     local stake_id = game.selected_stake_id or game._pending_stake_id or "stake_white"
     local stake_def = STAKE_DEFS_BY_ID and STAKE_DEFS_BY_ID[stake_id]
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    love.graphics.setFont(label)
     love.graphics.setColor(game.C.JOKER_GREY)
-    love.graphics.print(I18N.text("deck_view.stake", nil, "Stake"), 270, 116)
+    love.graphics.print(I18N.text("deck_view.stake", nil, "Stake"), 270, head_y)
+    -- The chip cell is 30 px, drawn 1:1: at 1.3x the nearest filter made some of its pixels
+    -- one screen pixel wide and some two.
+    local chip_y, chip_h = VOUCHER_Y + 4, 30
     local stake_pos = tonumber(stake_def and stake_def.pos)
     if stake_pos then
-        draw_atlas_cell(game, "chips", stake_pos, 270, VOUCHER_Y, 1.3)
+        -- The cell has one clear column on the left, so x = 268 lines the chip's edge up with
+        -- the "Stake" label above it.
+        draw_atlas_cell(game, "chips", stake_pos, 268, chip_y, 1)
     end
+    -- 8 px right of the 1:1 chip, out to the rules' right edge (270 + 122), centred on the chip.
+    local stake_name = stake_def and I18N.content_name("stake", stake_def.id, stake_def.name) or I18N.text("deck_view.stake", nil, "Stake")
+    local name_font = Fonts.fit_line(game, label, stake_name, 86, chip_h)
+    love.graphics.setFont(name_font)
     love.graphics.setColor(game.C.WHITE)
-    love.graphics.printf(stake_def and I18N.content_name("stake", stake_def.id, stake_def.name) or I18N.text("deck_view.stake", nil, "Stake"),
-        314, 132, 80, "left")
+    love.graphics.print(stake_name, 306, Fonts.centre_y(game, name_font, chip_y, chip_h))
 
+    -- The stake's own rule as large as two LABEL lines allow. The inherited list under it stays
+    -- MICRO: it is the long tail, and is cut with "+N more" when it runs out of room.
     local text_y = 180
+    local rule = stake_def and I18N.content_text("stake", stake_def.id, stake_def.description or "") or ""
+    local rule_font = Fonts.fit_block(game, label, rule, 122, 34)
+    love.graphics.setFont(rule_font)
+    love.graphics.setColor(game.C.JOKER_GREY)
+    love.graphics.printf(rule, 270, text_y, 122, "left")
+    local _, wrapped = rule_font:getWrap(rule, 122)
+    text_y = text_y + math.max(1, #wrapped) * rule_font:getHeight() + 2
+
     love.graphics.setFont(game.FONTS.PIXEL.MICRO or game.FONTS.PIXEL.SMALL)
     local line_h = love.graphics.getFont():getHeight()
-    love.graphics.setColor(game.C.JOKER_GREY)
-    local rule = stake_def and I18N.content_text("stake", stake_def.id, stake_def.description or "") or ""
-    love.graphics.printf(rule, 270, text_y, 122, "left")
-    local _, wrapped = love.graphics.getFont():getWrap(rule, 122)
-    text_y = text_y + math.max(1, #wrapped) * line_h + 2
-
     local inherited = RunInfoUI.inherited_stake_descriptions(stake_id)
     if #inherited > 0 and text_y + line_h * 2 <= TOP_H - 2 then
         love.graphics.setColor(game.C.GREY)
@@ -365,9 +385,14 @@ function RunInfoUI.draw_top(screen, game)
         end
     end
 
-    love.graphics.setFont(game.FONTS.PIXEL.MICRO or game.FONTS.PIXEL.SMALL)
-    love.graphics.setColor(game.C.GREY)
-    TextCache.print(I18N.text("run_info.hands_hint", nil, "Poker hands are on the touch screen"), 10, 222)
+    -- Centred in the strip under the vouchers, in the readable grey the other labels use, and
+    -- no wider than the voucher column: the stake column starts right after it.
+    local hint = I18N.text("run_info.hands_hint", nil, "Poker hands are on the touch screen")
+    local hint_font = Fonts.fit(game, label, hint, VOUCHER_AREA_W)
+    love.graphics.setFont(hint_font)
+    love.graphics.setColor(game.C.JOKER_GREY)
+    TextCache.print(hint, VOUCHER_AREA_X,
+        Fonts.centre_y(game, hint_font, VOUCHER_Y + VOUCHER_H, TOP_H - VOUCHER_Y - VOUCHER_H))
     love.graphics.setColor(1, 1, 1, 1)
 end
 
@@ -379,6 +404,8 @@ local DIALOG_X, DIALOG_Y, DIALOG_W, DIALOG_H = 8, 6, 304, 228
 local LIST_X, LIST_W = 16, 288
 local LIST_TOP, LIST_BOTTOM = 34, 202
 local ROW_STEP_MAX, ROW_STEP_MIN = 24, 14
+-- The played count's right edge sits this far inside the row; its header lines up on it.
+local PLAYED_INSET = 3
 
 --- Row height that fits every visible hand without scrolling.
 ---
@@ -396,6 +423,19 @@ function RunInfoUI.row_metrics(n)
     return step, step - 3
 end
 
+--- One field of a hand row, its capitals centred in the plate band `y, h` by its own face: a
+--- field that `Fonts.fit` stepped down a size would otherwise sit off the others' line.
+local function print_field(game, font, colour, text, x, y, h, limit, align)
+    love.graphics.setFont(font)
+    love.graphics.setColor(colour)
+    local ty = Fonts.centre_y(game, font, y, h)
+    if limit then
+        TextCache.printf(text, x, ty, limit, align)
+    else
+        TextCache.print(text, x, ty)
+    end
+end
+
 --- One hand: level pill, name, chips X mult, times played.
 ---
 --- Mirrors `create_UIBox_current_hands`: the level pill takes its colour from
@@ -404,9 +444,18 @@ end
 function RunInfoUI.draw_hand_row(game, x, y, w, h, hand)
     draw_rect_with_shadow(x, y, w, h, 3, 0, game.C.GREY, game.C.BLOCK.SHADOW, 2)
 
+    -- Plates keep a 3 px inset while the row has room and shrink towards the text's own
+    -- height (1 px clear above and below) as twelve hands squeeze the rows; SMALL drops to
+    -- TINY only once even that does not fit.
+    local base = game.FONTS.PIXEL.SMALL
+    local _, ink_h = Fonts.ink(game, base)
+    if ink_h + 2 > h then
+        base = game.FONTS.PIXEL.TINY or base
+        _, ink_h = Fonts.ink(game, base)
+    end
+    local inner_h = math.max(h - 6, ink_h + 2)
+    local inner_y = y + math.floor((h - inner_h) * 0.5)
     local pad = 3
-    local inner_y = y + pad
-    local inner_h = h - pad * 2
     local level = math.max(0, tonumber(hand.level) or 1)
     local levels = game.C.HAND_LEVELS or {}
     love.graphics.setColor(levels[level] or levels[#levels] or game.C.WHITE)
@@ -417,12 +466,6 @@ function RunInfoUI.draw_hand_row(game, x, y, w, h, hand)
     love.graphics.setColor(game.C.BLOCK.BACK)
     draw_rounded_rect(chips_x, inner_y, 40, inner_h, 3, 0, "fill")
     draw_rounded_rect(mult_x, inner_y, 22, inner_h, 3, 0, "fill")
-
-    local base = game.FONTS.PIXEL.SMALL
-    if base:getHeight() > h - 2 then base = game.FONTS.PIXEL.TINY or base end
-    love.graphics.setFont(base)
-    local font_h = base:getHeight()
-    local ty = y + math.floor((h - font_h) * 0.5 + 0.5)
 
     -- Every field is fitted to its own plate: `printf` neither clips nor scrolls on this
     -- backend, so anything that outgrows its box draws over the neighbour instead. Levelling
@@ -438,29 +481,13 @@ function RunInfoUI.draw_hand_row(game, x, y, w, h, hand)
     -- module's stated case, and 12 rows x 5 fields is 60 reshapes a frame otherwise. The
     -- strings are single-colour by construction -- "0" only ever appears greyed, since a
     -- non-zero count is never "0" -- so nothing alternates colour on one cache key.
-    love.graphics.setFont(Fonts.fit(game, base, level_text, 38))
-    love.graphics.setColor(game.C.BLOCK.BACK)
-    TextCache.printf(level_text, x + pad, ty, 40, "center")
-
-    love.graphics.setFont(base)
-    love.graphics.setColor(game.C.WHITE)
-    TextCache.print(I18N.hand_name(hand.name or ""), x + 50, ty)
-
-    love.graphics.setFont(Fonts.fit(game, base, chips_text, 38))
-    love.graphics.setColor(game.C.BLUE)
-    TextCache.printf(chips_text, chips_x, ty, 40, "center")
-
-    love.graphics.setFont(base)
-    love.graphics.setColor(game.C.WHITE)
-    TextCache.print("X", x + w - 56, ty)
-
-    love.graphics.setFont(Fonts.fit(game, base, mult_text, 20))
-    love.graphics.setColor(game.C.RED)
-    TextCache.printf(mult_text, mult_x, ty, 22, "center")
-
-    love.graphics.setFont(Fonts.fit(game, base, played_text, 18))
-    love.graphics.setColor(played > 0 and game.C.JOKER_GREY or game.C.GREY)
-    TextCache.printf(played_text, x + w - 21, ty, 18, "right")
+    print_field(game, Fonts.fit(game, base, level_text, 38), game.C.BLOCK.BACK, level_text, x + pad, inner_y, inner_h, 40, "center")
+    print_field(game, base, game.C.WHITE, I18N.hand_name(hand.name or ""), x + 50, inner_y, inner_h)
+    print_field(game, Fonts.fit(game, base, chips_text, 38), game.C.BLUE, chips_text, chips_x, inner_y, inner_h, 40, "center")
+    print_field(game, base, game.C.WHITE, "X", x + w - 56, inner_y, inner_h)
+    print_field(game, Fonts.fit(game, base, mult_text, 20), game.C.RED, mult_text, mult_x, inner_y, inner_h, 22, "center")
+    print_field(game, Fonts.fit(game, base, played_text, 18), played > 0 and game.C.JOKER_GREY or game.C.GREY,
+        played_text, x + w - PLAYED_INSET - 18, inner_y, inner_h, 18, "right")
 end
 
 function RunInfoUI.draw_bottom(game)
@@ -469,9 +496,10 @@ function RunInfoUI.draw_bottom(game)
     love.graphics.setFont(game.FONTS.PIXEL.PRICE)
     love.graphics.setColor(game.C.WHITE)
     TextCache.print(I18N.text("deck_view.poker_hands", nil, "Poker Hands"), LIST_X, 14)
-    love.graphics.setFont(game.FONTS.PIXEL.MICRO or game.FONTS.PIXEL.SMALL)
+    -- On the title's line, right-aligned on the played column below it.
+    love.graphics.setFont(game.FONTS.PIXEL.LABEL)
     love.graphics.setColor(game.C.JOKER_GREY)
-    TextCache.printf(I18N.text("run_info.played", nil, "played"), 220, 17, 84, "right")
+    TextCache.printf(I18N.text("run_info.played", nil, "played"), LIST_X, 14, LIST_W - PLAYED_INSET, "right")
 
     local hands = RunInfoUI.visible_hands(game)
     local step, row_h = RunInfoUI.row_metrics(#hands)

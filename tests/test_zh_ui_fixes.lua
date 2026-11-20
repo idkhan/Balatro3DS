@@ -22,8 +22,60 @@ suite.test("blind skip and shop exit draw the live binding",function()
     T.assert_true(found,"skip uses the remapped cancel button")
     g.STATE=g.STATES.SHOP;g:init_shop_gamepad_nav();g:draw_bottom_shop()
     T.assert_eq(g._shop_ui_cache.continue.button,"x")
-    T.assert_eq(g._shop_ui_cache.continue.parts[2].text,"长按")
+    local parts=g._shop_ui_cache.continue.parts
+    T.assert_eq(parts[#parts].text,"长按")
     I18N.set_language("en")
+end)
+suite.test("shop button captions stay inside their buttons in Chinese",function()
+    local g=bootstrap.new_game(734);G=g;I18N.set_language("zh_CN")
+    -- The hardware faces: Chinese letters fill their cell, so the exit's three lines overflowed.
+    g.FONTS.PIXEL=Fonts.build("native","zh_CN");g._shop_ui_cache=nil
+    local buttons,lines,inside={},{},false
+    local real_button,real_print,real_draw=draw_button_with_shadow,love.graphics.print,ShopUI.draw_shop_button
+    ShopUI.draw_shop_button=function(...) inside=true;real_draw(...);inside=false end
+    draw_button_with_shadow=function(...)
+        local ix,iy,iw,ih=real_button(...);buttons[#buttons+1]={y=iy,h=ih};return ix,iy,iw,ih
+    end
+    love.graphics.print=function(text,x,y,...)
+        local top,ink=Fonts.ink(g,love.graphics.getFont())
+        if inside then lines[#lines+1]={text=tostring(text),top=y+top,bottom=y+top+ink,button=#buttons} end
+        return real_print(text,x,y,...)
+    end
+    g.STATE=g.STATES.SHOP;g:init_shop_gamepad_nav()
+    local ok,err=pcall(function() g:draw_bottom_shop() end)
+    draw_button_with_shadow,love.graphics.print,ShopUI.draw_shop_button=real_button,real_print,real_draw
+    I18N.set_language("en")
+    if not ok then error(err,0) end
+    local checked=0
+    for _,line in ipairs(lines) do
+        local b=buttons[line.button]
+        checked=checked+1
+            T.assert_true(line.top>=b.y and line.bottom<=b.y+b.h,
+                line.text.." spans rows "..line.top..".."..(line.bottom-1).." in a button of rows "..b.y..".."..(b.y+b.h-1))
+    end
+    T.assert_eq(checked,5,"three exit lines and two reroll lines")
+end)
+suite.test("the hand level sits on the hand name's baseline in Chinese",function()
+    local g=bootstrap.new_game(735);G=g;g.STATE=g.STATES.SELECTING_HAND;I18N.set_language("zh_CN")
+    -- The hardware faces: the Chinese name steps down to fit its row, so it is not the face it was set in.
+    g.FONTS.PIXEL=Fonts.build("native","zh_CN")
+    for i,h in ipairs(g.handlist) do if h=="Pair" then g.selectedHand=i end end
+    local name,baseline=I18N.hand_name("Pair"),{}
+    local real_print,real_printf=love.graphics.print,love.graphics.printf
+    local function note(text,y)
+        local top,ink=Fonts.ink(g,love.graphics.getFont())
+        local t=tostring(text)
+        if t==name then baseline.name=y+top+ink elseif t:find("^lvl") then baseline.level=y+top+ink end
+    end
+    love.graphics.print=function(text,x,y,...) note(text,y);return real_print(text,x,y,...) end
+    love.graphics.printf=function(text,x,y,...) note(text,y);return real_printf(text,x,y,...) end
+    local top=TopUI()
+    local ok,err=pcall(top.draw,top,"top")
+    love.graphics.print,love.graphics.printf=real_print,real_printf
+    I18N.set_language("en")
+    if not ok then error(err,0) end
+    T.assert_not_nil(baseline.name,"the hand name is drawn")
+    T.assert_eq(baseline.level,baseline.name,"the level's letters end on the name's bottom row")
 end)
 suite.test("Ectoplasm reports the next use's real hand-size penalty",function()
     local g=bootstrap.new_game(732);G=g;I18N.set_language("zh_CN")
@@ -34,18 +86,22 @@ suite.test("Ectoplasm reports the next use's real hand-size penalty",function()
 end)
 suite.test("HUD ratios use one line and scale inside their panel",function()
     local g=bootstrap.new_game(733);G=g
-    local old_print,old_printf,old_scale=love.graphics.print,love.graphics.printf,love.graphics.scale
-    local printed,wrapped,scale=0,0,nil
-    love.graphics.print=function(t) if t=="1/8" then printed=printed+1 end end
+    local old_print,old_printf=love.graphics.print,love.graphics.printf
+    local printed,wrapped,drawn=0,0,nil
+    -- The readout may step down the font ladder and pops through print's own scale argument, so
+    -- record the face and scale the text is actually drawn with.
+    love.graphics.print=function(t,_,_,_,sx)
+        if t=="1/8" then printed=printed+1;drawn={font=love.graphics.getFont(),scale=sx or 1} end
+    end
     love.graphics.printf=function() wrapped=wrapped+1 end
-    love.graphics.scale=function(x) scale=x end
     love.graphics.setFont(g.FONTS.PIXEL.MEDIUM)
-    local font=love.graphics.getFont()
     TopUI.center_text_juiced("1/8",0,0,20,14,1.4)
-    love.graphics.print,love.graphics.printf,love.graphics.scale=old_print,old_printf,old_scale
+    love.graphics.print,love.graphics.printf=old_print,old_printf
     T.assert_eq(printed,1);T.assert_eq(wrapped,0)
-    T.assert_true(scale*font:getWidth("1/8")<=20)
-    T.assert_true(scale*font:getHeight()<=14)
+    T.assert_true(drawn.scale*drawn.font:getWidth("1/8")<=20)
+    -- Inside the panel means the letters; the empty rows of the cell may overhang.
+    local _,ink_h=Fonts.ink(g,drawn.font)
+    T.assert_true(drawn.scale*ink_h<=14)
 end)
 suite.test("Chinese toast keeps upstream geometry with the maintained font and text",function()
     local g=bootstrap.new_game(734);G=g
@@ -112,4 +168,35 @@ suite.test("reward pips count dollars without an extra currency prefix",function
     T.assert_eq(ui:cached_reward_pips(5),"$$$$$+")
     T.assert_eq(ui:cached_reward_pips(0),"$0")
 end)
+suite.test("the round score label stays inside its row in Chinese",function()
+    local g=bootstrap.new_game(736);G=g;g.STATE=g.STATES.SELECTING_HAND;I18N.set_language("zh_CN")
+    -- The hardware faces: two lines of the Chinese label face are taller than the row.
+    g.FONTS.PIXEL=Fonts.build("native","zh_CN")
+    local first,second=I18N.text("hud.round_score_1"),I18N.text("hud.round_score_2")
+    local real_rect,real_print=draw_rounded_rect,love.graphics.print
+    local row,spans
+    draw_rounded_rect=function(...)
+        local ix,iy,iw,ih=real_rect(...);row={y=iy,h=ih};return ix,iy,iw,ih
+    end
+    love.graphics.print=function(text,x,y,...)
+        local t=tostring(text)
+        if t==first or t==second or t==first..second then
+            local top,ink=Fonts.ink(g,love.graphics.getFont())
+            spans=spans or {}
+            spans[#spans+1]={text=t,top=y+top,bottom=y+top+ink,row=row}
+        end
+        return real_print(text,x,y,...)
+    end
+    local top=TopUI()
+    local ok,err=pcall(top.draw,top,"top")
+    draw_rounded_rect,love.graphics.print=real_rect,real_print
+    I18N.set_language("en")
+    if not ok then error(err,0) end
+    T.assert_not_nil(spans,"the label is drawn")
+    for _,s in ipairs(spans) do
+        T.assert_true(s.top>=s.row.y and s.bottom<=s.row.y+s.row.h,
+            s.text.." spans rows "..s.top..".."..(s.bottom-1).." in a row of "..s.row.y..".."..(s.row.y+s.row.h-1))
+    end
+end)
+
 return suite

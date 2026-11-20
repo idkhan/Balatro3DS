@@ -58,6 +58,10 @@ function Popup:checkType(type)
     elseif type == "money" then
         self.text = "+" .. self.text
         self.Color = G.C.MONEY
+    elseif type == "money_loss" then
+        -- `ease_dollars` with a negative amount: "-$n" on red (`common_events.lua:74-76`).
+        self.text = "-$" .. self.text
+        self.Color = G.C.RED
     elseif type == "mult" then
         self.text = "+" .. self.text
         self.Color = G.C.MULT

@@ -1,6 +1,9 @@
 ---@class Card : Moveable
 Card = Moveable:extend()
 
+local PixelGrid = require("pixel_grid")
+local TooltipDraw = require("tooltip_draw")
+
 --- Stone cards retain their former face only as dormant restoration data. Their rank and
 --- suit must be absent from gameplay data, matching reference/Balatro/card.lua:957-981.
 ---@param data table|nil
@@ -466,13 +469,13 @@ function Card:draw_layer(atlas, quad, cell_w, cell_h, ox, oy)
     )
 end
 
-local TOOLTIP_PAD_X = 8
-local TOOLTIP_HEADER_PAD_Y = 3
-local TOOLTIP_BODY_PAD_Y = 10
-local TOOLTIP_SPACING = 1
-local TOOLTIP_SECTION_GAP = 2
-local TOOLTIP_OUTER_PAD_X = 3
-local TOOLTIP_OUTER_PAD_Y = 3
+local TOOLTIP_PAD_X = TooltipDraw.LAYOUT.PAD_X
+local TOOLTIP_HEADER_PAD_Y = TooltipDraw.LAYOUT.HEADER_PAD_Y
+local TOOLTIP_BODY_PAD_Y = TooltipDraw.LAYOUT.BODY_PAD_Y
+local TOOLTIP_SPACING = TooltipDraw.LAYOUT.SPACING
+local TOOLTIP_SECTION_GAP = TooltipDraw.LAYOUT.SECTION_GAP
+local TOOLTIP_OUTER_PAD_X = TooltipDraw.LAYOUT.OUTER_PAD_X
+local TOOLTIP_OUTER_PAD_Y = TooltipDraw.LAYOUT.OUTER_PAD_Y
 local CARD_SHADOW_ALPHA = 0.5
 local CARD_SHADOW_DRAG_ALPHA = 0.45
 local CARD_SHADOW_Y = 1.5
@@ -796,6 +799,129 @@ local function build_line_run(font, line)
     return run_add(run, font, line, TOOLTIP_BODY_GREY)
 end
 
+--- Turn body lines into drawable runs, breaking any line wider than `limit` onto more lines.
+--- Each piece keeps a coloured line's colour, and plain lines are re-badged per piece.
+---@return table[] runs, number widest
+local function wrap_runs(font, lines, limit)
+    local runs, max_w = {}, 0
+    for i = 1, #lines do
+        local line = lines[i]
+        local text = type(line) == "table" and line.text or line
+        local pieces = { line }
+        if font:getWidth(text) > limit then
+            pieces = {}
+            for _, segs in ipairs(TooltipDraw.wrap_segments(font, { { text = text } }, limit)) do
+                local parts = {}
+                for _, seg in ipairs(segs) do parts[#parts + 1] = seg.text end
+                local piece = table.concat(parts)
+                pieces[#pieces + 1] = type(line) == "table" and { text = piece, color = line.color } or piece
+            end
+        end
+        for _, piece in ipairs(pieces) do
+            local run = build_line_run(font, piece)
+            runs[#runs + 1] = run
+            if run.measure > max_w then max_w = run.measure end
+        end
+    end
+    return runs, max_w
+end
+
+--- Header-plus-body box sizes for a header `header_w` wide over `count` body lines.
+local function box_geometry(header_w, body_max_w, count, line_h)
+    local header_h_total = line_h + (TOOLTIP_HEADER_PAD_Y * 2)
+    local body_h_total = (count * line_h) + ((count - 1) * TOOLTIP_SPACING) + (TOOLTIP_BODY_PAD_Y * 2)
+    local inner_w = math.max(header_w + (TOOLTIP_PAD_X * 2), body_max_w + (TOOLTIP_PAD_X * 2))
+    local inner_h = header_h_total + TOOLTIP_SECTION_GAP + body_h_total
+    return {
+        header_h_total = header_h_total,
+        body_h_total = body_h_total,
+        inner_w = inner_w,
+        box_w = inner_w + (TOOLTIP_OUTER_PAD_X * 2),
+        box_h = inner_h + (TOOLTIP_OUTER_PAD_Y * 2),
+    }
+end
+
+--- Widest a badge's text may run, which caps the badge box: about 88 px of text (a 110 px box)
+--- on the 3DS screen. The reference's info boxes are narrow columns beside the card's own box.
+local SIDE_BOX_SHARE = 0.3
+--- Wider measures tried, in order, only when the badges at the cap would stack taller than the
+--- screen (three badges with a long seal under the hardware fonts).
+local SIDE_BOX_FALLBACK_SHARES = { 0.35, 0.4, 0.5 }
+local function side_box_limit(share)
+    return math.max(60, math.floor(TooltipDraw.body_limit() * (share or SIDE_BOX_SHARE)))
+end
+
+--- Give every badge box the widest one's width, so the column reads as one strip. Text stays
+--- centred in the wider box; a header is never cut, so a long badge name sets the width too.
+local function equalize_side_widths(sides)
+    local w = 0
+    for i = 1, #sides do w = math.max(w, sides[i].box_w) end
+    for i = 1, #sides do
+        local side = sides[i]
+        side.inner_w = side.inner_w + (w - side.box_w)
+        side.box_w = w
+    end
+end
+
+--- One badge's info box: its name in its colour over its effect lines, a size down from the
+--- card's own box (SMALL rather than TOOLTIP) so a few of them fit beside it on 240 rows.
+local function build_side_box(main_font, name, colour, effect_lines, share)
+    local font = (G.FONTS and G.FONTS.PIXEL and G.FONTS.PIXEL.SMALL) or main_font
+    local line_h, ink_off = TooltipDraw.line_box(font)
+    local header = run_add(new_run(), font, name, colour or G.C.PANEL)
+    local runs, body_max_w = wrap_runs(font, effect_lines, side_box_limit(share))
+    local box = box_geometry(header.width, body_max_w, #runs, line_h)
+    box.header = header
+    box.runs = runs
+    box.font = font
+    box.line_h = line_h
+    box.ink_off = ink_off
+    return box
+end
+
+--- Space between stacked badge boxes, and between the main box and the badge column, which
+--- sits right against it so the two read as one tooltip.
+local SIDE_BOX_GAP = 2
+local SIDE_MAIN_GAP = 0
+
+---@return number width, number height of the bottom screen
+local function tooltip_screen_size()
+    local sw, sh = 320, 240
+    if love.graphics.getWidth then
+        sw = love.graphics.getWidth("bottom")
+        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
+        if not sw or sw <= 0 then sw = 320 end
+    end
+    if love.graphics.getHeight then
+        sh = love.graphics.getHeight("bottom")
+        if not sh or sh <= 0 then sh = love.graphics.getHeight() end
+        if not sh or sh <= 0 then sh = 240 end
+    end
+    return sw, sh
+end
+
+--- Build every badge box at the capped measure, one width for all. If they would not stack in
+--- one column on the screen, the measure widens step by step -- fewer lines, a shorter column --
+--- since a second column does not fit beside the card's box on a 320 px screen.
+local function build_side_boxes(font, specs)
+    if #specs == 0 then return {} end
+    local _, sh = tooltip_screen_size()
+    local room = sh - 4
+    local sides
+    for attempt = 0, #SIDE_BOX_FALLBACK_SHARES do
+        local share = attempt == 0 and SIDE_BOX_SHARE or SIDE_BOX_FALLBACK_SHARES[attempt]
+        sides = {}
+        local h = -SIDE_BOX_GAP
+        for i, spec in ipairs(specs) do
+            sides[i] = build_side_box(font, spec.name, spec.colour, spec.lines, share)
+            h = h + SIDE_BOX_GAP + sides[i].box_h
+        end
+        if h <= room then break end
+    end
+    equalize_side_widths(sides)
+    return sides
+end
+
 --- Everything about a card tooltip that does not depend on where it lands: the body lines,
 --- their colour decomposition, every font measurement, and the resulting box geometry.
 ---
@@ -831,14 +957,14 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
     end
 
     local lines = {}
-    --- A modifier gets its reference badge name as a coloured line above its effect lines,
-    --- standing in for the base game's per-badge info boxes.
+    local line_h, ink_off = TooltipDraw.line_box(font)
+    --- A modifier gets its own small box beside the main one, titled with its reference badge
+    --- name, the way the base game queues one info box per badge (`common_events.lua:2722-2736`).
+    local sides = {}
+    local side_specs = {}
     local function add_named_section(name, colour, effect_lines)
         if not name or #effect_lines == 0 then return end
-        table.insert(lines, { text = name, color = colour })
-        for _, l in ipairs(effect_lines) do
-            table.insert(lines, l)
-        end
+        side_specs[#side_specs + 1] = { name = name, colour = colour, lines = effect_lines }
     end
     local enh_name_colour = (G.C.SECONDARY_SET and G.C.SECONDARY_SET.Enhanced) or G.C.PURPLE
     local seal_colours = { gold = G.C.GOLD, red = G.C.RED, blue = G.C.BLUE, purple = G.C.PURPLE }
@@ -881,19 +1007,9 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
     add_named_section(SEAL_NAMES[seal] and I18N.content_name("seal", seal, SEAL_NAMES[seal]),
         seal_colours[seal], translated_lines("seal", seal, seal_tooltip_lines(seal)))
 
-    local runs, body_max_w = {}, 0
-    for i = 1, #lines do
-        local run = build_line_run(font, lines[i])
-        runs[i] = run
-        if run.measure > body_max_w then body_max_w = run.measure end
-    end
-
-    local line_h = font:getHeight()
-    local count = #runs
-    local header_h_total = line_h + (TOOLTIP_HEADER_PAD_Y * 2)
-    local body_h_total = (count * line_h) + ((count - 1) * TOOLTIP_SPACING) + (TOOLTIP_BODY_PAD_Y * 2)
-    local inner_w = math.max(header.width + (TOOLTIP_PAD_X * 2), body_max_w + (TOOLTIP_PAD_X * 2))
-    local inner_h = header_h_total + TOOLTIP_SECTION_GAP + body_h_total
+    sides = build_side_boxes(font, side_specs)
+    local runs, body_max_w = wrap_runs(font, lines, TooltipDraw.body_limit())
+    local box = box_geometry(header.width, body_max_w, #runs, line_h)
 
     return {
         -- Key: every input the plan was derived from. The face is represented by
@@ -914,11 +1030,13 @@ local function build_tooltip_plan(font, rank, suit, enh, edition, seal,
         header = header,
         runs = runs,
         line_h = line_h,
-        header_h_total = header_h_total,
-        body_h_total = body_h_total,
-        inner_w = inner_w,
-        box_w = inner_w + (TOOLTIP_OUTER_PAD_X * 2),
-        box_h = inner_h + (TOOLTIP_OUTER_PAD_Y * 2),
+        ink_off = ink_off,
+        header_h_total = box.header_h_total,
+        body_h_total = box.body_h_total,
+        inner_w = box.inner_w,
+        box_w = box.box_w,
+        box_h = box.box_h,
+        sides = sides,
     }
 end
 
@@ -934,6 +1052,51 @@ local function draw_run(run, font, x, inner_w, line_y)
     end
 end
 
+--- One tooltip box: a header panel over a body panel, inside a shadowed outline.
+---@param plan table the card's plan, for the shared line metrics
+---@param geo table `box_w`, `box_h`, `inner_w`, `header_h_total`, `body_h_total`
+local function draw_tooltip_box(font, plan, tx, ty, header, runs, geo)
+    font = geo.font or font
+    love.graphics.setFont(font)
+    local line_h = geo.line_h or plan.line_h
+    local ink_off = geo.ink_off or plan.ink_off
+    local inner_w = geo.inner_w
+    local header_h_total, body_h_total = geo.header_h_total, geo.body_h_total
+
+    -- Outer container (single rounded rectangle around both sections)
+    draw_rect_with_shadow(tx, ty, geo.box_w, geo.box_h, 4, 0, G.C.TOOLTIP, G.C.BLOCK.SHADOW, 1)
+    love.graphics.setColor(1, 1, 1, 1)
+    draw_rounded_rect(tx, ty, geo.box_w, geo.box_h, 4, 2, "line")
+
+    local header_x = tx + TOOLTIP_OUTER_PAD_X
+    local header_y = ty + TOOLTIP_OUTER_PAD_Y
+    local body_x = header_x
+    local body_y = header_y + header_h_total + TOOLTIP_SECTION_GAP
+
+    -- Outer rounded panels
+    love.graphics.setColor(G.C.TOOLTIP)
+    draw_rounded_rect(header_x, header_y, inner_w, header_h_total, 4, 0, "fill")
+    draw_rounded_rect(body_x, body_y, inner_w, body_h_total, 4, 0, "fill")
+
+    -- Inner light fill
+    local inner_pad = 2
+    local inner_header_h = math.max(1, header_h_total - (inner_pad * 2))
+    local inner_body_h = math.max(1, body_h_total - (inner_pad * 2))
+    love.graphics.setColor(G.C.WHITE)
+    draw_rect_with_shadow(header_x + inner_pad, header_y + inner_pad, inner_w - (inner_pad * 2), inner_header_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
+    draw_rect_with_shadow(body_x + inner_pad, body_y + inner_pad - 1, inner_w - (inner_pad * 2), inner_body_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
+
+    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5) + ink_off
+    draw_run(header, font, header_x, inner_w, header_text_y)
+
+    -- Measured from the body's face, which sits a pixel above its panel.
+    local text_y = body_y + TOOLTIP_BODY_PAD_Y - 1
+    for i = 1, #runs do
+        draw_run(runs[i], font, body_x, inner_w, math.floor(text_y + 0.5) + ink_off)
+        text_y = text_y + line_h + TOOLTIP_SPACING
+    end
+end
+
 function Card:draw_tooltip(draw_x, draw_y)
     local data = self.card_data or {}
     local rank = data.rank
@@ -945,7 +1108,7 @@ function Card:draw_tooltip(draw_x, draw_y)
     local edition = card_edition_for_display(self)
     local seal = self.seal
 
-    local font = G.FONTS.PIXEL.SMALL or love.graphics.getFont()
+    local font = G.FONTS.PIXEL.TOOLTIP or love.graphics.getFont()
     local generation = tooltip_font_epoch(font)
 
     -- Nine scalar comparisons against a cached plan, all of them values that were being
@@ -964,60 +1127,75 @@ function Card:draw_tooltip(draw_x, draw_y)
     local prev_r, prev_g, prev_b, prev_a = love.graphics.getColor()
     love.graphics.setFont(font)
 
-    local line_h = plan.line_h
-    local header_h_total = plan.header_h_total
-    local body_h_total = plan.body_h_total
-    local inner_w = plan.inner_w
     local box_w, box_h = plan.box_w, plan.box_h
+    local sw, sh = tooltip_screen_size()
+    local margin = 2
+
+    -- The badge boxes stack in a column beside the main box (`common_events.lua:2722-2736`).
+    -- A column that would be taller than the screen spills into a second one.
+    local sides = plan.sides or {}
+    local columns = {}
+    do
+        local col = nil
+        for i = 1, #sides do
+            local side = sides[i]
+            if not col or (col.h + SIDE_BOX_GAP + side.box_h > sh - margin * 2) then
+                col = { w = 0, h = -SIDE_BOX_GAP }
+                columns[#columns + 1] = col
+            end
+            col[#col + 1] = side
+            col.w = math.max(col.w, side.box_w)
+            col.h = col.h + SIDE_BOX_GAP + side.box_h
+        end
+    end
+    local stack_w, stack_h = 0, 0
+    for i, col in ipairs(columns) do
+        stack_w = stack_w + col.w + (i > 1 and SIDE_BOX_GAP or 0)
+        stack_h = math.max(stack_h, col.h)
+    end
 
     local card_w = self.VT.w * self.VT.scale
     local tx = draw_x + (card_w - box_w) * 0.5
     local ty = draw_y - box_h - 3
-    local margin = 2
-    local sw = 320
-    if love.graphics.getWidth then
-        sw = love.graphics.getWidth("bottom")
-        if not sw or sw <= 0 then sw = love.graphics.getWidth() end
-        if not sw or sw <= 0 then sw = 320 end
-    end
     tx = math.max(margin, math.min(tx, sw - box_w - margin))
     if ty < 2 then ty = draw_y + 2 end
-    tx = math.floor(tx + 0.5)
-    ty = math.floor(ty + 0.5)
+    -- Flipped below a hand card, a tall (wrapped) box can run past the bottom edge.
+    ty = math.max(margin, math.min(ty, sh - box_h - margin))
+    tx, ty = math.floor(tx + 0.5), math.floor(ty + 0.5)
 
-    -- Outer container (single rounded rectangle around both sections)
-    draw_rect_with_shadow(tx, ty, box_w, box_h, 4, 0, G.C.TOOLTIP, G.C.BLOCK.SHADOW, 1)
-        
-    love.graphics.setColor(1, 1, 1, 1)
-    draw_rounded_rect(tx, ty, box_w, box_h, 4, 2, "line")
-    
-    local header_x = tx + TOOLTIP_OUTER_PAD_X
-    local header_y = ty + TOOLTIP_OUTER_PAD_Y
-    local body_x = header_x
-    local body_y = header_y + header_h_total + TOOLTIP_SECTION_GAP
+    local sx, sy
+    if #sides > 0 then
+        -- Right of the main box if the column fits there, else left; if neither, the main box
+        -- slides over to make room on whichever side has more of it.
+        if tx + box_w + SIDE_MAIN_GAP + stack_w <= sw - margin then
+            sx = tx + box_w + SIDE_MAIN_GAP
+        elseif tx - SIDE_MAIN_GAP - stack_w >= margin then
+            sx = tx - SIDE_MAIN_GAP - stack_w
+        elseif tx + box_w * 0.5 <= sw * 0.5 then
+            tx = math.max(margin, sw - margin - stack_w - SIDE_MAIN_GAP - box_w)
+            sx = tx + box_w + SIDE_MAIN_GAP
+        else
+            sx = margin
+            tx = sx + stack_w + SIDE_MAIN_GAP
+        end
+        -- Top-aligned with the main box, pulled up if the column would run off the bottom.
+        sy = math.max(margin, math.min(ty, sh - stack_h - margin))
+    end
 
-    -- Outer rounded panels
-    love.graphics.setColor(G.C.TOOLTIP)
-    draw_rounded_rect(header_x, header_y, inner_w, header_h_total, 4, 0, "fill")
-    draw_rounded_rect(body_x, body_y, inner_w, body_h_total, 4, 0, "fill")    
-
-    -- Inner light fill
-    local inner_pad = 2
-    local inner_header_h = math.max(1, header_h_total - (inner_pad * 2))
-    local inner_body_h = math.max(1, body_h_total - (inner_pad * 2))
-    love.graphics.setColor(G.C.WHITE)
-    draw_rect_with_shadow(header_x + inner_pad, header_y + inner_pad, inner_w - (inner_pad * 2), inner_header_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
-    draw_rect_with_shadow(body_x + inner_pad, body_y + inner_pad -1, inner_w - (inner_pad * 2), inner_body_h, 4, 0, G.C.WHITE, G.C.DARK_WHITE, 1)
- 
-    -- Header: rank + suit, or anonymous Stone title
-    local header_text_y = header_y + math.floor((header_h_total - line_h) * 0.5 + 0.5)
-    draw_run(plan.header, font, header_x, inner_w, header_text_y)
-
-    local text_y = body_y + TOOLTIP_BODY_PAD_Y
-    local runs = plan.runs
-    for i = 1, #runs do
-        draw_run(runs[i], font, body_x, inner_w, math.floor(text_y + 0.5))
-        text_y = text_y + line_h + TOOLTIP_SPACING
+    draw_tooltip_box(font, plan, math.floor(tx + 0.5), math.floor(ty + 0.5), plan.header, plan.runs, plan)
+    if sx then
+        local col_x = sx
+        for _, col in ipairs(columns) do
+            local y = sy
+            for i = 1, #col do
+                local side = col[i]
+                -- Narrower boxes centre in their column, so the stack reads as one.
+                local bx = col_x + math.floor((col.w - side.box_w) * 0.5 + 0.5)
+                draw_tooltip_box(font, plan, bx, math.floor(y + 0.5), side.header, side.runs, side)
+                y = y + side.box_h + SIDE_BOX_GAP
+            end
+            col_x = col_x + col.w + SIDE_BOX_GAP
+        end
     end
 
     love.graphics.setFont(prev_font)
@@ -1099,6 +1277,10 @@ function Card:draw()
         s = s * js
         r = r + self.juice_r
     end
+    -- Whole pixels and whole-pixel angle steps, so a swaying, leaning or wobbling card holds its
+    -- art still between steps instead of sliding shear seams through it (`PixelGrid.turn`).
+    draw_x, draw_y = PixelGrid.snap(draw_x), PixelGrid.snap(draw_y)
+    r = PixelGrid.turn(r, w * s, h * s)
 
     -- The reference draws a parallaxed silhouette before the card (`reference/Balatro/card.lua:4359-4363`).
     -- Limit it to one base-atlas pass: alpha fill rate is precious on the Old 3DS's 268 MHz GPU.
@@ -1243,12 +1425,16 @@ function Card:draw()
             love.graphics.setLineWidth(2)
             love.graphics.setColor(0, 0, 0, 1)
             love.graphics.push()
-            local cx = r.x + r.w / 2
-            local cy = r.y + r.h / 2
+            -- The card's own whole pixels and angle step (`Card:draw`), so the outline moves
+            -- with the art instead of flickering along its edge.
+            local x, y = PixelGrid.snap(r.x), PixelGrid.snap(r.y)
+            local cx = x + r.w / 2
+            local cy = y + r.h / 2
             love.graphics.translate(cx, cy)
-            love.graphics.rotate(self.VT.r)
+            local s = self.VT.scale or 1
+            love.graphics.rotate(PixelGrid.turn(self.VT.r, self.VT.w * s, self.VT.h * s))
             love.graphics.translate(-cx, -cy)
-            love.graphics.rectangle("line", r.x, r.y, r.w, r.h)
+            love.graphics.rectangle("line", x, y, r.w, r.h)
             love.graphics.pop()
             love.graphics.setLineWidth(lw)
         end

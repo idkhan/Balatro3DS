@@ -1,5 +1,6 @@
 --- Drop zones for drag-to-buy/sell/use/pick (320x240 bottom screen).
 ---@class DragZonesUI
+local PixelGrid = require("pixel_grid")
 local DragZonesUI = {}
 
 local SCREEN_W = 320
@@ -81,7 +82,7 @@ function DragZonesUI.draw(game, zones)
                 love.graphics.rectangle("fill", rect.x, rect.y, rect.w, rect.h)
                 love.graphics.setColor(fill)
                 love.graphics.setLineWidth(2)
-                love.graphics.rectangle("line", rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1)
+                PixelGrid.outline(rect.x, rect.y, rect.w, rect.h)
                 local label = zone.label or ""
                 local font = game and game.FONTS and game.FONTS.PIXEL and game.FONTS.PIXEL.SMALL
                 if label ~= "" and font then

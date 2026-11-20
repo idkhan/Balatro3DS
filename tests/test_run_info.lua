@@ -233,4 +233,28 @@ suite.test("Back closes from a touch as well as a button", function()
     T.assert_false(g._run_info_open)
 end)
 
+suite.test("the touch-screen hint stays in the voucher column in Spanish", function()
+    local I18N = require("localization")
+    local Fonts = require("fonts")
+    local TextCache = require("text_cache")
+    local g = playing_game()
+    I18N.set_language("es")
+    -- The hardware faces: at the shared profile's LABEL the Spanish hint already fits.
+    g.FONTS.PIXEL = Fonts.build("native", "es")
+    local hint = I18N.text("run_info.hands_hint")
+    local right
+    local real = TextCache.print
+    TextCache.print = function(text, x, y, ...)
+        if text == hint then right = x + love.graphics.getFont():getWidth(text) end
+        return real(text, x, y, ...)
+    end
+    local ok, err = pcall(RunInfoUI.draw_top, "top", g)
+    TextCache.print = real
+    I18N.set_language("en")
+    if not ok then error(err, 0) end
+    T.assert_not_nil(right, "the hint is drawn")
+    -- The stake chip and its rules start at x = 268.
+    T.assert_true(right <= 266, "the hint ends at x=" .. tostring(right))
+end)
+
 return suite

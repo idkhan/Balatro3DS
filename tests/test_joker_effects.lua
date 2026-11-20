@@ -1102,13 +1102,15 @@ suite.test("Burnt Joker keeps its first-discard trigger when The Hook discards",
         return true
     end
 
-    game:boss_after_play_before_draw()
+    game:boss_hook_discard()
 
     T.assert_eq(upgrades, 0, "The Hook must not spend Burnt Joker's upgrade")
     T.assert_false(burnt._burnt_used_this_round == true, "Burnt remains armed for a player discard")
 
     -- Burnt is a `pre_discard` joker: it levels the hand the discarded cards make before any
-    -- of them is evaluated (reference/Balatro/card.lua:2748-2755).
+    -- of them is evaluated (reference/Balatro/card.lua:2748-2755). A player discard has a
+    -- selection; The Hook's above left none.
+    game.selectedHand = 1
     JokerEffects.get(burnt).apply_effect(burnt, {
         event_name = "on_pre_discard",
         discard_reason = "discard",
@@ -1206,7 +1208,7 @@ suite.test("a Purple Seal fires when The Hook discards the card", function()
     game.can_add_consumable = function() return true end
     game.random_non_fool_tarot_id = function() return "tarot_magician" end
 
-    game:boss_after_play_before_draw()
+    game:boss_hook_discard()
     T.assert_eq(created, 2, "both discarded Purple Seals pay out")
 end)
 

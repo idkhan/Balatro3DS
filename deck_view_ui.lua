@@ -29,6 +29,8 @@ local SUIT_SYMBOLS = {
 
 -- Tab strip across the top of the touch screen.
 local TAB_X, TAB_Y, TAB_W = 6, 4, 308
+-- Close button face height; the hint beside it is centred on the same line.
+local CLOSE_H = 17
 
 sysDepth = 0
 buttonHeight = 1
@@ -142,7 +144,6 @@ function DeckViewUI._chrome_metrics()
         rows_y = rows_y,
         row_step = row_step,
         row_h = row_h,
-        label_dy = math.floor((row_h - 15) * 0.5 + 0.5),
         area_w = SCREEN_W - row_start_x - 10,
         row_start_x = row_start_x,
         scale = scale,
@@ -547,14 +548,16 @@ local function draw_tabs(game, x, y, w, labels, current, rects)
         game:draw_button_pip(game:get_button_for_role("shoulder_r"), x + w - 11, y + 4, 11)
     end
 
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
     for i, label in ipairs(labels) do
         local tx = math.floor(x + pip_w + 4 + (i - 1) * (tw + gap))
         local on = (i == current)
         local face = on and game.C.RED or mix(game.C.RED, game.C.BLOCK.BACK, 0.45)
         draw_button_with_shadow(tx, y, tw, 19, 3, 0, face, game.C.BLOCK.SHADOW, 2)
         love.graphics.setColor(on and game.C.WHITE or game.C.DARK_WHITE)
-        TextCache.printf(label, tx, y + 4, tw, "center")
+        -- "Baraja Completa" is about a tab wide at LABEL, so a long name steps down a size.
+        local font = Fonts.fit(game, game.FONTS.PIXEL.LABEL, label, tw - 4)
+        love.graphics.setFont(font)
+        TextCache.printf(label, tx, Fonts.centre_y(game, font, y, 19), tw, "center")
         if rects then rects[i] = { x = tx, y = y, w = tw, h = 19 } end
     end
     return y + 23
@@ -562,14 +565,15 @@ end
 
 --- Orange Back/Close button with its B pip, as the reference's generic-options footer.
 local function draw_close_button(game, x, y, w, label)
-    draw_button_with_shadow(x, y, w, 17, 3, 0, game.C.ORANGE, game.C.BLOCK.SHADOW, 2)
+    draw_button_with_shadow(x, y, w, CLOSE_H, 3, 0, game.C.ORANGE, game.C.BLOCK.SHADOW, 2)
     love.graphics.setColor(game.C.WHITE)
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-    TextCache.printf(label, x, y + 3, w, "center")
+    local font = game.FONTS.PIXEL.LABEL
+    love.graphics.setFont(font)
+    TextCache.printf(label, x, Fonts.centre_y(game, font, y, CLOSE_H), w, "center")
     if game.draw_button_pip and game.gamepad_focus_visible and game:gamepad_focus_visible() then
         game:draw_button_pip(game:get_button_for_role("cancel"), x + 4, y + 3, 11)
     end
-    game._deck_view_close_rect = { x = x, y = y, w = w, h = 17 }
+    game._deck_view_close_rect = { x = x, y = y, w = w, h = CLOSE_H }
 end
 
 local DECK_SPRITE_SCALE = 0.62
@@ -627,28 +631,38 @@ function DeckViewUI.draw_matrix(game, x, y, w, opts)
     local ink = game.C.BLOCK.BACK
     local plate_face = mix(game.C.JOKER_GREY, game.C.L_BLACK, 0.35)
     local plate_num = mix(game.C.JOKER_GREY, game.C.L_BLACK, 0.55)
+    local rank_font, count_font = game.FONTS.PIXEL.SMALL, game.FONTS.PIXEL.LABEL
 
-    -- Header: the rank, then how many of it are left anywhere in the tracked set.
+    -- Header: the rank, then how many of it are left anywhere in the tracked set. The rank
+    -- gets an 11 px band at the top of the plate and the count a plate of its own under it,
+    -- one pixel inside the outer plate on every side.
+    local plate_h = head_h - 3
+    local rank_band = 11
+    local count_y, count_h = y + rank_band, plate_h - rank_band - 1
+    local rank_ty = Fonts.centre_y(game, rank_font, y, rank_band)
+    local count_ty = Fonts.centre_y(game, count_font, count_y, count_h)
     for i, rank in ipairs(RANKS_DESC) do
         local cx = x + label_w + (i - 1) * cw
         local total = 0
         for _, suit in ipairs(SUITS) do total = total + grid[suit][rank] end
 
         love.graphics.setColor(rank >= 11 and rank <= 13 and plate_face or plate_num)
-        draw_rounded_rect(cx + 1, y, cw - 2, head_h - 3, 3, 0, "fill")
-        love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+        draw_rounded_rect(cx + 1, y, cw - 2, plate_h, 3, 0, "fill")
+        love.graphics.setFont(rank_font)
         love.graphics.setColor(ink)
-        TextCache.printf(RANK_LABELS[rank], cx, y + 2, cw, "center")
+        TextCache.printf(RANK_LABELS[rank], cx, rank_ty, cw, "center")
 
         love.graphics.setColor(game.C.L_BLACK)
-        draw_rounded_rect(cx + 2, y + 12, cw - 4, head_h - 14, 2, 0, "fill")
-        love.graphics.setFont(game.FONTS.PIXEL.MICRO or game.FONTS.PIXEL.SMALL)
+        draw_rounded_rect(cx + 2, count_y, cw - 4, count_h, 2, 0, "fill")
+        love.graphics.setFont(count_font)
         love.graphics.setColor(game.C.WHITE)
-        TextCache.printf(tostring(total), cx, y + 13, cw, "center")
+        TextCache.printf(tostring(total), cx, count_ty, cw, "center")
     end
 
     -- One tinted band per suit, its total inset on the left, then the thirteen cells.
+    local font = game.FONTS.PIXEL.LABEL
     local dim = { 1, 1, 1, 0.2 }
+    local label_x, label_pw, label_pad = x + 2, label_w - 6, 4
     for j, suit in ipairs(SUITS) do
         local ry = y + head_h + (j - 1) * cell_h
         local sc = suit_colour(game, suit)
@@ -656,18 +670,21 @@ function DeckViewUI.draw_matrix(game, x, y, w, opts)
         draw_rounded_rect(x, ry, w, cell_h - 2, 3, 0, "fill")
 
         love.graphics.setColor(game.C.BLOCK.BACK)
-        draw_rounded_rect(x + 2, ry + 2, label_w - 6, cell_h - 6, 3, 0, "fill")
+        draw_rounded_rect(label_x, ry + 2, label_pw, cell_h - 6, 3, 0, "fill")
 
         local suit_total = 0
         for _, rank in ipairs(RANKS_DESC) do suit_total = suit_total + grid[suit][rank] end
 
-        love.graphics.setFont(game.FONTS.PIXEL.SMALL)
-        love.graphics.setColor(sc)
-        TextCache.print(SUIT_SYMBOLS[suit], x + 3, ry + 4)
+        love.graphics.setFont(font)
+        local ty = Fonts.centre_y(game, font, ry + 2, cell_h - 6)
+        -- Spades and Clubs are dark slate, invisible on the near-black plate at full strength;
+        -- lightened the way the Joker reminders are (`joker_display.lua`), every suit reads.
+        love.graphics.setColor(mix(sc, game.C.WHITE, 0.35))
+        TextCache.print(SUIT_SYMBOLS[suit], label_x + label_pad, ty)
         love.graphics.setColor(game.C.WHITE)
-        TextCache.printf(tostring(suit_total), x + 11, ry + 4, label_w - 16, "right")
+        TextCache.printf(tostring(suit_total), label_x, ty, label_pw - label_pad, "right")
 
-        local cell_ty = ry + math.floor((cell_h - 4 - 11) * 0.5 + 0.5)
+        local cell_ty = Fonts.centre_y(game, font, ry, cell_h - 2)
         for i, rank in ipairs(RANKS_DESC) do
             local cx = x + label_w + (i - 1) * cw
             local n = grid[suit][rank]
@@ -694,29 +711,32 @@ function DeckViewUI.draw_top(screen, game)
     love.graphics.setColor(game.C.BLACK)
     love.graphics.rectangle("fill", 0, 0, TOP_W, TOP_H)
 
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    -- The header sits centred in the strip above the art.
+    local art_y = 20
+    local label = game.FONTS.PIXEL.LABEL
+    love.graphics.setFont(label)
     love.graphics.setColor(game.C.JOKER_GREY)
-    TextCache.print(I18N.text("deck_view.deck", nil, "Deck"), 8, 6)
+    TextCache.print(I18N.text("deck_view.deck", nil, "Deck"), 8, Fonts.centre_y(game, label, 0, art_y))
 
     local deck_id = game.selected_deck_id or game._pending_deck_id or "b_red"
     local deck_def = (DECK_DEFS_BY_ID and DECK_DEFS_BY_ID[deck_id]) or (DECK_DEFS and DECK_DEFS[1])
-    draw_deck_sprite(game, deck_def, 8, 20, DECK_SPRITE_SCALE)
+    draw_deck_sprite(game, deck_def, 8, art_y, DECK_SPRITE_SCALE)
     love.graphics.setFont(game.FONTS.PIXEL.PRICE)
     love.graphics.setColor(game.C.WHITE)
     TextCache.print(deck_def and I18N.content_name("deck", deck_def.id, deck_def.name) or I18N.text("deck_view.deck", nil, "Deck"), 58, 22)
     local deck_rule = deck_def and I18N.content_text("deck", deck_def.id, deck_def.description or "") or ""
-    love.graphics.setFont(Fonts.fit_block(game, game.FONTS.PIXEL.SMALL, deck_rule, 120, 44))
+    love.graphics.setFont(Fonts.fit_block(game, label, deck_rule, 120, 44))
     love.graphics.setColor(game.C.JOKER_GREY)
     TextCache.printf(deck_rule, 58, 40, 120, "left")
 
     local stake_id = game.selected_stake_id or game._pending_stake_id or "stake_white"
     local stake_def = STAKE_DEFS_BY_ID and STAKE_DEFS_BY_ID[stake_id]
-    draw_stake_chip(game, stake_def, 190, 20, 1)
+    draw_stake_chip(game, stake_def, 190, art_y, 1)
     love.graphics.setFont(game.FONTS.PIXEL.PRICE)
     love.graphics.setColor(game.C.WHITE)
     TextCache.print(stake_def and I18N.content_name("stake", stake_def.id, stake_def.name) or I18N.text("deck_view.stake", nil, "Stake"), 224, 22)
     local stake_rule = stake_def and I18N.content_text("stake", stake_def.id, stake_def.description or "") or ""
-    love.graphics.setFont(Fonts.fit_block(game, game.FONTS.PIXEL.MICRO, stake_rule, 168, 44))
+    love.graphics.setFont(Fonts.fit_block(game, label, stake_rule, 168, 44))
     love.graphics.setColor(game.C.JOKER_GREY)
     TextCache.printf(stake_rule, 224, 40, 168, "left")
 
@@ -757,13 +777,17 @@ function DeckViewUI.draw_bottom(game)
         DeckViewUI.mode(game) == "full" and 2 or 1, game._deck_view_tab_rects)
 
     local m = DeckViewUI._chrome_metrics()
+    local suit_font = game.FONTS.PIXEL.PRICE
+    love.graphics.setFont(suit_font)
+    local label_dy = Fonts.centre_y(game, suit_font, 0, m.row_h)
     for j, suit in ipairs(SUITS) do
         local ry = m.rows_y + (j - 1) * m.row_step
-        love.graphics.setColor(mix(suit_colour(game, suit), game.C.L_BLACK, 0.68))
+        local sc = suit_colour(game, suit)
+        love.graphics.setColor(mix(sc, game.C.L_BLACK, 0.68))
         draw_rounded_rect(m.margin_x, ry, SCREEN_W - m.margin_x * 2, m.row_h, 4, 0, "fill")
-        love.graphics.setFont(game.FONTS.PIXEL.PRICE)
-        love.graphics.setColor(suit_colour(game, suit))
-        TextCache.print(SUIT_SYMBOLS[suit], m.margin_x + 4, ry + m.label_dy)
+        -- Lightened like the matrix's suit letters, or Spades and Clubs vanish into their rows.
+        love.graphics.setColor(mix(sc, game.C.WHITE, 0.35))
+        TextCache.print(SUIT_SYMBOLS[suit], m.margin_x + 4, ry + label_dy)
     end
 
     love.graphics.setColor(1, 1, 1, 1)
@@ -773,10 +797,12 @@ function DeckViewUI.draw_bottom(game)
         end
     end
 
-    love.graphics.setFont(game.FONTS.PIXEL.SMALL)
+    local close_y = 216
+    local hint_font = game.FONTS.PIXEL.LABEL
+    love.graphics.setFont(hint_font)
     love.graphics.setColor(game.C.JOKER_GREY)
-    TextCache.print(I18N.text("deck_view.tap_hint", nil, "Tap a card to read it"), 8, 205)
-    draw_close_button(game, 206, 216, 108, I18N.text("common.close", nil, "Close"))
+    TextCache.print(I18N.text("deck_view.tap_hint", nil, "Tap a card to read it"), 8, Fonts.centre_y(game, hint_font, close_y, CLOSE_H))
+    draw_close_button(game, 206, close_y, 108, I18N.text("common.close", nil, "Close"))
     love.graphics.setColor(1, 1, 1, 1)
 end
 

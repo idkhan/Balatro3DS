@@ -1,15 +1,17 @@
 --- Draggable shop booster / voucher nodes (Moveable, not full Joker/Consumable).
 local ShopUI = require("shop_ui")
+local PixelGrid = require("pixel_grid")
 
 --- Apply the motion tilt Moveable keeps in VT.r, the same way Card and Joker do.
 --- Without this these nodes slide around perfectly upright while every other
---- draggable leans into the drag.
+--- draggable leans into the drag. The tilt turns in whole-pixel steps, like theirs
+--- (`PixelGrid.turn`); `x, y` are expected on whole pixels.
 local function push_tilt(node, x, y, w, h)
     love.graphics.push()
     local cx = x + w * 0.5
     local cy = y + h * 0.5
     love.graphics.translate(cx, cy)
-    love.graphics.rotate(node.VT.r or 0)
+    love.graphics.rotate(PixelGrid.turn(node.VT.r or 0, w, h))
     love.graphics.translate(-cx, -cy)
 end
 
@@ -38,7 +40,7 @@ function ShopBoosterNode:draw()
     local offer = self.shop_booster_offer
     if type(offer) ~= "table" then return end
     local scale = self.VT.scale or self.T.scale or 1
-    local x, y = self.VT.x, self.VT.y
+    local x, y = PixelGrid.snap(self.VT.x), PixelGrid.snap(self.VT.y)
     local w = (self.T.w or 72) * scale
     local h = (self.T.h or 95) * scale
     local idx = tonumber(offer.booster_sprite_index) or 0
@@ -81,7 +83,7 @@ function ShopVoucherNode:draw()
     local offer = self.shop_voucher_offer
     if type(offer) ~= "table" then return end
     local scale = self.VT.scale or self.T.scale or 1
-    local x, y = self.VT.x, self.VT.y
+    local x, y = PixelGrid.snap(self.VT.x), PixelGrid.snap(self.VT.y)
     local w = (self.T.w or 72) * scale
     local h = (self.T.h or 95) * scale
     local game = G

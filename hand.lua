@@ -3,6 +3,7 @@ Hand = Object:extend()
 
 local Particles = require("particles")
 local JokerDisplay = require("joker_display")
+local PixelGrid = require("pixel_grid")
 
 --- Whether a card counts as every suit when a Flush is being found. Only an undebuffed Wild
 --- does: `Card:is_suit(..., flush_calc)` checks `not self.debuff` before treating a Wild Card
@@ -56,8 +57,10 @@ local HAND_BOTTOM_MARGIN = 38
 --- folded in, phase-shifted by the card's own x so the hand ripples rather than pulsing in
 --- unison, and lets the spring lag behind them. It is barely a pixel of travel and it is most
 --- of the difference between a hand that is resting and a hand that is a screenshot.
-local SWAY_R_AMP = 0.02
-local SWAY_R_RATE = 2
+---
+--- Only the bob ports over. The reference also rocks each card by 0.02 rad, which moves a 71 x 95
+--- card's corners 1.2 px: at 240p that cannot read as a rock, only as shear seams sliding through
+--- the art every frame (`PixelGrid.turn`). The cards keep their fan angle and bob a pixel.
 local SWAY_Y_AMP = 0.03 * PX_PER_UNIT
 local SWAY_Y_RATE = 0.666
 --- The reference phases off x in tiles; the port's playfield is 320 px over the same 20 tiles.
@@ -181,6 +184,11 @@ local PLAY_CENTER_SCALE = 1
 --- (`state_events.lua:610-620`, roughly 0.4 + the hand-name beat). That build-up is the
 --- signature rhythm of a played hand.
 local PLAY_HIGHLIGHT_LEAD = 0.2
+-- The Tooth's per-card charge (`blind.lua:498-502`).
+local TOOTH_LEAD = 0.2
+local TOOTH_INTERVAL = 0.23
+-- The Hook's `delay(0.7)` after its discard (`blind.lua:485`).
+local HOOK_HOLD = 0.7
 local PLAY_HIGHLIGHT_INTERVAL = 0.1
 local PLAY_ANTICIPATION = 0.55
 
@@ -243,6 +251,9 @@ local function set_card_target(node, x, y, r, scale)
     -- draw time it snapped up in a single frame with no bounce and no tilt, on the interaction
     -- the player performs more than any other.
     if node.selected then y = y - SELECTED_LIFT end
+    -- Rest on whole pixels. The card is drawn snapped (`Card:draw`), and from a fractional rest
+    -- the idle bob's crest grazes a rounding edge, so the card blips up a pixel for one frame.
+    x, y = PixelGrid.snap(x), PixelGrid.snap(y)
     node.T.x = x
     node.T.y = y
     node.T.r = r
@@ -821,9 +832,6 @@ function Hand:_discard_selected_impl(reason, opts)
             if self.game.boss_after_discard_or_play then
                 self.game:boss_after_discard_or_play(reason)
             end
-            if self.game.boss_after_play_before_draw then
-                self.game:boss_after_play_before_draw()
-            end
             self:_refill_after(reason)
             self:calculate_play()
         end
@@ -1026,9 +1034,6 @@ function Hand:_finish_discard(reason, skip_events, discarded_nodes, discarded_ca
     if self.game and self.game.boss_after_discard_or_play then
         self.game:boss_after_discard_or_play(reason)
     end
-    if reason == "play" and self.game and self.game.boss_after_play_before_draw then
-        self.game:boss_after_play_before_draw()
-    end
     self:_refill_after(reason)
     self:calculate_play()
 end
@@ -1145,8 +1150,11 @@ end
 --- only when one card was left to take. Discarded, not destroyed: no `on_destroy`.
 ---@param indices integer[]
 ---@return integer removed
-function Hand:discard_cards_by_hook(indices)
+---@param opts table|nil `{ mid_play = true }` while the played hand is still out: leaves the
+--- selection, its scoring marks and the draw order to the play in progress.
+function Hand:discard_cards_by_hook(indices, opts)
     if not self.game then return 0 end
+    local mid_play = type(opts) == "table" and opts.mid_play == true
     local picked = {}
     for _, i in ipairs(indices or {}) do
         if self.card_nodes[i] and self.cards[i] then picked[#picked + 1] = i end
@@ -1202,8 +1210,10 @@ function Hand:discard_cards_by_hook(indices)
         end
     end
     self:layout(false)
-    if self.game.restore_hand_draw_order then self.game:restore_hand_draw_order() end
-    self:calculate_play()
+    if not mid_play then
+        if self.game.restore_hand_draw_order then self.game:restore_hand_draw_order() end
+        self:calculate_play()
+    end
     return #nodes
 end
 
@@ -1517,6 +1527,28 @@ function Hand:_update_play_sequence(dt)
         local settle = seq.timer - (n - 1) * PLAY_RELEASE_INTERVAL
         if (settle >= PLAY_MOVE_MIN_TIME and self:_cards_reached_play_targets(seq.cards))
             or settle >= PLAY_MOVE_MAX_TIME then
+            if not seq.press_done and (seq.hook_pending or (seq.tooth_left or 0) > 0) then
+                -- `Blind:press_play` acts once the hand is down and before anything scores,
+                -- voided hand or not (`state_events.lua:488`, `blind.lua:464-508`).
+                seq.phase = "boss_press"
+                seq.timer = 0
+                seq.tooth_i = 0
+                if seq.hook_pending then
+                    seq.hook_pending = nil
+                    if self.game and self.game.boss_hook_discard then
+                        self.game:boss_hook_discard(true)
+                    end
+                    -- `delay(0.7)` after the discard, then the sting.
+                    seq.sting_at = HOOK_HOLD
+                    seq.press_hold = HOOK_HOLD
+                else
+                    -- The Tooth's outer event waits 0.2 s; the sting is queued behind it and
+                    -- rings before the first dollar.
+                    seq.sting_at = TOOTH_LEAD
+                    seq.press_hold = 0
+                end
+                return
+            end
             if seq.voided then
                 -- Nothing lifts, triggers or rings: the cards sit at centre and the total
                 -- lands as zero, which is the whole of a voided hand.
@@ -1533,6 +1565,29 @@ function Hand:_update_play_sequence(dt)
                 if node and node._score_lift_y then hl[#hl + 1] = node end
             end
             seq.highlight_cards = hl
+        end
+    elseif seq.phase == "boss_press" then
+        if seq.sting_at and seq.timer >= seq.sting_at then
+            seq.sting_at = nil
+            if self.game and self.game.boss_press_play_sting then self.game:boss_press_play_sting() end
+        end
+        -- The Tooth: 0.2 s lead, then one card every 0.23 s (`blind.lua:498-502`).
+        local i = seq.tooth_i or 0
+        local total = seq.tooth_left or 0
+        while i < total and seq.timer >= TOOTH_LEAD + i * TOOTH_INTERVAL do
+            i = i + 1
+            if self.game and self.game.boss_tooth_charge_card then
+                self.game:boss_tooth_charge_card(seq.cards[((i - 1) % math.max(1, #seq.cards)) + 1])
+            end
+        end
+        seq.tooth_i = i
+        local hold = math.max(seq.press_hold or 0, total > 0 and (TOOTH_LEAD + total * TOOTH_INTERVAL) or 0)
+        if not seq.sting_at and i >= total and seq.timer >= hold then
+            -- Back through the settle check, which now moves on to scoring (or the void).
+            seq.press_done = true
+            seq.tooth_left = 0
+            seq.phase = "move_center"
+            seq.timer = (#seq.cards - 1) * PLAY_RELEASE_INTERVAL + PLAY_MOVE_MAX_TIME
         end
     elseif seq.phase == "highlight" then
         -- Lift the scoring cards left to right on a 0.1 s beat with a rising cardSlide1
@@ -2142,7 +2197,6 @@ function Hand:apply_idle_sway()
         local base = node._layout_base
         if base and not (node.states and node.states.drag and node.states.drag.is) then
             local phase = base.x * SWAY_PHASE_PER_PX
-            node.T.r = base.r + SWAY_R_AMP * math.sin(SWAY_R_RATE * t + phase)
             node.T.y = base.y + SWAY_Y_AMP * math.sin(SWAY_Y_RATE * t + phase)
         end
     end
@@ -2652,6 +2706,8 @@ function Hand:play_selected()
         photograph_first_face_node = photograph_first_face,
         photograph_pareidolia = photograph_pareidolia and true or false,
         before_ctx = before_ctx,
+        tooth_left = (self.game and self.game.take_tooth_pending) and self.game:take_tooth_pending() or 0,
+        hook_pending = (self.game and self.game.take_hook_pending) and self.game:take_hook_pending() or nil,
     }
     for i, node in ipairs(cards) do
         node._play_release_percent = fan_percent(i, #cards)

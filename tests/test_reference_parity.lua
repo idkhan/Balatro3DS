@@ -248,4 +248,100 @@ suite.test("Popcorn decays from 20 and repairs an old zeroed save", function()
     T.assert_eq(old.stored_mult, 20)
 end)
 
+--- The Tooth takes its dollars card by card once the hand is down, each through the normal
+--- loss path, and all of them before anything scores (`blind.lua:497-504`).
+suite.test("The Tooth charges each played card in turn, before scoring", function()
+    local g = bootstrap.new_game(9113)
+    local old_top = _G.Top
+    _G.Top = { addPopup = function() end }
+    local hand = Hand(g)
+    g.hand = hand
+    for _, cd in ipairs({ { rank = 5, suit = "Clubs" }, { rank = 5, suit = "Hearts" }, { rank = 9, suit = "Spades" } }) do
+        hand:add_card(cd)
+    end
+    g.STATE = g.STATES.SELECTING_HAND
+    g.get_active_boss_blind_id = function() return "bl_tooth" end
+    g.money = 10
+    local losses = 0
+    local old_add = g.addPopup
+    g.addPopup = function(self, p)
+        if p and p.text == "-$1" then losses = losses + 1 end
+        return old_add and old_add(self, p)
+    end
+    for _, node in ipairs(hand.card_nodes) do hand:toggle_selection(node) end
+    hand:play_selected()
+    T.assert_eq(g.money, 10, "nothing is taken as the hand is submitted")
+
+    local steps, money_at_scoring, seen = {}, nil, {}
+    local ok, err = pcall(function()
+        for _ = 1, 5000 do
+            local seq = hand._play_sequence
+            if not seq then break end
+            if seq.phase == "boss_press" and steps[#steps] ~= g.money then steps[#steps + 1] = g.money end
+            if seq.phase == "highlight" and money_at_scoring == nil then money_at_scoring = g.money end
+            seen[seq.phase] = true
+            hand:update(1 / 60)
+        end
+    end)
+    g.addPopup, _G.Top = old_add, old_top
+    if not ok then error(err, 0) end
+    T.assert_true(seen.boss_press, "the hand passes through the Tooth beat")
+    T.assert_eq(money_at_scoring, 7, "all three dollars are gone before the cards lift")
+    T.assert_eq(g.money, 7)
+    T.assert_eq(losses, 3, "one -$1 popup per card")
+    T.assert_true(#steps >= 3, "the wallet steps down one dollar at a time")
+end)
+
+--- The Hook discards two held cards once the hand is down and before anything scores, so
+--- held-in-hand effects never count them; then the boss sting rings (`blind.lua:466-486`,
+--- `state_events.lua:488-500`).
+suite.test("The Hook discards before scoring, then rings the boss sting", function()
+    local g = bootstrap.new_game(9114)
+    local old_top, old_play = _G.Top, Sfx.play
+    _G.Top = { addPopup = function() end }
+    local hand = Hand(g)
+    g.hand = hand
+    for _, cd in ipairs({ { rank = 9, suit = "Spades" }, { rank = 13, suit = "Clubs" },
+        { rank = 13, suit = "Hearts" }, { rank = 13, suit = "Diamonds" } }) do
+        hand:add_card(cd)
+    end
+    g.STATE = g.STATES.SELECTING_HAND
+    g.get_active_boss_blind_id = function() return "bl_hook" end
+    local stings = 0
+    Sfx.play = function(name, ...)
+        if name == "tarot2" then stings = stings + 1 end
+        return old_play(name, ...)
+    end
+    local played
+    for _, node in ipairs(hand.card_nodes) do
+        if node.card_data.rank == 9 then played = node end
+    end
+    hand:toggle_selection(played)
+    hand:play_selected()
+    T.assert_eq(#hand.card_nodes, 4, "nothing is discarded as the hand is submitted")
+
+    local held_at_scoring, sting_at_scoring
+    local ok, err = pcall(function()
+        for _ = 1, 5000 do
+            local seq = hand._play_sequence
+            if not seq then break end
+            if seq.phase == "highlight" and held_at_scoring == nil then
+                held_at_scoring = 0
+                for _, node in ipairs(hand.card_nodes) do
+                    if not node.scoring_center then held_at_scoring = held_at_scoring + 1 end
+                end
+                sting_at_scoring = stings
+            end
+            hand:update(1 / 60)
+            g:update(1 / 60, 1 / 60)
+        end
+    end)
+    Sfx.play, _G.Top = old_play, old_top
+    if not ok then error(err, 0) end
+    T.assert_eq(held_at_scoring, 1, "two of the three Kings are gone before scoring")
+    T.assert_true((sting_at_scoring or 0) >= 1, "the sting rings before the cards lift")
+    T.assert_eq(stings, 2, "tarot2 twice: the second note does not hold up scoring")
+    T.assert_true(played.card_data ~= nil, "the played card itself is never taken")
+end)
+
 return suite
