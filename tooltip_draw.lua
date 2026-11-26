@@ -473,6 +473,14 @@ function M.draw_tooltip_layout(font, title, resolved_lines, draw_x, draw_y, anch
     if not sh or sh <= 0 then sh = 240 end
     if ty + box_h > sh - 2 then
         ty = draw_y - box_h - 3
+        -- Japanese only: its body wraps to more, narrower lines than the English text, so the
+        -- box can be too tall for the room under the card. Flipping above then clamps to the top
+        -- of the screen and the box lands on top of the card it describes. Keep it below
+        -- instead, slid up just far enough to stay on screen. English never takes this branch.
+        local pixel = G and G.FONTS and G.FONTS.PIXEL
+        if ty < 2 and pixel and pixel.LANGUAGE == "ja" then
+            ty = math.max(2, sh - 2 - box_h)
+        end
     end
     if ty < 2 then ty = 2 end
     tx = math.floor(tx + 0.5)

@@ -877,7 +877,21 @@ function TopUI.LabeledField(string, value, x, y, iw, ih, fieldColor, juice)
     if(string ~= "") then
         love.graphics.setColor(G.C.WHITE)
         love.graphics.setFont(G.FONTS.PIXEL.SMALL)
-        TopUI.center_text_static(string, ix, iy, iw, math.floor(ih/4))
+        local label_w = 0
+        if G.FONTS.PIXEL.LANGUAGE then
+            -- A language label can be wider than its box: step down, then squeeze at the smallest.
+            love.graphics.setFont(Fonts.fit(G, G.FONTS.PIXEL.SMALL, string, iw))
+            label_w = love.graphics.getFont():getWidth(string)
+        end
+        if label_w > iw then
+            love.graphics.push()
+            love.graphics.translate(ix, 0)
+            love.graphics.scale(iw / label_w, 1)
+            TopUI.center_text_static(string, 0, iy, label_w, math.floor(ih/4))
+            love.graphics.pop()
+        else
+            TopUI.center_text_static(string, ix, iy, iw, math.floor(ih/4))
+        end
     end
 
     love.graphics.setColor(G.C.PANEL)

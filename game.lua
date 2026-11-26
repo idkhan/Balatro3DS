@@ -4126,6 +4126,14 @@ function Game:apply_language(language)
     local live = Localization.get_language()
     if self.FONTS and self.FONTS.PIXEL then
         Fonts.apply(self, self.FONTS.PIXEL.PROFILE, live)
+        -- Japanese only: the tooltip boxes are tall in kana and hide the card they describe, so
+        -- their text takes the next size down (SMALL). Every other language keeps TOOLTIP.
+        local pixel = self.FONTS.PIXEL
+        if live == "ja" and pixel.SMALL and pixel.TOOLTIP_HEIGHT and pixel.SMALL_HEIGHT
+            and pixel.TOOLTIP_HEIGHT > pixel.SMALL_HEIGHT then
+            pixel.TOOLTIP = pixel.SMALL
+            pixel.TOOLTIP_HEIGHT = pixel.SMALL_HEIGHT
+        end
     end
     return live
 end
@@ -8763,9 +8771,14 @@ function Game:draw_bottom_pause()
         end
         love.graphics.setColor(self.C.WHITE)
         local btn_font = (r.h and r.h <= 20) and self.FONTS.PIXEL.SMALL or self.FONTS.PIXEL.MEDIUM
+        if self.FONTS.PIXEL.LANGUAGE then btn_font = Fonts.fit(self, btn_font, label, r.w - 4) end
         love.graphics.setFont(btn_font)
         local ty = r.y + math.floor((r.h - love.graphics.getFont():getHeight()) * 0.5 + 0.5)
-        love.graphics.printf(label, r.x, ty - 1, r.w, "center")
+        if self.FONTS.PIXEL.LANGUAGE then
+            Fonts.printf_fit(label, r.x, ty - 1, r.w, "center")
+        else
+            love.graphics.printf(label, r.x, ty - 1, r.w, "center")
+        end
     end
 
     local function draw_cell(r, label, value, hint, focused, listening)
@@ -8782,11 +8795,23 @@ function Game:draw_bottom_pause()
             love.graphics.setLineWidth(2)
             PixelGrid.outline(r.x, r.y, r.w, r.h)
         end
-        love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        local cell_text = string.format("%s (%s)", label, value)
+        if self.FONTS.PIXEL.LANGUAGE then
+            love.graphics.setFont(Fonts.fit(self, self.FONTS.PIXEL.SMALL, cell_text, r.w - 8))
+        else
+            love.graphics.setFont(self.FONTS.PIXEL.SMALL)
+        end
         love.graphics.setColor(self.C.WHITE)
-        love.graphics.printf(string.format("%s (%s)", label, value), r.x + 4, r.y + 4, r.w - 8, "center")
+        if self.FONTS.PIXEL.LANGUAGE then
+            Fonts.printf_fit(cell_text, r.x + 4, r.y + 4, r.w - 8, "center")
+        else
+            love.graphics.printf(cell_text, r.x + 4, r.y + 4, r.w - 8, "center")
+        end
         if hint and hint ~= "" then
             love.graphics.setColor(self.C.WHITE)
+            if self.FONTS.PIXEL.LANGUAGE then
+                love.graphics.setFont(Fonts.fit_block(self, self.FONTS.PIXEL.SMALL, hint, r.w - 8, r.h - 17))
+            end
             love.graphics.printf(hint, r.x + 4, r.y + 15, r.w - 8, "left")
         end
     end
@@ -9136,7 +9161,9 @@ function Game:draw_bottom_pause()
             love.graphics.printf(entry.id == nil and I18N.text("settings.art_default", nil, "Default") or entry.name,
                 panel_x, panel_y + 152, panel_w, "center")
             love.graphics.setColor(self.C.GREY)
-            love.graphics.printf(("%d / %d"):format(pick, #entries), panel_x, panel_y + 164, panel_w, "center")
+            local pick_text = ("%d / %d"):format(pick, #entries)
+            love.graphics.setFont(Fonts.for_text(self, self.FONTS.PIXEL.SMALL, pick_text))
+            love.graphics.printf(pick_text, panel_x, panel_y + 164, panel_w, "center")
 
             -- High contrast is a checkbox: the box carries the state, the label stays put.
             local cr = self._art_contrast_rect

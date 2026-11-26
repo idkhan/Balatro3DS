@@ -2,6 +2,7 @@
 --- Rectangular fills are deliberate: on 3DS their pixel area is effectively free, while
 --- rounded geometry spends 3-5x the vertices (`AGENTS.md`, renderer measurements).
 
+local Fonts = require("fonts")
 local TicketStrip = {}
 
 function TicketStrip.layout(x, y, w, h, stub_w)
@@ -41,11 +42,16 @@ function TicketStrip.draw(game, spec)
     love.graphics.setColor(C.WHITE)
     love.graphics.printf(spec.stub or "", r.x + 2, r.y + math.floor((r.h - love.graphics.getFont():getHeight()) / 2),
         r.stub_w - 4, "center")
+    -- Title and detail are one line each, so each is fitted to the body width rather than left to
+    -- wrap onto the other.
+    local text_font = spec.font or game.FONTS.PIXEL.SMALL
     love.graphics.setColor(C.BLACK or C.BLOCK.BACK)
-    love.graphics.printf(spec.title or "", r.body_x + 7, r.y + 4, r.body_w - 14, "left")
+    love.graphics.setFont(Fonts.fit(game, text_font, spec.title or "", r.body_w - 14))
+    Fonts.printf_fit(spec.title or "", r.body_x + 7, r.y + 4, r.body_w - 14, "left")
     if spec.detail and spec.detail ~= "" then
         love.graphics.setColor(C.GREY)
-        love.graphics.printf(spec.detail, r.body_x + 7, r.y + r.h - love.graphics.getFont():getHeight() - 3,
+        love.graphics.setFont(Fonts.fit(game, text_font, spec.detail, r.body_w - 14))
+        Fonts.printf_fit(spec.detail, r.body_x + 7, r.y + r.h - love.graphics.getFont():getHeight() - 3,
             r.body_w - 14, "left")
     end
     return r

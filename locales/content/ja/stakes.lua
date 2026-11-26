@@ -1,0 +1,18 @@
+return {
+    ["stake.stake_black.name"] = "ブラックステーク",
+    ["stake.stake_black.description"] = "ショップとパックのジョーカーに30%の確率でエターナルが付く（売却や破壊はできない）",
+    ["stake.stake_blue.name"] = "ブルーステーク",
+    ["stake.stake_blue.description"] = "ディスカード -1",
+    ["stake.stake_gold.name"] = "ゴールドステーク",
+    ["stake.stake_gold.description"] = "ショップとパックのジョーカーに30%の確率でレンタルが付く（ラウンドごとに$3消費）",
+    ["stake.stake_green.name"] = "グリーンステーク",
+    ["stake.stake_green.description"] = "各アンティに必要なスコアスケールが速くなる",
+    ["stake.stake_orange.name"] = "オレンジステーク",
+    ["stake.stake_orange.description"] = "ショップとパックのジョーカーに30%の確率で摩耗が付く（5ラウンド後にデバフ状態になる）",
+    ["stake.stake_purple.name"] = "パープルステーク",
+    ["stake.stake_purple.description"] = "各アンティに必要なスコアスケールが速くなる",
+    ["stake.stake_red.name"] = "レッドステーク",
+    ["stake.stake_red.description"] = "スモールブラインドが報奨金を与えない",
+    ["stake.stake_white.name"] = "ホワイトステーク",
+    ["stake.stake_white.description"] = "ベース難易度",
+}

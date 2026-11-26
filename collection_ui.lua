@@ -1,5 +1,6 @@
 --- Main-menu Collection: category picker + paginated 5x3 grids.
 local CollectionCatalog = require("collection_catalog")
+local Fonts = require("fonts")
 local ShopUI = require("shop_ui")
 local PerformanceLab = require("performance_lab")
 
@@ -173,6 +174,12 @@ local function draw_collection_button(rect, label, prog, color, C, font_label, f
 
     local count_pad = 1
     local count_str = prog and string.format("%d / %d", prog.discovered, prog.total) or nil
+    local game = _G.G
+
+    -- The count is a number, so it is drawn in the pixel face in every language. The label
+    -- may be a long kana word: squeeze or step it down rather than let it wrap onto the count.
+    if count_str then font_count = Fonts.for_text(game, font_count, count_str) end
+    font_label = Fonts.fit_soft(game, font_label, label, rect.w - 8)
 
     love.graphics.setFont(font_label)
     local title_h = love.graphics.getFont():getHeight()
@@ -187,7 +194,7 @@ local function draw_collection_button(rect, label, prog, color, C, font_label, f
 
     love.graphics.setFont(font_label)
     love.graphics.setColor(C.WHITE)
-    love.graphics.printf(label, rect.x, text_y, rect.w, "center")
+    Fonts.printf_fit(label, rect.x + 4, text_y, rect.w - 8, "center")
 
     if count_str then
         love.graphics.setFont(font_count)
@@ -631,6 +638,13 @@ function CollectionUI.draw_category_menu(game)
     local small_h = 24
     local cons_pad = 3
     local cons_header_h = 12
+    -- Two stacked lines (a label and its count) and the "CONSUMABLES" header need more room in a
+    -- language face, whose line box is taller than m6x11plus's. There are 19 spare rows above
+    -- the Back button, so the consumables block grows into them rather than overlapping.
+    if game.FONTS.PIXEL.LANGUAGE then
+        small_h = 28
+        cons_header_h = 16
+    end
 
     game._collection_menu_rects = {}
 
@@ -663,7 +677,13 @@ function CollectionUI.draw_category_menu(game)
 
     love.graphics.setFont(font_s)
     love.graphics.setColor(C.GREY)
-    love.graphics.printf(I18N.text("collection.consumables", nil, "CONSUMABLES"), cons_x, cons_y + cons_pad, cons_w, "center")
+    -- A language face has a taller line box than m6x11plus, and its header sat on top of the
+    -- first button. Pull it up by what it overshoots the header band.
+    local header_y = cons_y + cons_pad
+    if game.FONTS.PIXEL.LANGUAGE then
+        header_y = cons_y + math.max(0, cons_header_h + cons_pad - font_s:getHeight())
+    end
+    Fonts.printf_fit(I18N.text("collection.consumables", nil, "CONSUMABLES"), cons_x + 4, header_y, cons_w - 8, "center")
 
     local cy = cons_y + cons_header_h + cons_pad
     cy = add_btn("tarots", cons_x + cons_pad, cy, cons_inner_w, small_h, "Tarot Cards", "PURPLE")
@@ -782,7 +802,9 @@ function CollectionUI.draw_top(screen, game)
         love.graphics.printf(label, 0 - textDepth, 12, W, "center")
         love.graphics.setFont(game.FONTS.PIXEL.SMALL)
         love.graphics.setColor(game.C.GREY)
-        love.graphics.printf(string.format("%d / %d", page, pages), 0 - textDepth, 32, W, "center")
+        local page_text = string.format("%d / %d", page, pages)
+        love.graphics.setFont(Fonts.for_text(game, love.graphics.getFont(), page_text))
+        love.graphics.printf(page_text, 0 - textDepth, 32, W, "center")
     else
         love.graphics.printf(I18N.text("collection.title", nil, "Collection"), 0 - textDepth, 20, W, "center")
     end

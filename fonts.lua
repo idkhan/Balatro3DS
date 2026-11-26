@@ -137,6 +137,15 @@ Fonts.LANGUAGE_FACES = {
         source = "resources/fonts/zh_CN.ttf",
         min_size = 13,
     },
+    ja = {
+        native = "resources/fonts/lang/ja_h%d.ttf",
+        source = "resources/fonts/ja.ttf",
+        min_size = 9,
+        -- Digits and symbols stay in the pixel face, as in English. GoNotoCJK's numerals are
+        -- thinner and taller than m6x11plus's, so a score or price in the CJK face reads as a
+        -- different game from the English build.
+        latin_digits = true,
+    },
 }
 
 --- Cell heights the language sheets are baked at -- the ones `mkbcfnt` can actually produce from
@@ -144,7 +153,7 @@ Fonts.LANGUAGE_FACES = {
 --- draws at the largest of these that fits its size, so the sheet's scale is exactly 1.0 and the
 --- text is at most a pixel smaller than the Latin face's. `dev/config.sh` (CJK_CELL_HEIGHTS)
 --- bakes this same list; `tests/test_localization.lua` fails if they drift.
-Fonts.LANGUAGE_CELL_HEIGHTS = { 13, 17, 21, 27, 33 }
+Fonts.LANGUAGE_CELL_HEIGHTS = { 9, 13, 17, 21, 27, 33 }
 
 --- The language sheet a role of `size` draws from.
 function Fonts.language_size(face, size)
@@ -278,6 +287,49 @@ function Fonts.apply(game, profile, language)
     return true
 end
 
+--- True for a string made only of digits, spaces and ASCII punctuation ("1,560", "$14", "3/8",
+--- "0 / 22", "45%"). Letters are excluded on purpose: a label is text, a number is not.
+function Fonts.is_numeric(text)
+    text = tostring(text or "")
+    if text == "" then return false end
+    return text:find("^[%d%s%p]*$") ~= nil and text:find("%d") ~= nil
+end
+
+--- The Latin pixel face for the role `font` belongs to, when the live language draws numerals
+--- from the pixel face (`latin_digits`). Anything else comes back unchanged. Built on first use
+--- and kept on `game.FONTS.PIXEL`, so `Fonts.apply` drops it with the rest on a language change.
+---@param game table
+---@param font love.Font
+---@return love.Font
+function Fonts.latin(game, font)
+    local pixel = game and game.FONTS and game.FONTS.PIXEL
+    local face = pixel and pixel.LANGUAGE and Fonts.LANGUAGE_FACES[pixel.LANGUAGE]
+    if not face or not face.latin_digits or not font then return font end
+    for _, role in ipairs(ROLES) do
+        if pixel[role] == font then
+            local size = Fonts.PROFILES[pixel.PROFILE or Fonts.DEFAULT_PROFILE][role]
+            local cache = pixel.LATIN_FACES
+            if not cache then
+                cache = {}
+                pixel.LATIN_FACES = cache
+            end
+            local latin = cache[size]
+            if not latin then
+                latin = Fonts.font_for(pixel.PROFILE, size, nil)
+                cache[size] = latin or false
+            end
+            return latin or font
+        end
+    end
+    return font
+end
+
+--- `font`, swapped for its Latin counterpart when `text` is a number.
+function Fonts.for_text(game, font, text)
+    if Fonts.is_numeric(text) then return Fonts.latin(game, font) end
+    return font
+end
+
 --- Largest role strictly smaller than `font`, or nil once there is nothing left to give up.
 ---
 --- By height rather than by position in a list: roles collapse onto shared faces (PRICE and
@@ -327,14 +379,35 @@ end
 function Fonts.fit(game, font, text, max_w)
     if not font or not font.getWidth or type(max_w) ~= "number" then return font end
     text = tostring(text or "")
+    local numeric = Fonts.is_numeric(text)
+    local function face(f) return numeric and Fonts.latin(game, f) or f end
     local candidate = font
     -- Bounded by the ladder: `next_smaller` is strictly smaller and returns nil at the floor.
-    while candidate:getWidth(text) > max_w do
+    while face(candidate):getWidth(text) > max_w do
         local smaller = Fonts.next_smaller(game, candidate)
         if not smaller then break end
         candidate = smaller
     end
-    return candidate
+    return face(candidate)
+end
+
+--- Like `Fonts.fit`, but a label may be squeezed horizontally to `min_scale` of its width
+--- before a smaller face is taken. A kana label at 13 px squeezed to 85% reads better than the
+--- same label at 9 px. Draw the result with `Fonts.printf_fit`, which does the squeezing.
+---@param min_scale number|nil default 0.8
+function Fonts.fit_soft(game, font, text, max_w, min_scale)
+    if not font or not font.getWidth or type(max_w) ~= "number" then return font end
+    text = tostring(text or "")
+    min_scale = min_scale or 0.8
+    local numeric = Fonts.is_numeric(text)
+    local function face(f) return numeric and Fonts.latin(game, f) or f end
+    local candidate = font
+    while face(candidate):getWidth(text) * min_scale > max_w do
+        local smaller = Fonts.next_smaller(game, candidate)
+        if not smaller then break end
+        candidate = smaller
+    end
+    return face(candidate)
 end
 
 --- Top and height of the letters inside `font`'s cell (`Fonts.INK`). A face with no measured
@@ -436,6 +509,25 @@ function Fonts.status_line(game)
     local faces = (pixel and pixel.FACES) or 0
     local native = (pixel and pixel.NATIVE_FACES) or 0
     return string.format("FONT %s  native %d/%d faces", profile, native, faces)
+end
+
+--- One line of text that never wraps and never overflows `w`. If even the smallest face is too
+--- wide for the box, the line is squeezed horizontally to fit; `love.graphics.printf` would wrap
+--- it instead, and the wrapped half lands on whatever sits under the box. Languages with long
+--- words (Japanese katakana) are why this exists. A line that already fits prints as before.
+function Fonts.printf_fit(text, x, y, w, align)
+    text = tostring(text or "")
+    local font = love.graphics.getFont()
+    local text_w = font:getWidth(text)
+    if text_w <= w then
+        love.graphics.printf(text, x, y, w, align or "left")
+        return
+    end
+    love.graphics.push()
+    love.graphics.translate(x, y)
+    love.graphics.scale(w / text_w, 1)
+    love.graphics.print(text, 0, 0)
+    love.graphics.pop()
 end
 
 return Fonts
